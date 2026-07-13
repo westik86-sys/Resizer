@@ -1,7 +1,9 @@
 # Resizer architecture
 
-This document describes the stage-3 contracts and the stage-4 process boundary.
-The product workflow and FFmpeg-specific adapters are not implemented yet.
+This document describes the stage-3 contracts, stage-4 process boundary,
+stage-5 FFprobe adapter, and stage-6 preset, command, and output-planning
+boundaries. The product workflow and FFmpeg transcode runner are not
+implemented yet.
 
 ## Dependency direction
 
@@ -14,12 +16,21 @@ SwiftUI views
             -> OutputPlanning
             -> FileAccessing
 
-Transcoding implementation (later stage)
+Transcoding implementation (stage 7)
     -> CommandBuilding
+        -> FFmpegCommandBuilder
     -> ProcessRunning
         -> ProcessRunner actor
             -> direct child executable
             -> concurrent stdout/stderr drains
+
+OutputPlanning
+    -> OutputPlanner actor
+        -> read-only collision checks
+
+FFprobeClient
+    -> ProcessRunning
+        -> bundled ffprobe
 
 AppComposition
     -> creates the coordinator
@@ -34,8 +45,9 @@ SwiftUI or AppKit and must not reference `Process`. UI reads immutable
 There are no global service instances or service locators. `AppComposition`
 accepts the complete coordinator dependency set and exposes only the feature
 model, not the mutable coordinator. Debug previews and tests use immutable
-closure-based fakes; production implementations will be added in their own PLAN
-stages.
+closure-based fakes. Production implementations now exist for process
+execution, probing, command construction, and output planning; transcoding and
+file publication remain later PLAN stages.
 
 ## Source layout and module boundary
 
@@ -107,6 +119,95 @@ cancellation races, patterned stderr tails, and delayed EOF. Async collection
 and explicit cancellation have test-level deadlines. The harness is not copied
 into `Resizer.app`.
 
+## FFprobe adapter contract
+
+`FFprobeClient` is the production `MediaProbing` adapter. Its production factory
+resolves `ffprobe` only with `Bundle.main.url(forAuxiliaryExecutable:)` and
+resolves symlinks before rejecting a missing, non-regular, non-executable, or
+out-of-bundle candidate. Tests inject an absolute executable URL and a
+`ProcessRunning` implementation; neither path search nor a Homebrew fallback
+exists.
+
+Each probe starts a fresh process with one literal argument array:
+
+```text
+-v error -print_format json -show_format -show_streams -show_chapters INPUT
+```
+
+The input remains one argument even when its path contains spaces, Unicode, or
+shell metacharacters. The adapter accepts stdout in arbitrary chunks, caps the
+assembled JSON at 8 MiB by default, ignores streamed stderr because the runner
+already retains its bounded diagnostic tail, and requires one matching terminal
+result. A nonzero exit or signal becomes a typed error with termination status
+and diagnostics. Overflow, malformed process event order, and invalid source or
+configuration are also typed failures.
+
+Task cancellation requests runner teardown and then awaits cancellation again
+from an uncancelled cleanup task before returning. This preserves the runner's
+direct-child no-orphan guarantee even though a cancelled caller does not itself
+wait inside `ProcessRunner.cancel`.
+
+JSON decoding uses transport-only DTOs. Unknown keys are ignored; absent arrays
+and format data receive safe defaults; FFprobe numeric fields accept strings or
+JSON numbers. String conversion consumes the complete numeric value: `N/A` is
+treated as unavailable, while a present corrupt, fractional integer, or
+overflowing metric is invalid metadata. Mapping then creates validated domain
+values: comma-separated format names, rounded microsecond duration, byte count,
+bitrate, every stream index, rational FPS, dispositions, rotation, color
+metadata, and conservative HDR/SDR classification. Display-matrix rotation
+takes precedence over the legacy `rotate` tag. Missing video or audio is valid,
+while missing, negative, or duplicate stream indices invalidate the metadata.
+Chapters are requested and decoded for forward compatibility but are not yet
+part of the domain model.
+
+## Preset and FFmpeg command contract
+
+`CompressionRecipe(preset:)` expands the three product presets into immutable,
+validated values. High Quality uses quality `0.85`, original resolution and
+FPS, and AAC at 192 kbit/s. Balanced is the default and uses quality `0.65`, a
+1920x1080 maximum, 30 FPS maximum, and AAC at 128 kbit/s. Small File uses
+quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and AAC at 96 kbit/s. All
+three produce MP4 through `h264_videotoolbox` and preserve common input
+metadata. Custom recipes use the same closed enums and validated value types;
+there is no arbitrary-flag escape hatch.
+
+`FFmpegCommandBuilder` is pure and stateless. It returns an ordered `[String]`
+and never creates a shell command. It selects one non-attached video stream and
+at most one audio stream, preferring the lowest-index default stream and then
+the lowest absolute index. Those absolute indices are mapped explicitly;
+subtitles, data, and unselected audio are excluded. Missing audio is valid and
+becomes `-an`, as does the remove-audio policy.
+
+Video output is H.264 VideoToolbox in `yuv420p`. Normalized quality maps to
+VideoToolbox `global_quality` `1...100`; CRF and qscale are intentionally not
+used. A capped frame-rate policy emits `fpsmax`, while original FPS adds no
+rate override. Scaling is orientation-aware, preserves aspect ratio, never
+upscales, and produces even dimensions. Autorotation is applied to pixels and
+the stale output rotation tag is cleared. Known HDR and unknown-range video
+above 8-bit fail closed because stage 6 does not implement tone mapping.
+
+Every command enables bounded machine-readable progress on stdout and MP4
+faststart. It deliberately leaves stdin available for stage-7 graceful `q\n`
+cancellation. Preserve metadata maps only global data, selected stream data,
+and chapters; remove metadata disables those input mappings. The full argument
+and preset decision is recorded in
+[`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md).
+
+## Safe output planning contract
+
+`OutputPlanner` is an actor with injected read-only collision checks. It
+derives `source-compressed.mp4` in the selected directory and advances through
+`-2`, `-3`, and later bounded numeric suffixes when required. A fail-on-conflict
+policy returns a typed error. Its temporary output uses the chosen final stem,
+the lowercase job UUID, and `.partial.mp4`; an existing temporary path is a
+typed collision rather than an overwrite.
+
+Only local absolute URLs are accepted. Unicode, spaces, emoji, and shell
+metacharacters remain literal path characters. The final URL stays in
+`OutputPlan` and is structurally absent from `TranscodeCommandRequest`; FFmpeg
+receives only the job temporary and `-n`. Planning cannot reserve a final path,
+so validation and atomic no-replace publication remain stage-7 responsibilities.
+
 ## Job state contract
 
 `JobState` is the single lifecycle source of truth. Progress updates replace the
@@ -162,10 +263,11 @@ intent; it is not silently treated as running-process cancellation here.
   substitute another URL.
 - `OutputPlan` binds the job, input, temporary, and final URLs and rejects direct
   path aliases. Both outputs must be MP4 files in the selected directory, and
-  the `.partial.mp4` name must contain the job UUID. File cleanup accepts the
-  plan rather than an arbitrary URL, and commit is explicitly no-replace.
-  File-identity and symlink checks remain the responsibility of the real output
-  planner.
+  the `.partial.mp4` name must contain the job UUID. `OutputPlanner` supplies
+  conflict-free names from read-only filesystem checks. File cleanup accepts
+  the plan rather than an arbitrary URL, and commit is explicitly no-replace.
+  File-identity, symlink, and final publication race checks remain the
+  responsibility of the stage-7 preflight and file-access adapter.
 - `ProcessRequest` represents the executable, controlled environment, argument
   array, bounded event capacity, diagnostic limit, and generic cancellation
   policy as typed values. Arguments remain `[String]`; no shell command exists
@@ -176,15 +278,17 @@ intent; it is not silently treated as running-process cancellation here.
 - Security-scoped access is expressed as one async operation so its lifetime can
   eventually cover probe, encode, validation, and commit.
 
-The production runner now implements pipe draining, bounded diagnostics, and
-direct child cancellation. Resolving bundled FFmpeg URLs and interpreting
-FFmpeg/FFprobe output remain adapter responsibilities in later stages.
+The production runner implements pipe draining, bounded diagnostics, and direct
+child cancellation. The FFprobe adapter resolves and interprets bundled probe
+output. Presets, deterministic FFmpeg command construction, and safe output
+naming are implemented; process-level transcode progress interpretation,
+temporary validation, cleanup, and publication remain stage-7 responsibilities.
 
 ## Verification
 
-`./Scripts/test.sh` covers the architecture scaffold plus real child-process
-success and failure, simultaneous multi-megabyte pipes, exact bounded stderr,
-literal Unicode and shell metacharacters, controlled environment, graceful and
-forced cancellation, exit/cancel races, bounded stream overflow, launch
-failure, and the process/EOF completion barrier. `./Scripts/build.sh` remains
-the canonical build check.
+`./Scripts/test.sh` covers the architecture scaffold; real child-process
+success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
+cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
+all preset argument vectors; stream, HDR, audio, scaling, metadata, and path
+behavior; and output-name collisions. `./Scripts/build.sh` remains the
+canonical build check.

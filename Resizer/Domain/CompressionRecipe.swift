@@ -113,6 +113,66 @@ nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
     case invalidAudioBitRate
 }
 
+extension CompressionRecipe {
+    init(preset: CompressionPreset) throws {
+        switch preset {
+        case .highQuality:
+            self.init(
+                origin: .preset(preset),
+                container: .mp4,
+                videoCodec: .h264VideoToolbox,
+                rateControl: .quality(try VideoQuality(0.85)),
+                scalePolicy: .original,
+                frameRatePolicy: .original,
+                audioPolicy: .aac(
+                    try AudioBitRate(bitsPerSecond: 192_000)
+                ),
+                metadataPolicy: .preserveCommon
+            )
+        case .balanced:
+            self.init(
+                origin: .preset(preset),
+                container: .mp4,
+                videoCodec: .h264VideoToolbox,
+                rateControl: .quality(try VideoQuality(0.65)),
+                scalePolicy: .maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 1_920,
+                        maximumShortEdge: 1_080
+                    )
+                ),
+                frameRatePolicy: .capped(
+                    try FrameRateLimit(framesPerSecond: 30)
+                ),
+                audioPolicy: .aac(
+                    try AudioBitRate(bitsPerSecond: 128_000)
+                ),
+                metadataPolicy: .preserveCommon
+            )
+        case .smallFile:
+            self.init(
+                origin: .preset(preset),
+                container: .mp4,
+                videoCodec: .h264VideoToolbox,
+                rateControl: .quality(try VideoQuality(0.45)),
+                scalePolicy: .maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 1_280,
+                        maximumShortEdge: 720
+                    )
+                ),
+                frameRatePolicy: .capped(
+                    try FrameRateLimit(framesPerSecond: 24)
+                ),
+                audioPolicy: .aac(
+                    try AudioBitRate(bitsPerSecond: 96_000)
+                ),
+                metadataPolicy: .preserveCommon
+            )
+        }
+    }
+}
+
 nonisolated struct OutputPolicy: Sendable, Equatable {
     let directoryURL: URL
     let filenameSuffix: String
