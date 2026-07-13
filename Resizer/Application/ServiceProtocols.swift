@@ -18,6 +18,9 @@ nonisolated protocol ProcessRunning: Sendable {
         _ request: ProcessRequest
     ) async throws -> AsyncThrowingStream<ProcessEvent, any Error>
 
+    /// Requests teardown for an execution whose `start` call has returned.
+    /// Unknown and already-completed IDs are no-ops. Cancelling the caller task
+    /// stops its wait while actor-owned teardown continues.
     func cancel(executionID: ProcessExecutionID) async
 }
 
@@ -149,6 +152,7 @@ nonisolated struct FileMetadata: Sendable, Equatable {
     let isDirectory: Bool
 }
 
+/// A one-shot identity; create a fresh value for every process start.
 nonisolated struct ProcessExecutionID: RawRepresentable, Sendable, Equatable, Hashable {
     let rawValue: UUID
 
@@ -162,28 +166,120 @@ nonisolated struct ProcessExecutionID: RawRepresentable, Sendable, Equatable, Ha
 }
 
 nonisolated struct ProcessRequest: Sendable, Equatable {
+    static let maximumDiagnosticByteLimit = 16 * 1_024 * 1_024
+    static let maximumEventBufferCapacity = 4_096
+
     let id: ProcessExecutionID
     let executableURL: URL
     let arguments: [String]
     let environment: [String: String]
     let diagnosticByteLimit: Int
+    let eventBufferCapacity: Int
+    let cancellationPolicy: ProcessCancellationPolicy
 
     init(
         id: ProcessExecutionID = ProcessExecutionID(),
         executableURL: URL,
         arguments: [String],
         environment: [String: String],
-        diagnosticByteLimit: Int
+        diagnosticByteLimit: Int,
+        eventBufferCapacity: Int = 256,
+        cancellationPolicy: ProcessCancellationPolicy = .signalsOnly
     ) throws {
-        guard executableURL.isFileURL, diagnosticByteLimit > 0 else {
+        guard executableURL.isFileURL,
+              executableURL.path.hasPrefix("/"),
+              !executableURL.path.contains("\0"),
+              (1...Self.maximumDiagnosticByteLimit).contains(
+                diagnosticByteLimit
+              ),
+              (1...Self.maximumEventBufferCapacity).contains(
+                eventBufferCapacity
+              ),
+              arguments.allSatisfy({ !$0.contains("\0") }),
+              environment.allSatisfy({ key, value in
+                  !key.isEmpty
+                      && !key.contains("=")
+                      && !key.contains("\0")
+                      && !value.contains("\0")
+              }) else {
             throw ProcessContractValidationError.invalidRequest
         }
 
+        var controlledEnvironment = environment
+        controlledEnvironment["LC_ALL"] = "C"
+        controlledEnvironment["LANG"] = "C"
+
         self.id = id
-        self.executableURL = executableURL
+        self.executableURL = executableURL.standardizedFileURL
         self.arguments = arguments
-        self.environment = environment
+        self.environment = controlledEnvironment
         self.diagnosticByteLimit = diagnosticByteLimit
+        self.eventBufferCapacity = eventBufferCapacity
+        self.cancellationPolicy = cancellationPolicy
+    }
+}
+
+nonisolated enum ProcessStandardInputPolicy: Sendable, Equatable {
+    case closed
+    case cancellationMessage(Data)
+}
+
+nonisolated struct ProcessCancellationPolicy: Sendable, Equatable {
+    static let maximumMessageByteCount = 4_096
+    static let maximumWait: Duration = .seconds(30)
+
+    static var signalsOnly: ProcessCancellationPolicy {
+        ProcessCancellationPolicy(
+            uncheckedStandardInput: .closed,
+            gracefulInputWait: .zero,
+            interruptWait: .seconds(1),
+            terminateWait: .seconds(1)
+        )
+    }
+
+    let standardInput: ProcessStandardInputPolicy
+    let gracefulInputWait: Duration
+    let interruptWait: Duration
+    let terminateWait: Duration
+
+    init(
+        standardInput: ProcessStandardInputPolicy,
+        gracefulInputWait: Duration,
+        interruptWait: Duration,
+        terminateWait: Duration
+    ) throws {
+        if case .cancellationMessage(let message) = standardInput {
+            guard !message.isEmpty,
+                  message.count <= Self.maximumMessageByteCount else {
+                throw ProcessContractValidationError.invalidCancellationPolicy
+            }
+        }
+
+        guard gracefulInputWait >= .zero,
+              gracefulInputWait <= Self.maximumWait,
+              interruptWait >= .zero,
+              interruptWait <= Self.maximumWait,
+              terminateWait >= .zero,
+              terminateWait <= Self.maximumWait else {
+            throw ProcessContractValidationError.invalidCancellationPolicy
+        }
+
+        self.standardInput = standardInput
+        self.gracefulInputWait = gracefulInputWait
+        self.interruptWait = interruptWait
+        self.terminateWait = terminateWait
+    }
+
+    private init(
+        uncheckedStandardInput standardInput: ProcessStandardInputPolicy,
+        gracefulInputWait: Duration,
+        interruptWait: Duration,
+        terminateWait: Duration
+    ) {
+        self.standardInput = standardInput
+        self.gracefulInputWait = gracefulInputWait
+        self.interruptWait = interruptWait
+        self.terminateWait = terminateWait
     }
 }
 
@@ -209,8 +305,12 @@ nonisolated struct BoundedData: Sendable, Equatable {
 }
 
 nonisolated struct ProcessResult: Sendable, Equatable {
+    let executionID: ProcessExecutionID
+    let processIdentifier: Int32
     let termination: ProcessTerminationStatus
     let diagnosticTail: BoundedData
+    let wasCancellationRequested: Bool
+    let lastCancellationStep: ProcessCancellationStep?
 }
 
 nonisolated struct ProcessTerminationStatus: Sendable, Equatable {
@@ -223,7 +323,15 @@ nonisolated enum ProcessExitReason: Sendable, Equatable {
     case uncaughtSignal
 }
 
+nonisolated enum ProcessCancellationStep: Sendable, Equatable {
+    case gracefulInput
+    case interrupt
+    case terminate
+    case kill
+}
+
 nonisolated enum ProcessContractValidationError: Error, Sendable, Equatable {
     case invalidRequest
+    case invalidCancellationPolicy
     case invalidBoundedData
 }

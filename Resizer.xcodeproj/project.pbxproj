@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* ffmpeg in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* ffmpeg */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A10000000000000000000002 /* ffprobe in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* ffprobe */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A20000000000000000000001 /* ProcessHarness in Embed Process Harness */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* ProcessHarness */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,6 +27,13 @@
 			remoteGlobalIDString = 2DB037A630051DD200559267;
 			remoteInfo = Resizer;
 		};
+		A20000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2DB0379F30051DD200559267 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A20000000000000000000010;
+			remoteInfo = ProcessHarness;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -41,11 +49,23 @@
 			name = "Embed FFmpeg Tools";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A20000000000000000000003 /* Embed Process Harness */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				A20000000000000000000001 /* ProcessHarness in Embed Process Harness */,
+			);
+			name = "Embed Process Harness";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000003 /* ffmpeg */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffmpeg; sourceTree = SOURCE_ROOT; };
 		A10000000000000000000004 /* ffprobe */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffprobe; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000004 /* ProcessHarness */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ProcessHarness; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037A730051DD200559267 /* Resizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Resizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037B430051DD400559267 /* ResizerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ResizerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037BE30051DD400559267 /* ResizerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ResizerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -65,6 +85,11 @@
 		2DB037C130051DD400559267 /* ResizerUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ResizerUITests;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000005 /* ProcessHarness */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Tests/ProcessHarness;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -91,6 +116,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A20000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -100,6 +132,7 @@
 				2DB037A930051DD200559267 /* Resizer */,
 				2DB037B730051DD400559267 /* ResizerTests */,
 				2DB037C130051DD400559267 /* ResizerUITests */,
+				A20000000000000000000005 /* ProcessHarness */,
 				A10000000000000000000006 /* Bundled Tools */,
 				2DB037A830051DD200559267 /* Products */,
 			);
@@ -120,6 +153,7 @@
 				2DB037A730051DD200559267 /* Resizer.app */,
 				2DB037B430051DD400559267 /* ResizerTests.xctest */,
 				2DB037BE30051DD400559267 /* ResizerUITests.xctest */,
+				A20000000000000000000004 /* ProcessHarness */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -157,11 +191,13 @@
 				2DB037B030051DD400559267 /* Sources */,
 				2DB037B130051DD400559267 /* Frameworks */,
 				2DB037B230051DD400559267 /* Resources */,
+				A20000000000000000000003 /* Embed Process Harness */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				2DB037B630051DD400559267 /* PBXTargetDependency */,
+				A20000000000000000000008 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				2DB037B730051DD400559267 /* ResizerTests */,
@@ -196,6 +232,27 @@
 			productReference = 2DB037BE30051DD400559267 /* ResizerUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		A20000000000000000000010 /* ProcessHarness */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A20000000000000000000013 /* Build configuration list for PBXNativeTarget "ProcessHarness" */;
+			buildPhases = (
+				A20000000000000000000007 /* Sources */,
+				A20000000000000000000006 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A20000000000000000000005 /* ProcessHarness */,
+			);
+			name = ProcessHarness;
+			packageProductDependencies = (
+			);
+			productName = ProcessHarness;
+			productReference = A20000000000000000000004 /* ProcessHarness */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -217,6 +274,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 2DB037A630051DD200559267;
 					};
+					A20000000000000000000010 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 2DB037A230051DD200559267 /* Build configuration list for PBXProject "Resizer" */;
@@ -236,6 +296,7 @@
 				2DB037A630051DD200559267 /* Resizer */,
 				2DB037B330051DD400559267 /* ResizerTests */,
 				2DB037BD30051DD400559267 /* ResizerUITests */,
+				A20000000000000000000010 /* ProcessHarness */,
 			);
 		};
 /* End PBXProject section */
@@ -286,6 +347,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A20000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -298,6 +366,11 @@
 			isa = PBXTargetDependency;
 			target = 2DB037A630051DD200559267 /* Resizer */;
 			targetProxy = 2DB037BF30051DD400559267 /* PBXContainerItemProxy */;
+		};
+		A20000000000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A20000000000000000000010 /* ProcessHarness */;
+			targetProxy = A20000000000000000000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -568,6 +641,36 @@
 			};
 			name = Release;
 		};
+		A20000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_CODE_COVERAGE = NO;
+				CODE_SIGN_ENTITLEMENTS = Configuration/FFmpegHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		A20000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_CODE_COVERAGE = NO;
+				CODE_SIGN_ENTITLEMENTS = Configuration/FFmpegHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -603,6 +706,15 @@
 			buildConfigurations = (
 				2DB037CF30051DD400559267 /* Debug */,
 				2DB037D030051DD400559267 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A20000000000000000000013 /* Build configuration list for PBXNativeTarget "ProcessHarness" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000011 /* Debug */,
+				A20000000000000000000012 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

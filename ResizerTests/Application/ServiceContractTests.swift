@@ -121,5 +121,76 @@ struct ServiceContractTests {
                 diagnosticByteLimit: 1
             )
         }
+
+        #expect(throws: ProcessContractValidationError.invalidRequest) {
+            _ = try ProcessRequest(
+                executableURL: URL(fileURLWithPath: "/tmp/tool"),
+                arguments: ["embedded\0null"],
+                environment: [:],
+                diagnosticByteLimit: 1
+            )
+        }
+        #expect(throws: ProcessContractValidationError.invalidRequest) {
+            _ = try ProcessRequest(
+                executableURL: URL(fileURLWithPath: "/tmp/tool"),
+                arguments: [],
+                environment: ["INVALID=KEY": "value"],
+                diagnosticByteLimit: 1
+            )
+        }
+        #expect(throws: ProcessContractValidationError.invalidRequest) {
+            _ = try ProcessRequest(
+                executableURL: URL(fileURLWithPath: "/tmp/tool"),
+                arguments: [],
+                environment: [:],
+                diagnosticByteLimit: 1,
+                eventBufferCapacity: 0
+            )
+        }
+        #expect(throws: ProcessContractValidationError.invalidRequest) {
+            _ = try ProcessRequest(
+                executableURL: URL(fileURLWithPath: "/tmp/tool"),
+                arguments: [],
+                environment: [:],
+                diagnosticByteLimit: ProcessRequest
+                    .maximumDiagnosticByteLimit + 1
+            )
+        }
+        #expect(
+            throws: ProcessContractValidationError.invalidCancellationPolicy
+        ) {
+            _ = try ProcessCancellationPolicy(
+                standardInput: .cancellationMessage(
+                    Data(
+                        repeating: 0,
+                        count: ProcessCancellationPolicy
+                            .maximumMessageByteCount + 1
+                    )
+                ),
+                gracefulInputWait: .zero,
+                interruptWait: .zero,
+                terminateWait: .zero
+            )
+        }
+        #expect(
+            throws: ProcessContractValidationError.invalidCancellationPolicy
+        ) {
+            _ = try ProcessCancellationPolicy(
+                standardInput: .closed,
+                gracefulInputWait: .zero,
+                interruptWait: ProcessCancellationPolicy.maximumWait
+                    + .milliseconds(1),
+                terminateWait: .zero
+            )
+        }
+
+        let request = try ProcessRequest(
+            executableURL: URL(fileURLWithPath: "/tmp/tool"),
+            arguments: [],
+            environment: ["LANG": "ru_RU.UTF-8"],
+            diagnosticByteLimit: 1
+        )
+        #expect(request.environment["LC_ALL"] == "C")
+        #expect(request.environment["LANG"] == "C")
     }
 }

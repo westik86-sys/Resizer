@@ -14,17 +14,20 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
-Implementation is currently at the stage-3 architecture scaffold. The project
-now contains pure domain values and a validated job state machine, async service
-ports, an actor-isolated coordinator, immutable UI snapshots, a `MainActor`
-feature model, a composition root, and closure-based fakes for previews and
-tests. See [`docs/architecture.md`](docs/architecture.md) for the dependency and
+Implementation is currently at stage 4. In addition to the architecture
+scaffold, the project now contains a generic actor-owned `ProcessRunner` with
+direct executable launch, simultaneous pipe draining, finite async event
+buffering, bounded stderr diagnostics, and awaited cancellation escalation. A
+test-only native `ProcessHarness` covers large simultaneous output, literal
+arguments, graceful and forced cancellation, races, and delayed pipe EOF. See
+[`docs/architecture.md`](docs/architecture.md) for the dependency, process, and
 state-transition contracts.
 
 The temporary stage-2 diagnostic UI remains available and still uses its narrow
 spike runner to prove the bundled toolchain. It is not the final product UI. A
-general process runner, FFprobe mapping, preset-to-argument behavior, the
-headless compression workflow, and the queue remain later PLAN stages.
+FFprobe mapping, preset-to-argument behavior, the headless compression workflow,
+and the queue remain later PLAN stages. The stage-4 runner is not yet wired into
+the temporary diagnostic UI.
 
 Sandbox checkpoint A passed locally on 2026-07-13: an ad hoc-signed Universal 2
 Release app used PowerBox-selected input and output locations to run bundled
@@ -73,6 +76,7 @@ Resizer.xcodeproj/  Xcode project
 Resizer/            SwiftUI app plus Domain/Application/Infrastructure/UI layers
 ResizerTests/       Swift Testing domain, application, and boundary tests
 ResizerUITests/     Xcode-generated UI-test target (not part of bootstrap verification)
+Tests/ProcessHarness/ Deterministic native process fixture used only by unit tests
 Scripts/            Shell-first build and test entry points
 Vendor/FFmpeg/      Binaries, exact source, checksums, licenses, and build reports
 Configuration/      Nested helper entitlements
