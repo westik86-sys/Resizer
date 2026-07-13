@@ -1,0 +1,19 @@
+Executable=/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffmpeg
+Identifier=com.example.Resizer.ffmpeg
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory v=20500 size=10043 flags=0x10002(adhoc,runtime) hashes=303+7 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=8e86ff3a6394a90b6dd31f8a19eb7a6b498689e2
+CandidateCDHashFull sha256=8e86ff3a6394a90b6dd31f8a19eb7a6b498689e2a6485b2d4e57fc1b8dd6105e
+Hash choices=sha256
+CMSDigest=8e86ff3a6394a90b6dd31f8a19eb7a6b498689e2a6485b2d4e57fc1b8dd6105e
+CMSDigestType=2
+CDHash=8e86ff3a6394a90b6dd31f8a19eb7a6b498689e2
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=26.2.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+warning: Specifying ':' in the path is deprecated and will not work in a future release
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.inherit</key><true/></dict></plist>

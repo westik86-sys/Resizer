@@ -1,0 +1,25 @@
+Filters:
+  T.. = Timeline support
+  .S. = Slice threading
+  A = Audio input/output
+  V = Video input/output
+  N = Dynamic number and/or type of input/output
+  | = Source or sink filter
+  ------
+ .. aformat           A->A       Convert the input audio to one of the specified formats.
+ .. anull             A->A       Pass the source unchanged to the output.
+ .. aresample         A->A       Resample audio data.
+ .. atrim             A->A       Pick one continuous section from the input, drop the rest.
+ .. crop              V->V       Crop the input video.
+ .. format            V->V       Convert the input video to one of the specified pixel formats.
+ TS hflip             V->V       Horizontally flip the input video.
+ .. null              V->V       Pass the source unchanged to the output.
+ TS rotate            V->V       Rotate the input image.
+ .. scale             V->V       Scale the input video size and/or convert the image format.
+ .S transpose         V->V       Transpose input video.
+ .. trim              V->V       Pick one continuous section from the input, drop the rest.
+ T. vflip             V->V       Flip the input video vertically.
+ .. abuffer           |->A       Buffer audio frames, and make them accessible to the filterchain.
+ .. buffer            |->V       Buffer video frames, and make them accessible to the filterchain.
+ .. abuffersink       A->|       Buffer audio frames, and make them available to the end of the filter graph.
+ .. buffersink        V->|       Buffer video frames, and make them available to the end of the filter graph.

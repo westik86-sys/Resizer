@@ -1,0 +1,2 @@
+Architectures in the fat file: /Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffmpeg are: x86_64 arm64 
+Architectures in the fat file: /Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffprobe are: x86_64 arm64 

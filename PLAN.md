@@ -1,0 +1,1035 @@
+# План разработки нативного macOS-приложения для сжатия видео
+
+Оптимальный путь — не делать «GUI ко всему FFmpeg», а начать с opinionated local-first утилиты: пользователь выбирает видео, пресет и папку, а приложение безопасно создаёт совместимую уменьшенную копию. Архитектуру при этом стоит оставить расширяемой для очереди, новых кодеков и режима целевого размера.
+
+## 1. Рекомендуемые исходные решения
+
+| Решение | Рекомендация для MVP |
+|---|---|
+| Deployment target | macOS 14+ |
+| UI | SwiftUI, `NavigationSplitView`, `Settings` scene |
+| Swift | Swift 6 со строгой проверкой concurrency |
+| Канал первой публичной beta | Прямая загрузка: Developer ID + notarization |
+| Sandbox | Включить с начала разработки |
+| FFmpeg | Собственная воспроизводимая сборка, вложенные `ffmpeg` и `ffprobe` |
+| Лицензионный профиль | LGPL-only, без `--enable-gpl` и `--enable-nonfree` |
+| Видеокодек MVP | H.264 через `h264_videotoolbox` |
+| Аудио | AAC |
+| Контейнер результата | MP4 + `faststart` |
+| Очередь | Последовательная, один FFmpeg-процесс одновременно |
+| Данные | Полностью локально, сеть приложению не нужна |
+| Архитектура | SwiftUI app target + локальный `CompressionCore` package |
+| Intel | Universal 2 для публичной версии; arm64 достаточно для внутреннего прототипа |
+
+Прямая beta через Developer ID обычно позволяет быстрее пройти первые релизы. Для неё нужен Hardened Runtime, подпись и notarization; App Sandbox формально опционален, но я рекомендую оставить его включённым, чтобы позднее не переделывать доступ к файлам. Для Mac App Store sandbox обязателен. [Apple: подготовка приложения к распространению](https://developer.apple.com/documentation/Xcode/preparing-your-app-for-distribution), [Apple: notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+## 2. Продуктовая структура
+
+Продуктовое обещание:
+
+> Перетащите видео, выберите баланс размера и качества и получите компактную копию рядом с оригиналом. Видео никуда не загружается, оригинал не изменяется.
+
+Основные пользователи:
+
+- Разработчики, QA и support, сжимающие записи экрана для GitHub, Jira или Slack.
+- Дизайнеры и маркетологи, которым нужен небольшой MP4 без изучения кодеков.
+- Преподаватели и команды, работающие с длинными лекциями и демонстрациями.
+- Технические пользователи, знакомые с FFmpeg, но уставшие от CLI.
+
+Принципы:
+
+- Локальная обработка.
+- Оригинал всегда неизменяем.
+- Пресеты на первом уровне, технические параметры — в раскрываемом разделе.
+- Не обещать точный размер в режиме качества.
+- Ошибки описываются человеческим языком; stderr доступен только в диагностике.
+- FFmpeg-команда не редактируется пользователем вручную.
+- Финальный файл появляется только после успешной проверки временного результата.
+
+## 3. Объём MVP
+
+### Первый вертикальный срез
+
+Это первая техническая цель, ещё не полноценный MVP:
+
+1. Выбрать один MOV или MP4.
+2. Получить метаданные через bundled `ffprobe`.
+3. Запустить один фиксированный H.264/AAC encode.
+4. Показать машинно-читаемый прогресс.
+5. Поддержать отмену.
+6. Записать временный MP4.
+7. Проверить результат повторным `ffprobe`.
+8. Переместить его в финальное имя.
+9. Показать размер до и после.
+
+Этот срез должен быть готов до создания сложного интерфейса и очереди.
+
+### Публичный MVP
+
+- Импорт через drag-and-drop и `Cmd+O`.
+- Один или несколько файлов.
+- Официально поддерживаемые входы сначала: MOV и MP4.
+- Анализ через `ffprobe`:
+  - размер;
+  - длительность;
+  - разрешение;
+  - FPS;
+  - кодеки;
+  - аудиодорожки;
+  - rotation;
+  - HDR/bit depth.
+- Последовательная очередь.
+- Три пресета:
+  - «Лучшее качество»;
+  - «Баланс» — по умолчанию;
+  - «Меньший размер».
+- Настройки:
+  - максимальное разрешение: исходное, 2160p, 1080p, 720p, 480p;
+  - FPS: исходный, максимум 60, 30 или 24;
+  - качество видео;
+  - качество аудио или «Без аудио»;
+  - сохранить или удалить обычные метаданные.
+- Выбор выходной папки.
+- Безопасное имя `original-compressed.mp4`.
+- Автоматический числовой суффикс при конфликте.
+- Прогресс, elapsed time, примерный ETA и скорость вида `1,8×`.
+- Отмена и повтор.
+- Результат:
+  - `1,2 ГБ → 184 МБ`;
+  - процент экономии;
+  - время обработки;
+  - «Открыть»;
+  - «Показать в Finder»;
+  - «Сжать ещё сильнее».
+- Системное уведомление, если приложение неактивно.
+- Экран лицензий и точная версия FFmpeg.
+
+### Не включать в MVP
+
+- Гарантированный целевой размер.
+- Пользовательские произвольные FFmpeg-флаги.
+- Trim, crop, watermark и другие функции видеоредактора.
+- HEVC, AV1, VP9 и ручной выбор контейнера.
+- Постоянную историю между запусками.
+- Pause/resume.
+- Облачную обработку и аккаунты.
+- Finder extensions и watch folders.
+- Полную поддержку HDR/Dolby Vision.
+- Сложное управление несколькими аудиодорожками, субтитрами и главами.
+
+### После MVP
+
+Приоритет P1:
+
+- «Уложить в размер» через двухпроходное кодирование.
+- Пользовательские пресеты.
+- HEVC через VideoToolbox.
+- Выбор аудиодорожек и сохранение субтитров.
+- Пробное кодирование короткого фрагмента для оценки результата.
+- Персистентная очередь и security-scoped bookmarks.
+- Превью исходника и результата.
+
+P2:
+
+- Trim и crop.
+- Finder Quick Action.
+- Папка-наблюдатель.
+- Ограничение нагрузки и энергосберегающий режим.
+- AV1.
+- Экспорт и импорт пресетов.
+
+## 4. Экраны
+
+### Главное окно
+
+Рекомендуемая структура:
+
+- Слева — очередь заданий.
+- В центре — выбранное видео, метаданные и результат.
+- Справа или в inspector — настройки сжатия.
+- В toolbar — добавить, удалить из очереди, запустить, отменить, показать в Finder.
+
+Для самого первого вертикального среза допустим один простой экран без sidebar.
+
+### Пустое состояние
+
+- Drop zone.
+- «Выбрать видео…».
+- Подпись: «Видео обрабатывается локально. Оригинал не изменится».
+- Ссылка на поддерживаемые форматы.
+
+### Настройка
+
+- Карточка источника: имя, размер, длительность, разрешение и кодеки.
+- Выбор пресета.
+- Краткое резюме: `MP4 · H.264 · до 1080p · исходный FPS`.
+- Ползунок «Меньше файл ↔ лучше качество».
+- Папка результата.
+- Раскрываемый блок расширенных настроек.
+- Если пользователь меняет параметр пресета, режим становится «Пользовательские настройки».
+
+Не стоит называть ползунок `CRF`: VideoToolbox и программные кодировщики используют разные модели управления качеством.
+
+### Выполнение
+
+- Текущий этап: подготовка, кодирование, финализация.
+- Прогресс или indeterminate-состояние, если длительность неизвестна.
+- ETA только после получения устойчивой скорости.
+- Кнопка отмены.
+- Ограниченная диагностическая область, а не бесконечный поток stderr.
+
+### Ошибка
+
+Показывать:
+
+- «Не удалось прочитать видео».
+- «Недостаточно места в выбранной папке».
+- «Выходной диск отключён».
+- «Эта версия FFmpeg не содержит нужный кодировщик».
+
+В раскрываемой диагностике:
+
+- версия приложения и FFmpeg;
+- exit code;
+- последние строки stderr;
+- кнопка копирования отчёта.
+
+### Настройки приложения
+
+- Папка результата по умолчанию.
+- Политика конфликта имён.
+- Уведомления.
+- Не давать Mac уснуть во время активной обработки.
+- Версия FFmpeg.
+- Лицензии.
+- RU/EN через String Catalog.
+
+## 5. Модель состояний
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Probing
+    Probing --> Ready
+    Ready --> Queued
+    Queued --> Running
+    Running --> Finishing
+    Finishing --> Completed
+
+    Running --> Cancelling
+    Cancelling --> Cancelled
+
+    Probing --> Failed
+    Queued --> Failed
+    Running --> Failed
+    Finishing --> Failed
+
+    Failed --> Ready: Retry
+    Cancelled --> Ready: Retry
+```
+
+Не используйте набор несвязанных `isLoading`, `isRunning`, `isCompleted`. Один `enum JobState` должен быть единственным источником истины.
+
+Дополнительные состояния импорта:
+
+- `acquiringAccess`;
+- `permissionRequired`;
+- `fileMissing`;
+- `unsupported`;
+- `probeFailed`.
+
+## 6. Архитектура
+
+```text
+SwiftUI Views
+    ↓ user intents / immutable view state
+@MainActor CompressionFeatureModel
+    ↓
+CompressionCoordinator actor
+    ├── MediaProbing
+    ├── Transcoding
+    ├── CommandBuilding
+    ├── OutputPlanning
+    ├── FileAccessing
+    └── JobQueueing
+             ↓
+Infrastructure
+    ├── FFprobeClient
+    ├── FFmpegRunner
+    ├── ProcessRunner
+    ├── ProgressParser
+    ├── SecurityScopedFileAccess
+    ├── OutputPlanner
+    └── DiagnosticLogStore
+```
+
+### Domain
+
+Чистые `Sendable`, `Equatable`, при необходимости `Codable`-типы:
+
+- `CompressionJob`;
+- `JobState`;
+- `MediaInfo`;
+- `VideoStreamInfo`;
+- `AudioStreamInfo`;
+- `CompressionRecipe`;
+- `CompressionPreset`;
+- `RateControl`;
+- `ScalePolicy`;
+- `FrameRatePolicy`;
+- `MetadataPolicy`;
+- `OutputPolicy`;
+- `TranscodeProgress`;
+- `TranscodeFailure`.
+
+Domain не должен импортировать SwiftUI, AppKit или знать о `Foundation.Process`.
+
+### Application
+
+`CompressionCoordinator` как `actor`:
+
+- владеет очередью;
+- допускает один активный job;
+- проверяет допустимость переходов состояний;
+- выполняет `probe → preflight → encode → validate → commit`;
+- разрешает гонки между cancel и normal completion;
+- публикует immutable snapshots для UI.
+
+### Infrastructure
+
+Протоколы:
+
+```swift
+protocol MediaProbing: Sendable
+protocol Transcoding: Sendable
+protocol ProcessRunning: Sendable
+protocol CommandBuilding: Sendable
+protocol OutputPlanning: Sendable
+protocol FileAccessing: Sendable
+```
+
+`Process`, pipes и continuation должны принадлежать отдельному actor. Не передавайте сам `Process` между изоляционными доменами.
+
+### Рекомендуемая структура репозитория
+
+```text
+VideoCompressor/
+├── AGENTS.md
+├── README.md
+├── App/
+│   ├── Composition/
+│   ├── Features/
+│   ├── UI/
+│   └── Resources/
+├── Packages/
+│   └── CompressionCore/
+│       ├── Sources/
+│       │   ├── Domain/
+│       │   ├── Application/
+│       │   └── Infrastructure/
+│       └── Tests/
+├── Vendor/
+│   └── FFmpeg/
+│       ├── bin/
+│       ├── licenses/
+│       ├── sources/
+│       ├── build-config/
+│       └── checksums/
+├── Tests/
+│   ├── Fixtures/
+│   ├── ProcessHarness/
+│   └── Media/
+├── Scripts/
+│   ├── build.sh
+│   ├── test.sh
+│   ├── build-ffmpeg.sh
+│   ├── archive.sh
+│   ├── notarize.sh
+│   └── verify-release.sh
+└── docs/
+    ├── architecture.md
+    ├── testing.md
+    ├── RELEASING.md
+    └── adr/
+```
+
+Не нужны отдельные динамические frameworks: они только усложнят подпись.
+
+## 7. Интеграция FFmpeg
+
+### Запуск
+
+Для MVP используйте CLI-бинарники, а не прямое подключение `libav*`.
+
+Плюсы:
+
+- падение FFmpeg не роняет основной процесс;
+- проще обновлять toolchain;
+- нет C bridging и ABI-сложности;
+- удобнее progress/cancellation;
+- проще тестировать command builder.
+
+Production-код получает путь только из app bundle:
+
+```swift
+Bundle.main.url(forAuxiliaryExecutable: "ffmpeg")
+Bundle.main.url(forAuxiliaryExecutable: "ffprobe")
+```
+
+Не искать FFmpeg в Homebrew или `PATH`.
+
+### ffprobe
+
+Использовать JSON:
+
+```text
+ffprobe
+-v error
+-print_format json
+-show_format
+-show_streams
+-show_chapters
+INPUT
+```
+
+DTO для JSON должен быть отделён от domain-модели. Декодер обязан терпеть отсутствующие и неизвестные поля, строковые числа и rational FPS. [Официальная документация ffprobe](https://ffmpeg.org/ffprobe.html).
+
+### Построение аргументов
+
+Команда хранится только как `[String]`, никогда как одна shell-строка.
+
+Каркас:
+
+```text
+-hide_banner
+-loglevel warning
+-stats_period 0.25
+-nostats
+-progress pipe:1
+-i INPUT
+-map 0:v:0
+-map 0:a:0?
+[ENCODER_ARGS]
+-movflags +faststart
+-n
+TEMP_OUTPUT.mp4
+```
+
+Важные правила:
+
+- `Process.executableURL` + `Process.arguments`.
+- Никаких `/bin/sh -c`.
+- Параметры представлены enum/value types.
+- Нет поля «Дополнительные аргументы FFmpeg».
+- Поведение нескольких аудиодорожек и субтитров задаётся явно.
+- Отсутствие аудио не является ошибкой.
+- Для совместимого SDR MP4 — `yuv420p`; HDR-входы нельзя молча конвертировать как обычный SDR.
+- Масштабирование обеспечивает чётные размеры.
+- Финальный путь никогда не передаётся FFmpeg напрямую.
+
+### Прогресс
+
+Использовать `-progress pipe:1`, а не разбирать человекочитаемый stderr. FFmpeg выдаёт блоки `key=value`, заканчивающиеся `progress=continue` или `progress=end`. [Официальная документация FFmpeg](https://ffmpeg.org/ffmpeg.html).
+
+Основные поля:
+
+- `out_time_us`;
+- `frame`;
+- `fps`;
+- `speed`;
+- `total_size`;
+- `dup_frames`;
+- `drop_frames`.
+
+Расчёт:
+
+```text
+fraction = clamp(out_time_us / duration_us, 0...1)
+```
+
+Если duration неизвестна — indeterminate progress. UI достаточно обновлять 4–5 раз в секунду.
+
+stdout и stderr нужно дренировать параллельно, иначе заполненный pipe может заблокировать процесс. stderr хранить в ring buffer, например максимум 1–2 МБ.
+
+### Отмена
+
+Рекомендуемая лестница:
+
+1. Перевести job в `cancelling`.
+2. Написать `q\n` в stdin FFmpeg.
+3. Подождать небольшой grace period.
+4. Вызвать `Process.interrupt()`.
+5. Затем `Process.terminate()`.
+6. `SIGKILL` использовать только как последний fallback.
+7. Дождаться EOF обоих pipes.
+8. Удалить только временный файл этого job.
+
+Если используется `q`, не передавайте FFmpeg флаг `-nostdin`.
+
+### Безопасное завершение
+
+Успех — это не просто exit code 0:
+
+1. Временный файл существует.
+2. Его размер больше нуля.
+3. `ffprobe` может его открыть.
+4. Присутствует ожидаемый видеопоток.
+5. Кодек, контейнер и разрешение соответствуют recipe.
+6. Длительность находится в допустимом диапазоне.
+7. Только после этого выполняется rename/replace.
+
+Имя временного файла должно сохранять расширение:
+
+```text
+video.<job-uuid>.partial.mp4
+```
+
+Для sandboxed MVP лучше выбирать выходную папку, а не только точный Save URL: доступ к папке позволяет создать рядом временный файл и затем атомарно переименовать его.
+
+## 8. Sandbox и безопасность
+
+Entitlements приложения:
+
+```text
+com.apple.security.app-sandbox = true
+com.apple.security.files.user-selected.read-write = true
+```
+
+Для вложенных sandboxed CLI-инструментов:
+
+```text
+com.apple.security.app-sandbox = true
+com.apple.security.inherit = true
+```
+
+Apple описывает доступ к выбранным файлам, папкам и security-scoped bookmarks в [документации App Sandbox](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox).
+
+Обязательные меры:
+
+- Держать `startAccessingSecurityScopedResource()` активным до завершения encode, валидации и commit.
+- На первом техническом spike проверить, что подписанный дочерний процесс действительно получает нужный доступ.
+- Не добавлять network entitlement.
+- По возможности отключить ненужные сетевые протоколы в сборке FFmpeg.
+- Не разрешать runtime-загрузку или замену FFmpeg.
+- Минимизировать environment дочернего процесса.
+- Зафиксировать `LC_ALL=C` и `LANG=C`.
+- Абсолютные пути в Unified Logging помечать как private.
+- Не включать `-report` по умолчанию.
+- Не сохранять логи бесконечно.
+- Никогда не удалять файлы по широкому glob-паттерну.
+- Очищать только temp-файлы, связанные с известными job ID.
+- Не перезаписывать источник даже после явного подтверждения пользователя.
+- Не показывать неподдерживаемые кодировщики: при старте кэшировать результат `ffmpeg -encoders`.
+
+FFmpeg обрабатывает недоверенные бинарные данные. Отдельный процесс защищает UI от обычного crash, но не заменяет обновление FFmpeg и минимизацию его feature set.
+
+## 9. Сборка и упаковка FFmpeg
+
+### Воспроизводимость
+
+Для каждой версии сохранять:
+
+- FFmpeg release tag или commit;
+- checksum исходного архива;
+- build script;
+- полный configure command;
+- patches;
+- licenses;
+- вывод `ffmpeg -version`;
+- вывод `ffmpeg -buildconf`;
+- список encoders/decoders.
+
+Собрать одинаковый feature set для `arm64` и `x86_64`, затем:
+
+- объединить через `lipo`, либо
+- публиковать архитектурно раздельные artifacts.
+
+Проверить:
+
+```text
+file ffmpeg
+lipo -info ffmpeg
+otool -L ffmpeg
+ffmpeg -version
+ffmpeg -buildconf
+```
+
+Не должно быть ссылок на абсолютные пути Homebrew/MacPorts.
+
+### Включение в bundle
+
+- Добавить FFmpeg через Copy Files.
+- Destination: Executables.
+- Включить Code Sign On Copy.
+- Получать инструменты через `url(forAuxiliaryExecutable:)`.
+- Подписывать вложенный код до подписи приложения.
+
+Apple публикует отдельный workflow для [вложения helper tool в sandboxed app](https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app).
+
+### Подпись и notarization
+
+Direct distribution:
+
+1. Archive.
+2. Подписать nested executables.
+3. Подписать app с Developer ID Application.
+4. Hardened Runtime и secure timestamp.
+5. Упаковать в ZIP/DMG.
+6. `xcrun notarytool submit --wait`.
+7. `xcrun stapler staple`.
+8. Проверить Gatekeeper.
+
+Проверки:
+
+```text
+codesign -dvvv --entitlements :- App.app
+codesign -dvvv --entitlements :- App.app/Contents/MacOS/ffmpeg
+codesign --verify --strict --verbose=2 App.app
+spctl -a -vv --type execute App.app
+xcrun stapler validate App.app
+```
+
+Не используйте `codesign --deep` как способ подписи. Подписывайте вложенный код осознанно изнутри наружу.
+
+## 10. Лицензирование
+
+FFmpeg по умолчанию распространяется под LGPL 2.1+, но включение GPL-компонентов меняет лицензионный режим всей сборки. `libx264` и `libx265` относятся к GPL-зависимостям; `--enable-nonfree` создаёт сборку, которую нельзя свободно распространять. [Лицензия FFmpeg](https://ffmpeg.org/doxygen/trunk/md_LICENSE.html), [FFmpeg legal checklist](https://ffmpeg.org/legal.html).
+
+Поэтому для закрытого MVP рекомендую:
+
+- не использовать `--enable-gpl`;
+- не использовать `--enable-nonfree`;
+- не включать `libx264` и `libx265`;
+- использовать `h264_videotoolbox`;
+- аудировать каждую внешнюю библиотеку;
+- не брать готовую сборку неизвестного происхождения.
+
+Запуск FFmpeg отдельным процессом не отменяет обязательства по распространяемому бинарнику. Понадобятся notices, точные соответствующие исходники, build instructions и patches.
+
+Если вам принципиально нужен `libx264` и CRF, это отдельное продуктовое и юридическое решение. Не считайте process boundary автоматическим освобождением от GPL. Для коммерческого продукта также полезна отдельная проверка патентных вопросов H.264/HEVC. Это не юридическая консультация.
+
+## 11. Тестовая стратегия
+
+| Уровень | Что проверять |
+|---|---|
+| Unit | State machine, JSON decoding, rational FPS, progress parser, presets, argument builder, naming |
+| Process harness | stdout/stderr, большой вывод, exit code, cancel, игнорирование сигналов |
+| Integration | `probe → transcode → probe`, temp cleanup, отсутствие encoder |
+| UI | Import, drop, start, progress, cancel, retry, reveal in Finder |
+| Sandbox | Доступ только после выбора файла/папки, удержание scope |
+| Release | Architectures, entitlements, codesign, notarization, Gatekeeper |
+| Performance | Память от stderr, responsive UI, несколько длинных заданий |
+
+Process harness — маленький тестовый CLI target, который умеет:
+
+- фрагментированно печатать progress;
+- одновременно заполнять stdout и stderr;
+- ждать `q`;
+- возвращать разные exit codes;
+- игнорировать SIGINT;
+- завершаться одновременно с cancel.
+
+Это делает тесты runner детерминированными и независимыми от скорости FFmpeg.
+
+Матрица медиа:
+
+- MOV и MP4;
+- H.264 и HEVC input;
+- 720p, 1080p, 4K;
+- запись экрана;
+- portrait + rotation;
+- CFR и VFR;
+- видео без аудио;
+- несколько аудиодорожек;
+- subtitles;
+- HDR/10-bit;
+- повреждённый файл;
+- Unicode, emoji, пробелы и shell-символы в имени;
+- внутренний и внешний диск;
+- read-only folder;
+- недостаток места;
+- отключение диска;
+- cancel в начале, середине и на финализации.
+
+Release gates:
+
+- 100% отсутствие перезаписи или изменения оригинала.
+- 100% отмен без orphan-процесса и `.partial`-файла.
+- Результаты официального профиля открываются в QuickTime и Quick Look.
+- Ошибка одного задания не блокирует очередь.
+- UI не зависает во время encode.
+- Release artifact проходит Gatekeeper на чистой учётной записи.
+
+## 12. Этапы реализации
+
+| Этап | Результат | Definition of Done |
+|---|---|---|
+| 0. ADR | Зафиксированы target, канал, архитектуры, лицензия и encoder | Нет решения, способного позднее изменить sandbox или bundle |
+| 1. Bootstrap | SwiftUI app, tests, scripts, `AGENTS.md` | Debug build и пустой test target проходят |
+| 2. Toolchain spike | Bundled FFmpeg запускается внутри sandbox | Реальный probe и encode выбранного файла |
+| 3. Архитектура | Domain/Application/Infrastructure/UI | Domain не знает о SwiftUI и `Process` |
+| 4. Process runner | Async events, pipes, cancel | Нет deadlock, shell-символы передаются буквально |
+| 5. Probe | `ffprobe JSON → MediaInfo` | Fixture tests проходят |
+| 6. Presets | Recipe и детерминированный argument builder | Golden tests для всех пресетов |
+| 7. Headless core | `probe → encode → validate → commit` | Один ролик обрабатывается без UI |
+| 8. Single-file UI | Полный пользовательский сценарий | Import, start, cancel, result |
+| 9. Queue | FIFO, retry, remove, reorder | Нет duplicate start |
+| 10. Hardening | Ошибки, accessibility, localization | Полная матрица зелёная |
+| 11. Release | Подписанный artifact | Notarization, Gatekeeper и smoke encode проходят |
+
+Контрольные точки:
+
+- A: sandboxed helper доказан.
+- B: headless end-to-end encode.
+- C: usable single-file MVP.
+- D: feature-complete queue MVP.
+- E: notarized release candidate.
+
+## 13. Как работать над этим в Codex
+
+Официальная рекомендация для macOS-разработки в Codex — shell-first цикл через `xcodebuild`, нативные desktop-паттерны и маленькая проверка после каждого изменения. Постоянные правила проекта стоит положить в `AGENTS.md`. [Build for macOS](https://learn.chatgpt.com/use-cases/native-macos-apps), [Prompting](https://learn.chatgpt.com/docs/prompting), [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
+
+Одна задача для Codex должна давать один проверяемый результат. Не отправляйте промпт «сделай всё приложение».
+
+Пример `AGENTS.md`:
+
+```markdown
+# Project rules
+
+- Build with ./Scripts/build.sh.
+- Run ./Scripts/test.sh after behavior changes.
+- Preserve uncommitted user changes.
+- Do not add third-party dependencies without approval.
+- Domain must not import SwiftUI, AppKit, or Foundation.Process.
+- Never launch FFmpeg through a shell.
+- Treat input files as immutable.
+- Write only to unique temporary outputs, validate, then commit.
+- Keep stdout and stderr bounded and drained concurrently.
+- Do not change signing, entitlements, bundle ID, or deployment target unless requested.
+- Report exact verification commands and results.
+```
+
+### Общий префикс для промптов
+
+Добавляйте его к каждому этапу:
+
+```text
+Ты работаешь в существующем репозитории macOS-приложения [APP_NAME].
+
+Перед изменениями:
+1. Прочитай все применимые AGENTS.md.
+2. Проверь git status и структуру проекта.
+3. Не откатывай и не перезаписывай пользовательские изменения.
+4. Найди существующие build/test-команды.
+5. Кратко опиши план, затем продолжай без ожидания подтверждения, если нет архитектурно значимой неоднозначности.
+
+Ограничения:
+- Работай только в рамках указанного этапа.
+- Не добавляй зависимости без необходимости и подтверждения.
+- Не меняй bundle ID, deployment target, signing или entitlements без прямого указания.
+- Не делай commit, push или release.
+- Не переходи к следующему этапу.
+
+После реализации:
+- Запусти минимальную релевантную сборку и тесты.
+- Сообщи изменённые файлы, точные команды, результаты, риски и ручные проверки.
+```
+
+## 14. Готовые промпты для Codex
+
+### Промпт 1 — bootstrap
+
+```text
+Цель: подготовить минимальный собираемый каркас нативного macOS-приложения [APP_NAME].
+
+Параметры:
+- Bundle ID: [BUNDLE_ID]
+- Scheme: [SCHEME]
+- Deployment target: macOS 14
+- Swift 6
+- SwiftUI
+- Без сторонних зависимостей
+
+Создай:
+- WindowGroup;
+- Settings scene;
+- минимальный ContentView;
+- unit-test target;
+- Scripts/build.sh и Scripts/test.sh;
+- корневой AGENTS.md;
+- README с shell-first build/run workflow;
+- docs/adr для продуктовых и технических решений.
+
+Проверь xcodebuild -list, Debug build и пустой test target.
+
+Если репозиторий пуст и невозможно надёжно создать Xcode project доступными инструментами, не генерируй pbxproj вслепую. Дай точные параметры создания пустого macOS App проекта в Xcode и остановись.
+```
+
+### Промпт 2 — архитектура
+
+```text
+Цель: создать тестируемый архитектурный каркас без запуска FFmpeg.
+
+Добавь Domain-модели:
+CompressionJob, JobState, MediaInfo, MediaStream,
+CompressionRecipe, CompressionPreset, RateControl,
+ScalePolicy, MetadataPolicy, OutputPolicy, TranscodeProgress.
+
+Добавь протоколы:
+MediaProbing, Transcoding, ProcessRunning,
+CommandBuilding, OutputPlanning, FileAccessing.
+
+Требования:
+- Domain не импортирует SwiftUI/AppKit и не знает о Process.
+- UI-модели работают на MainActor.
+- Coordinator и долгоживущие конкурентные сервисы допускают actor-реализацию.
+- Dependency injection выполняется в composition root.
+- Нет global singleton или service locator.
+- Для previews и тестов используются fake-сервисы.
+
+Реализуй и протестируй допустимые и недопустимые переходы JobState.
+Не реализуй ProcessRunner, FFmpeg и продуктовый UI.
+```
+
+### Промпт 3 — FFmpeg toolchain spike
+
+```text
+Цель: доказать, что bundled ffmpeg и ffprobe могут работать внутри подписанного sandboxed приложения.
+
+Сначала зафиксируй:
+- FFmpeg source tag/commit и checksum;
+- configure flags;
+- лицензии;
+- arm64/x86_64 strategy;
+- список включённых encoders, decoders, muxers и protocols.
+
+Для закрытого MVP исходи из LGPL-only сборки:
+- без --enable-gpl;
+- без --enable-nonfree;
+- без libx264/libx265;
+- с h264_videotoolbox и native AAC.
+
+Добавь ffmpeg/ffprobe в app bundle как Executables с Code Sign On Copy.
+Настрой минимальные app/helper entitlements.
+Реализуй временную диагностическую кнопку:
+выбрать файл → ffprobe → короткий encode в выбранную папку.
+
+Проверь sandbox-доступ, architectures, executable permissions и codesign.
+Не создавай финальный UI и очередь.
+```
+
+### Промпт 4 — безопасный ProcessRunner
+
+```text
+Цель: реализовать общий async ProcessRunner без FFmpeg-специфичной логики.
+
+Типы:
+- ProcessRequest: executableURL, arguments, controlled environment;
+- ProcessEvent: stdout/stderr chunks или lines;
+- ProcessResult: exitCode, terminationReason, bounded diagnostic tail.
+
+Требования:
+- Foundation.Process запускается напрямую.
+- Запрещены sh -c, bash -c и shell-конкатенация.
+- stdout и stderr дренируются одновременно.
+- События публикуются через AsyncStream/AsyncThrowingStream.
+- Cancellation завершает дочерний процесс.
+- Continuation завершается ровно один раз.
+- Логи ограничены ring buffer.
+- Process не пересекает actor isolation без обёртки.
+
+Создай ProcessHarness CLI и тесты:
+success, nonzero exit, simultaneous output, large output,
+cancel, ignored signal, Unicode и shell metacharacters.
+```
+
+### Промпт 5 — ffprobe
+
+```text
+Цель: реализовать FFprobeClient и преобразование JSON в Domain.MediaInfo.
+
+Production-код ищет ffprobe только внутри app bundle.
+Для тестов binary URL внедряется через dependency injection.
+
+Используй аргументы, эквивалентные:
+-v error -print_format json -show_format -show_streams -show_chapters INPUT
+
+Добавь отдельные DTO и mapping DTO → Domain.
+
+Покрой:
+- отсутствующие и неизвестные поля;
+- числа как строки;
+- rational FPS;
+- duration, bitrate и size;
+- несколько video/audio/subtitle streams;
+- default disposition;
+- rotation и color metadata;
+- отсутствие video/audio;
+- malformed JSON.
+
+Unit-тесты работают на JSON fixtures и не зависят от Homebrew.
+```
+
+### Промпт 6 — presets и command builder
+
+```text
+Цель: реализовать типизированные CompressionRecipe и чистый FFmpegCommandBuilder.
+
+MVP:
+- MP4;
+- h264_videotoolbox;
+- AAC;
+- High Quality, Balanced, Small File;
+- original/max resolution;
+- original/max FPS;
+- audio bitrate или mute;
+- keep/remove metadata;
+- safe output policy.
+
+Builder:
+- возвращает [String];
+- использует только validated enum/value types;
+- явно задаёт stream mapping;
+- учитывает отсутствие audio;
+- не перезаписывает input или final output;
+- пишет только во временный .partial.mp4;
+- добавляет machine-readable progress и faststart.
+
+Не добавляй arbitrary FFmpeg flags, HEVC или target-size mode.
+
+Добавь golden tests для всех пресетов, Unicode-путей,
+video без audio, resize и output collision.
+```
+
+### Промпт 7 — headless transcoding core
+
+```text
+Цель: реализовать TranscodingService поверх ProcessRunning и FFmpegCommandBuilder.
+
+Поведение:
+- probe input;
+- preflight validation;
+- создать уникальный temp output;
+- запустить FFmpeg;
+- разобрать -progress pipe:1;
+- публиковать fraction, processedDuration, speed, fps и outputBytes;
+- поддержать graceful cancel через q, затем SIGINT/SIGTERM fallback;
+- дождаться завершения process и обоих pipes;
+- повторно probe результата;
+- проверить stream, codec, resolution и duration;
+- только затем переместить temp в final URL;
+- удалить temp при failure/cancel.
+
+Если cancellation уже зафиксирована, ненулевой exit не превращается в обычную ошибку.
+
+Definition of Done:
+короткий fixture проходит probe → transcode → probe без UI.
+```
+
+### Промпт 8 — single-file SwiftUI UI
+
+```text
+Цель: построить нативный macOS-интерфейс для одного файла.
+
+Состояния:
+empty, importing, probing, ready, validationError,
+running, cancelling, success, failure.
+
+Добавь:
+- drop zone;
+- fileImporter и Cmd+O;
+- карточку метаданных;
+- выбор пресета;
+- расширенные настройки;
+- выбор output directory;
+- Start, Cancel, Retry и Reveal in Finder;
+- progress, ETA и speed;
+- ограниченную диагностическую панель;
+- Settings scene;
+- accessibility labels и keyboard navigation;
+- fake services для previews.
+
+View не запускает Process напрямую.
+Не блокируй main thread.
+Не добавляй очередь нескольких файлов.
+```
+
+### Промпт 9 — очередь
+
+```text
+Цель: добавить сессионную FIFO-очередь нескольких видео.
+
+Реализуй JobQueueCoordinator как actor.
+
+Семантика:
+- concurrency limit = 1;
+- add multiple files;
+- reorder/remove только queued jobs;
+- cancel running или queued job;
+- retry failed/cancelled;
+- один job нельзя запустить дважды;
+- failure не останавливает следующий job;
+- закрытие приложения не обещает продолжение encode;
+- pause и persistence не входят в этот этап.
+
+Добавь детерминированные тесты через fake Transcoding:
+FIFO, cancel, retry, reorder, failure continuation,
+concurrent add/cancel и отсутствие duplicate start.
+```
+
+### Промпт 10 — hardening и release
+
+```text
+Цель: подготовить MVP к прямому распространению через Developer ID.
+
+Сначала проведи read-only аудит:
+- architectures app/ffmpeg/ffprobe;
+- ffmpeg -version и -buildconf;
+- LGPL/GPL/nonfree flags;
+- entitlements;
+- sandbox file access;
+- nested code signing;
+- временные файлы и cleanup;
+- Process cancellation и pipe handling.
+
+Затем подготовь:
+- Scripts/archive.sh;
+- Scripts/export.sh;
+- Scripts/notarize.sh с Keychain profile;
+- Scripts/verify-release.sh;
+- docs/RELEASING.md;
+- license/source notices;
+- release checklist и checksum artifact.
+
+Проверки:
+file, lipo -info, otool -L, plutil,
+codesign --verify --strict, codesign entitlements,
+notarytool submit --wait, stapler validate, spctl assess.
+
+Не сохраняй сертификаты, пароли или notary credentials в репозитории.
+Definition of Done: установленный notarized artifact запускает bundled
+ffprobe/ffmpeg и успешно сжимает короткий тестовый ролик.
+```
+
+### Финальный review-промпт
+
+```text
+Проведи read-only review текущего diff и архитектуры приложения.
+
+Приоритеты:
+1. shell/command injection;
+2. pipe deadlocks и cancellation races;
+3. перезапись входа и cleanup temp;
+4. sandbox и security-scoped access;
+5. неограниченные логи или память;
+6. некорректные state transitions;
+7. duplicate queue starts;
+8. смешение SwiftUI, Domain и FFmpeg infrastructure;
+9. architectures, signing, entitlements и licenses.
+
+Для каждого дефекта укажи severity, доказательство,
+затронутые файлы и минимальное исправление.
+Не вноси изменения до завершения review.
+```
+
+Перед первым кодом остаётся зафиксировать пять значений: название приложения, bundle ID, минимальную macOS, необходимость Intel и лицензионную позицию по GPL. Для закрытого универсального MVP рекомендуемый default: macOS 14+, Universal 2, Developer ID beta, sandbox, LGPL-only FFmpeg и H.264 VideoToolbox.

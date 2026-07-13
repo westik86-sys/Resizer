@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if [ "${1:-}" = "--version" ]; then
+    echo "disabled"
+    exit 0
+fi
+
+exit 1

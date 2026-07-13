@@ -1,0 +1,6 @@
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffmpeg:  Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64]
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffmpeg (for architecture x86_64):	Mach-O 64-bit executable x86_64
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffmpeg (for architecture arm64):	Mach-O 64-bit executable arm64
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffprobe: Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64]
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffprobe (for architecture x86_64):	Mach-O 64-bit executable x86_64
+/Users/p.korostelev/Documents/Resizer-app/Vendor/FFmpeg/bin/ffprobe (for architecture arm64):	Mach-O 64-bit executable arm64

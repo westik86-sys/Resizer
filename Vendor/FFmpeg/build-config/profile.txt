@@ -1,0 +1,55 @@
+FFmpeg release: 8.1.2 "Hoare"
+Release tag: n8.1.2
+Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
+Deployment target: macOS 14.0
+Architectures: arm64 and x86_64, built separately and merged with lipo
+License target: LGPL 2.1-or-later
+
+The two slices use the same component profile. ARCH, SDKROOT, compiler paths,
+prefix, and -arch flags are supplied by Scripts/build-ffmpeg.sh.
+External package discovery is disabled with the repository's fail-closed
+Scripts/support/pkg-config-disabled shim.
+
+--target-os=darwin
+--enable-cross-compile
+--cpu=generic
+--disable-autodetect
+--disable-everything
+--disable-network
+--disable-avdevice
+--disable-ffplay
+--disable-doc
+--disable-debug
+--disable-shared
+--enable-static
+--disable-x86asm
+--disable-iconv
+--disable-audiotoolbox
+--enable-videotoolbox
+--enable-ffmpeg
+--enable-ffprobe
+--enable-protocol=file
+--enable-protocol=pipe
+--enable-demuxer=mov
+--enable-muxer=mp4
+--enable-decoder=h264
+--enable-decoder=aac
+--enable-parser=h264
+--enable-parser=aac
+--enable-encoder=h264_videotoolbox
+--enable-encoder=aac
+--enable-filter=scale
+--enable-filter=aresample
+--fatal-warnings
+
+Explicitly absent:
+
+--enable-gpl
+--enable-version3
+--enable-nonfree
+--enable-libx264
+--enable-libx265
+
+No external --enable-lib* option is used. Network support and all network
+protocols are disabled. The only bundled command-line programs are ffmpeg and
+ffprobe.
