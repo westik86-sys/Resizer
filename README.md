@@ -14,11 +14,17 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
-Implementation is currently at the stage-2 toolchain spike. The app embeds
-Universal 2 `ffmpeg` and `ffprobe` executables and exposes a temporary diagnostic
-flow for a short H.264/AAC MOV or MP4 encode. It is not the final product UI and
-does not include the architecture layer, general process runner, presets, or a
-queue.
+Implementation is currently at the stage-3 architecture scaffold. The project
+now contains pure domain values and a validated job state machine, async service
+ports, an actor-isolated coordinator, immutable UI snapshots, a `MainActor`
+feature model, a composition root, and closure-based fakes for previews and
+tests. See [`docs/architecture.md`](docs/architecture.md) for the dependency and
+state-transition contracts.
+
+The temporary stage-2 diagnostic UI remains available and still uses its narrow
+spike runner to prove the bundled toolchain. It is not the final product UI. A
+general process runner, FFprobe mapping, preset-to-argument behavior, the
+headless compression workflow, and the queue remain later PLAN stages.
 
 Sandbox checkpoint A passed locally on 2026-07-13: an ad hoc-signed Universal 2
 Release app used PowerBox-selected input and output locations to run bundled
@@ -64,11 +70,11 @@ To work in Xcode, open `Resizer.xcodeproj` and use the `Resizer` scheme with the
 
 ```text
 Resizer.xcodeproj/  Xcode project
-Resizer/            Minimal SwiftUI application
-ResizerTests/       Swift Testing unit-test target
+Resizer/            SwiftUI app plus Domain/Application/Infrastructure/UI layers
+ResizerTests/       Swift Testing domain, application, and boundary tests
 ResizerUITests/     Xcode-generated UI-test target (not part of bootstrap verification)
 Scripts/            Shell-first build and test entry points
 Vendor/FFmpeg/      Binaries, exact source, checksums, licenses, and build reports
 Configuration/      Nested helper entitlements
-docs/adr/           Architecture decision records
+docs/               Current architecture guide and decision records
 ```
