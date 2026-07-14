@@ -43,6 +43,7 @@ struct JobStateTests {
             ("failedCommit", .failed(TestFixtures.failure(stage: .commit))),
         ]
         let allowedEdges: Set<String> = [
+            "draft->cancelled",
             "draft->probing",
             "probing->ready",
             "probing->failedProbe",

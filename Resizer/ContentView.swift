@@ -35,39 +35,79 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        NavigationSplitView {
+            queueSidebar
+                .navigationSplitViewColumnWidth(
+                    min: 250,
+                    ideal: 290,
+                    max: 360
+                )
+        } detail: {
+            VStack(spacing: 0) {
+                header
+                Divider()
 
-            ScrollView {
-                screenContent
-                    .frame(maxWidth: 960)
-                    .padding(28)
-                    .frame(maxWidth: .infinity)
+                if let message = model.validationMessage,
+                   !model.jobs.isEmpty {
+                    validationBanner(message)
+                }
+
+                ScrollView {
+                    screenContent
+                        .frame(maxWidth: 960)
+                        .padding(28)
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(minWidth: 720, idealWidth: 860, minHeight: 560)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(minWidth: 900, idealWidth: 1080, minHeight: 620)
         .toolbar {
+            ToolbarItem {
+                if !model.readyJobs.isEmpty {
+                    Button {
+                        Task {
+                            await model.start(
+                                filenameSuffix: validatedFilenameSuffix,
+                                conflictPolicy: conflictPolicy
+                            )
+                        }
+                    } label: {
+                        Label(
+                            "Start \(model.readyJobs.count)",
+                            systemImage: "play.fill"
+                        )
+                    }
+                    .disabled(!model.canStart)
+                    .accessibilityIdentifier("start-queue-toolbar")
+                    .help("Add all prepared videos to the FIFO queue")
+                }
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     presentInputImporter()
                 } label: {
-                    Label("Choose Video…", systemImage: "plus")
+                    Label("Add Videos…", systemImage: "plus")
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .disabled(!model.canReplaceInput)
                 .accessibilityIdentifier("choose-video-toolbar")
-                .help("Choose one MOV or MP4 video (Command-O)")
+                .help("Add one or more MOV or MP4 videos (Command-O)")
             }
         }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: importTarget.allowedContentTypes,
-            allowsMultipleSelection: false
+            allowsMultipleSelection: importTarget == .input
         ) { result in
             handleSelection(result)
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard model.canReplaceInput, !urls.isEmpty else { return false }
+            Task { await model.importVideos(urls) }
+            return true
+        } isTargeted: { isDropTargeted = $0 }
     }
 
     private var header: some View {
@@ -75,7 +115,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Resizer")
                     .font(.title2.weight(.semibold))
-                Text("Create a smaller, compatible MP4 copy.")
+                Text("Create smaller, compatible MP4 copies in order.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -94,6 +134,173 @@ struct ContentView: View {
         .padding(.vertical, 14)
     }
 
+    private var queueSidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Queue")
+                        .font(.headline)
+                    Text("\(model.jobs.count) videos this session")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if model.isImporting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Adding videos")
+                }
+            }
+            .padding(14)
+
+            Divider()
+
+            if model.jobs.isEmpty {
+                ContentUnavailableView(
+                    "No videos",
+                    systemImage: "list.bullet.rectangle",
+                    description: Text("Add MOV or MP4 files to begin.")
+                )
+                .frame(maxHeight: .infinity)
+                .accessibilityIdentifier("empty-queue")
+            } else {
+                List(selection: selectionBinding) {
+                    ForEach(model.jobs) { job in
+                        queueRow(job)
+                            .tag(job.id)
+                            .accessibilityIdentifier(
+                                "queue-row-\(job.id.uuidString)"
+                            )
+                    }
+                }
+                .accessibilityIdentifier("job-queue")
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button {
+                    guard let jobID = model.selectedJobID,
+                          let index = model.snapshot.queuedJobIDs.firstIndex(
+                            of: jobID
+                          ),
+                          index > 0 else {
+                        return
+                    }
+                    let successor = model.snapshot.queuedJobIDs[index - 1]
+                    Task {
+                        await model.moveQueued(
+                            jobID: jobID,
+                            before: successor
+                        )
+                    }
+                } label: {
+                    Image(systemName: "arrow.up")
+                }
+                .disabled(!model.canMoveSelectedUp)
+                .accessibilityLabel("Move selected job up")
+                .accessibilityIdentifier("move-queue-job-up")
+
+                Button {
+                    guard let jobID = model.selectedJobID,
+                          let index = model.snapshot.queuedJobIDs.firstIndex(
+                            of: jobID
+                          ),
+                          index + 1 < model.snapshot.queuedJobIDs.count else {
+                        return
+                    }
+                    let successorIndex = index + 2
+                    let successor = successorIndex
+                        < model.snapshot.queuedJobIDs.count
+                        ? model.snapshot.queuedJobIDs[successorIndex]
+                        : nil
+                    Task {
+                        await model.moveQueued(
+                            jobID: jobID,
+                            before: successor
+                        )
+                    }
+                } label: {
+                    Image(systemName: "arrow.down")
+                }
+                .disabled(!model.canMoveSelectedDown)
+                .accessibilityLabel("Move selected job down")
+                .accessibilityIdentifier("move-queue-job-down")
+
+                Button(role: .destructive) {
+                    guard let jobID = model.selectedJobID else { return }
+                    Task { await model.removeQueued(jobID: jobID) }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(!model.canRemoveSelected)
+                .accessibilityLabel("Remove selected waiting job")
+                .accessibilityIdentifier("remove-queue-job")
+
+                Spacer()
+
+                if let selectedJobID = model.selectedJobID,
+                   model.canCancel(jobID: selectedJobID) {
+                    Button("Cancel") {
+                        Task { await model.cancel(jobID: selectedJobID) }
+                    }
+                    .accessibilityIdentifier("cancel-selected-job")
+                } else if let selectedJobID = model.selectedJobID,
+                          model.canRetry(jobID: selectedJobID) {
+                    Button("Retry") {
+                        Task {
+                            await model.retry(
+                                jobID: selectedJobID,
+                                filenameSuffix: validatedFilenameSuffix,
+                                conflictPolicy: conflictPolicy
+                            )
+                        }
+                    }
+                    .accessibilityIdentifier("retry-selected-job")
+                }
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            Text("The queue is kept only while Resizer is open.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func queueRow(_ job: CompressionJob) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: queueSymbol(for: job))
+                .foregroundStyle(queueTint(for: job))
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(job.inputURL.lastPathComponent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(queueStatus(for: job))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if case .running(let progress?) = job.state,
+                   let fraction = progress.fractionCompleted {
+                    ProgressView(value: fraction)
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(job.inputURL.lastPathComponent), \(queueStatus(for: job))"
+        )
+    }
+
     @ViewBuilder
     private var screenContent: some View {
         switch model.screenState {
@@ -101,19 +308,22 @@ struct ContentView: View {
             emptyState
         case .importing:
             activityCard(
-                title: "Importing video…",
-                detail: "Acquiring secure access to the selected file."
+                title: "Adding videos…",
+                detail: "Acquiring secure access and preparing queue items."
             )
         case .probing(let job):
             VStack(spacing: 20) {
                 sourceCard(job)
                 activityCard(
                     title: "Reading video details…",
-                    detail: "Checking duration, streams, codecs, and dimensions."
+                    detail: "Checking duration, streams, codecs, and dimensions.",
+                    cancellableJobID: job.id
                 )
             }
         case .ready(let job):
             readyView(job)
+        case .queued(let job, let position):
+            queuedView(job, position: position)
         case .running(let job, let stage):
             runningView(job, stage: stage)
         case .cancelling(let job, let progress):
@@ -134,13 +344,13 @@ struct ContentView: View {
                 .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
 
             VStack(spacing: 7) {
-                Text("Drop a video here")
+                Text("Drop videos here")
                     .font(.title2.weight(.semibold))
                 Text("MOV and MP4 are supported")
                     .foregroundStyle(.secondary)
             }
 
-            Button("Choose Video…") {
+            Button("Add Videos…") {
                 presentInputImporter()
             }
             .buttonStyle(.borderedProminent)
@@ -168,18 +378,10 @@ struct ContentView: View {
                 )
         }
         .contentShape(RoundedRectangle(cornerRadius: 18))
-        .dropDestination(for: URL.self) { urls, _ in
-            guard model.canReplaceInput, urls.count == 1,
-                  let inputURL = urls.first else {
-                return false
-            }
-            Task { await model.importVideo(inputURL) }
-            return true
-        } isTargeted: { isDropTargeted = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("drop-zone")
-        .accessibilityLabel("Video drop zone")
-        .accessibilityHint("Drop one MOV or MP4 video, or use Choose Video")
+        .accessibilityLabel("Video queue drop zone")
+        .accessibilityHint("Drop MOV or MP4 videos, or use Add Videos")
     }
 
     private func readyView(_ job: CompressionJob) -> some View {
@@ -189,11 +391,19 @@ struct ContentView: View {
             outputCard
 
             HStack {
-                Text("A unique temporary file is validated before the final copy appears.")
+                Text(
+                    model.readyJobs.count == 1
+                        ? "A unique temporary file is validated before the final copy appears."
+                        : "All \(model.readyJobs.count) prepared videos will capture these settings."
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Start Compression") {
+                Button(
+                    model.readyJobs.count == 1
+                        ? "Start Compression"
+                        : "Start \(model.readyJobs.count) Videos"
+                ) {
                     Task {
                         await model.start(
                             filenameSuffix: validatedFilenameSuffix,
@@ -206,6 +416,35 @@ struct ContentView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.canStart)
                 .accessibilityIdentifier("start-compression")
+            }
+        }
+    }
+
+    private func queuedView(
+        _ job: CompressionJob,
+        position: Int
+    ) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Waiting in queue", systemImage: "clock")
+                        .font(.title3.weight(.semibold))
+                    Text("Position \(position). Jobs are processed one at a time in FIFO order.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text("This job already captured its compression and output settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") {
+                            Task { await model.cancel(jobID: job.id) }
+                        }
+                        .disabled(!model.canCancel(jobID: job.id))
+                        .accessibilityIdentifier("cancel-queued-job")
+                    }
+                }
+                .padding(.vertical, 6)
             }
         }
     }
@@ -424,10 +663,10 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("Cancel") {
-                            Task { await model.cancel() }
+                            Task { await model.cancel(jobID: job.id) }
                         }
                         .keyboardShortcut(.cancelAction)
-                        .disabled(!model.canCancel)
+                        .disabled(!model.canCancel(jobID: job.id))
                         .accessibilityIdentifier("cancel-compression")
                     }
                 }
@@ -512,7 +751,7 @@ struct ContentView: View {
                     }
 
                     HStack {
-                        Button("Choose Another Video…") {
+                        Button("Add More Videos…") {
                             presentInputImporter()
                         }
                         .accessibilityIdentifier("choose-another-video")
@@ -520,7 +759,7 @@ struct ContentView: View {
                         Spacer()
 
                         Button("Reveal in Finder") {
-                            model.revealResultInFinder()
+                            model.revealResultInFinder(jobID: job.id)
                         }
                         .buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("reveal-output")
@@ -558,12 +797,12 @@ struct ContentView: View {
                         }
                     }
 
-                    if model.diagnosticText != nil {
-                        diagnosticDisclosure
+                    if model.diagnosticText(for: job.id) != nil {
+                        diagnosticDisclosure(jobID: job.id)
                     }
 
                     HStack {
-                        Button("Choose Another Video…") {
+                        Button("Add More Videos…") {
                             presentInputImporter()
                         }
                         .disabled(!model.canReplaceInput)
@@ -573,13 +812,14 @@ struct ContentView: View {
                         Button("Retry") {
                             Task {
                                 await model.retry(
+                                    jobID: job.id,
                                     filenameSuffix: validatedFilenameSuffix,
                                     conflictPolicy: conflictPolicy
                                 )
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!model.canRetry)
+                        .disabled(!model.canRetry(jobID: job.id))
                         .accessibilityIdentifier("retry-compression")
                     }
                 }
@@ -588,14 +828,16 @@ struct ContentView: View {
         }
     }
 
-    private var diagnosticDisclosure: some View {
+    private func diagnosticDisclosure(
+        jobID: CompressionJob.ID
+    ) -> some View {
         DisclosureGroup("Diagnostics", isExpanded: $isDiagnosticsExpanded) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Resizer · FFmpeg \(CompressionPreferences.bundledFFmpegVersion) · LGPL-only")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if let text = model.diagnosticText {
+                if let text = model.diagnosticText(for: jobID) {
                     ScrollView {
                         Text(text)
                             .font(.system(.caption, design: .monospaced))
@@ -612,7 +854,7 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("Copy Diagnostics") {
-                            model.copyDiagnostics()
+                            model.copyDiagnostics(jobID: jobID)
                         }
                         .accessibilityIdentifier("copy-diagnostics")
                     }
@@ -640,7 +882,7 @@ struct ContentView: View {
                 Button("Back") {
                     model.dismissValidationError()
                 }
-                Button("Choose Video…") {
+                Button("Add Videos…") {
                     presentInputImporter()
                 }
                 .buttonStyle(.borderedProminent)
@@ -697,7 +939,11 @@ struct ContentView: View {
         .accessibilityIdentifier("source-card")
     }
 
-    private func activityCard(title: String, detail: String) -> some View {
+    private func activityCard(
+        title: String,
+        detail: String,
+        cancellableJobID: CompressionJob.ID? = nil
+    ) -> some View {
         GroupBox {
             HStack(spacing: 14) {
                 ProgressView()
@@ -709,9 +955,12 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if model.canCancel {
+                if let cancellableJobID,
+                   model.canCancel(jobID: cancellableJobID) {
                     Button("Cancel") {
-                        Task { await model.cancel() }
+                        Task {
+                            await model.cancel(jobID: cancellableJobID)
+                        }
                     }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("cancel-compression")
@@ -757,6 +1006,105 @@ struct ContentView: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var selectionBinding: Binding<CompressionJob.ID?> {
+        Binding(
+            get: { model.selectedJobID },
+            set: { model.selectJob($0) }
+        )
+    }
+
+    private func validationBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.callout)
+            Spacer()
+            Button("Dismiss") {
+                model.dismissValidationError()
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.10))
+        .accessibilityIdentifier("queue-validation-banner")
+    }
+
+    private func queueStatus(for job: CompressionJob) -> String {
+        switch job.state {
+        case .draft:
+            "Waiting to inspect"
+        case .probing:
+            "Reading details"
+        case .ready:
+            "Ready"
+        case .queued where model.snapshot.activeJobID == job.id:
+            "Preparing"
+        case .queued:
+            if let position = model.queuePosition(for: job.id) {
+                "Waiting · #\(position)"
+            } else {
+                "Waiting"
+            }
+        case .running(let progress):
+            if let fraction = progress?.fractionCompleted {
+                "Compressing · \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+            } else {
+                "Compressing"
+            }
+        case .finishing(.validating):
+            "Validating"
+        case .finishing(.committing):
+            "Saving"
+        case .cancelling:
+            "Cancelling"
+        case .cancelled:
+            "Cancelled"
+        case .completed:
+            "Completed"
+        case .failed:
+            "Failed"
+        }
+    }
+
+    private func queueSymbol(for job: CompressionJob) -> String {
+        switch job.state {
+        case .draft, .probing:
+            "magnifyingglass"
+        case .ready:
+            "checkmark.circle"
+        case .queued:
+            "clock"
+        case .running:
+            "film"
+        case .finishing:
+            "checkmark.shield"
+        case .cancelling, .cancelled:
+            "xmark.circle"
+        case .completed:
+            "checkmark.circle.fill"
+        case .failed:
+            "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func queueTint(for job: CompressionJob) -> Color {
+        switch job.state {
+        case .running, .finishing:
+            .accentColor
+        case .completed:
+            .green
+        case .failed:
+            .red
+        case .cancelling, .cancelled:
+            .secondary
+        case .draft, .probing, .ready, .queued:
+            .secondary
         }
     }
 
@@ -833,11 +1181,12 @@ struct ContentView: View {
     private func handleSelection(_ result: Result<[URL], any Error>) {
         switch result {
         case .success(let urls):
-            guard let url = urls.first else { return }
             switch importTarget {
             case .input:
-                Task { await model.importVideo(url) }
+                guard !urls.isEmpty else { return }
+                Task { await model.importVideos(urls) }
             case .outputDirectory:
+                guard let url = urls.first else { return }
                 model.selectOutputDirectory(url)
             }
         case .failure(let error):
@@ -1076,15 +1425,17 @@ private extension ContentView {
     }
 }
 
-#Preview("Ready") {
+#Preview("Queue Ready") {
     if let composition = try? AppComposition.preview() {
         ContentView(model: composition.compressionFeatureModel)
             .task {
                 let model = composition.compressionFeatureModel
                 guard model.currentJob == nil else { return }
-                await model.importVideo(
-                    URL(fileURLWithPath: "/tmp/Screen Recording.mov")
-                )
+                await model.importVideos([
+                    URL(fileURLWithPath: "/tmp/Screen Recording.mov"),
+                    URL(fileURLWithPath: "/tmp/Interview.mp4"),
+                    URL(fileURLWithPath: "/tmp/Product Demo.mov"),
+                ])
                 model.selectOutputDirectory(
                     URL(fileURLWithPath: "/tmp", isDirectory: true)
                 )

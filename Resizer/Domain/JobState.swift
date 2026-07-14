@@ -60,6 +60,8 @@ nonisolated enum JobState: Sendable, Equatable {
 
     func canTransition(to next: JobState) -> Bool {
         switch (self, next) {
+        case (.draft, .cancelled):
+            true
         case (.draft, .probing):
             true
         case (.probing, .ready):

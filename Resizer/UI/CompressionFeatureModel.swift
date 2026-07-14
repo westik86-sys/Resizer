@@ -30,36 +30,28 @@ struct PasteboardDiagnosticCopier: DiagnosticCopying {
 @MainActor
 final class CompressionFeatureModel: ObservableObject {
     @Published private(set) var snapshot: CompressionSnapshot = .empty
-    @Published private(set) var currentJobID: CompressionJob.ID?
+    @Published private(set) var selectedJobID: CompressionJob.ID?
     @Published private(set) var outputDirectoryURL: URL?
     @Published private(set) var draftSettings = CompressionDraftSettings()
     @Published private(set) var screenState: CompressionViewState = .empty
+    @Published private(set) var validationMessage: String?
+    @Published private(set) var isImporting = false
+    @Published private(set) var isStartingQueue = false
+    @Published private(set) var pendingActionJobIDs: Set<CompressionJob.ID> = []
 
-    private enum Operation {
-        case importing
-        case workflow
-    }
-
-    private enum TransientState {
-        case importing
-        case validationError(String)
-    }
-
-    private let coordinator: any CompressionCoordinating
+    private let coordinator: any JobQueueCoordinating
     private let outputRevealer: any OutputRevealing
     private let diagnosticCopier: any DiagnosticCopying
     private var observationTask: Task<Void, Never>?
-    private var operation: Operation? {
-        didSet { objectWillChange.send() }
-    }
-    private var transientState: TransientState?
+    private var pendingImportedSelectionID: CompressionJob.ID?
+    private var lastConsumedSnapshotRevision: UInt64?
 
     private var etaJobID: CompressionJob.ID?
     private var etaSpeedSamples: [Double] = []
     private var etaLastProcessedMicroseconds: Int64?
 
     init(
-        coordinator: any CompressionCoordinating,
+        coordinator: any JobQueueCoordinating,
         outputRevealer: any OutputRevealing = WorkspaceOutputRevealer(),
         diagnosticCopier: any DiagnosticCopying = PasteboardDiagnosticCopier()
     ) {
@@ -84,73 +76,101 @@ final class CompressionFeatureModel: ObservableObject {
         snapshot.jobs
     }
 
+    /// Compatibility alias for the completed single-file UI tests. Selection,
+    /// rather than workflow ownership, is the Stage 9 meaning of this value.
+    var currentJobID: CompressionJob.ID? {
+        selectedJobID
+    }
+
     var currentJob: CompressionJob? {
-        guard let currentJobID else { return nil }
-        return snapshot.jobs.first { $0.id == currentJobID }
+        job(id: selectedJobID)
+    }
+
+    var activeJob: CompressionJob? {
+        job(id: snapshot.activeJobID)
+    }
+
+    var readyJobs: [CompressionJob] {
+        jobs.filter { job in
+            if case .ready = job.state { return true }
+            return false
+        }
+    }
+
+    private var startableReadyJobs: [CompressionJob] {
+        readyJobs.filter { !pendingActionJobIDs.contains($0.id) }
+    }
+
+    var queuedJobs: [CompressionJob] {
+        snapshot.queuedJobIDs.compactMap(job(id:))
+    }
+
+    var finishedJobs: [CompressionJob] {
+        jobs.filter { job in
+            switch job.state {
+            case .cancelled, .completed, .failed:
+                true
+            case .draft, .probing, .ready, .queued, .running,
+                 .finishing, .cancelling:
+                false
+            }
+        }
     }
 
     var canStart: Bool {
-        guard operation == nil,
-              outputDirectoryURL != nil,
-              let currentJob,
-              case .ready = currentJob.state else {
-            return false
-        }
-        return true
+        !isImporting
+            && !isStartingQueue
+            && outputDirectoryURL != nil
+            && !startableReadyJobs.isEmpty
     }
 
     var canCancel: Bool {
-        guard let currentJob else { return false }
-        switch currentJob.state {
-        case .probing, .queued, .running, .cancelling:
-            return true
-        case .draft, .ready, .finishing, .cancelled, .completed, .failed:
-            return false
-        }
+        currentJob.map { canCancel(jobID: $0.id) } == true
     }
 
     var canRetry: Bool {
-        guard operation == nil, let currentJob else { return false }
-        switch currentJob.state {
-        case .failed(let failure):
-            return failure.retryTarget == .probing
-                || outputDirectoryURL != nil
-        case .cancelled:
-            return currentJob.mediaInfo == nil || outputDirectoryURL != nil
-        case .draft, .probing, .ready, .queued, .running, .finishing,
-             .cancelling, .completed:
+        currentJob.map { canRetry(jobID: $0.id) } == true
+    }
+
+    var canRemoveSelected: Bool {
+        currentJob.map { canRemove(jobID: $0.id) } == true
+    }
+
+    var canMoveSelectedUp: Bool {
+        guard let selectedJobID,
+              let index = snapshot.queuedJobIDs.firstIndex(
+                of: selectedJobID
+              ) else {
             return false
         }
+        return index > 0
+    }
+
+    var canMoveSelectedDown: Bool {
+        guard let selectedJobID,
+              let index = snapshot.queuedJobIDs.firstIndex(
+                of: selectedJobID
+              ) else {
+            return false
+        }
+        return index + 1 < snapshot.queuedJobIDs.count
     }
 
     var canReplaceInput: Bool {
-        guard operation == nil, let currentJob else { return true }
-        switch currentJob.state {
-        case .ready, .cancelled, .completed, .failed:
-            return true
-        case .draft, .probing, .queued, .running, .finishing,
-             .cancelling:
-            return false
-        }
+        !isImporting
     }
 
+    /// Session defaults may be changed while an encode runs. Every queued job
+    /// already owns an immutable captured configuration, so edits affect only
+    /// future ready jobs and retries.
     var canEditSettings: Bool {
-        guard let currentJob else { return true }
-        switch currentJob.state {
-        case .probing, .queued, .running, .finishing, .cancelling:
-            return false
-        case .draft, .ready, .cancelled, .completed, .failed:
-            return true
-        }
+        true
     }
 
-    /// ETA is intentionally withheld until three recent speed samples are
-    /// positive, the encode has run for at least three seconds, and sample
-    /// spread stays within 25 percent.
     var estimatedRemainingSeconds: TimeInterval? {
         guard etaSpeedSamples.count == 3,
-              let currentJob,
-              case .running(let progress?) = currentJob.state,
+              let activeJob,
+              case .running(let progress?) = activeJob.state,
               progress.processedMicroseconds >= 3_000_000,
               let total = progress.totalMicroseconds,
               total > progress.processedMicroseconds,
@@ -169,19 +189,65 @@ final class CompressionFeatureModel: ObservableObject {
         return remaining.isFinite && remaining >= 0 ? remaining : nil
     }
 
-    /// The domain has already bounded this string; no paths or underlying
-    /// error descriptions are synthesized by the presentation layer.
     var diagnosticText: String? {
-        guard let currentJob,
-              case .failed(let failure) = currentJob.state else {
-            return nil
-        }
-        return failure.diagnosticTail?.text
+        currentJob.flatMap { diagnosticText(for: $0.id) }
     }
 
-    /// Low-level registration retained for composition and coordinator tests.
-    /// Product import goes through `importVideo(_:)`, which also validates the
-    /// extension and performs the separate probe step.
+    func job(id: CompressionJob.ID?) -> CompressionJob? {
+        guard let id else { return nil }
+        return jobs.first { $0.id == id }
+    }
+
+    func selectJob(_ jobID: CompressionJob.ID?) {
+        guard let jobID else {
+            guard jobs.isEmpty else { return }
+            selectedJobID = nil
+            recomputeScreenState()
+            return
+        }
+        guard job(id: jobID) != nil else { return }
+        pendingImportedSelectionID = nil
+        selectedJobID = jobID
+        recomputeScreenState()
+    }
+
+    func canCancel(jobID: CompressionJob.ID) -> Bool {
+        guard pendingActionJobIDs.contains(jobID) == false,
+              let job = job(id: jobID) else {
+            return false
+        }
+        switch job.state {
+        case .draft, .probing, .queued, .running, .cancelling:
+            return true
+        case .ready, .finishing, .cancelled, .completed, .failed:
+            return false
+        }
+    }
+
+    func canRetry(jobID: CompressionJob.ID) -> Bool {
+        guard pendingActionJobIDs.contains(jobID) == false,
+              snapshot.activeJobID != jobID,
+              let job = job(id: jobID),
+              let retriesProbe = Self.retriesProbe(job) else {
+            return false
+        }
+        return retriesProbe || outputDirectoryURL != nil
+    }
+
+    func canRemove(jobID: CompressionJob.ID) -> Bool {
+        guard snapshot.activeJobID != jobID,
+              pendingActionJobIDs.contains(jobID) == false,
+              let job = job(id: jobID),
+              case .queued = job.state else {
+            return false
+        }
+        return true
+    }
+
+    func queuePosition(for jobID: CompressionJob.ID) -> Int? {
+        snapshot.queuedJobIDs.firstIndex(of: jobID).map { $0 + 1 }
+    }
+
     @discardableResult
     func createJob(inputURL: URL) async throws -> CompressionJob {
         let job = try await coordinator.createJob(
@@ -189,72 +255,78 @@ final class CompressionFeatureModel: ObservableObject {
             id: UUID(),
             createdAt: Date()
         )
-        currentJobID = job.id
+        selectedJobID = job.id
         await synchronizeSnapshot()
         return job
     }
 
     func importVideo(_ inputURL: URL) async {
-        guard operation == nil else { return }
-        guard canReplaceInput else {
-            presentValidationError(
-                "Wait for the current operation to finish before choosing another video."
-            )
-            return
+        await importVideos([inputURL])
+    }
+
+    func importVideos(_ inputURLs: [URL]) async {
+        guard !isImporting else { return }
+
+        var seenURLs: Set<URL> = []
+        var accepted: [URL] = []
+        var rejectedCount = 0
+        for inputURL in inputURLs {
+            let normalized = inputURL.standardizedFileURL
+            guard normalized.isFileURL,
+                  Self.supportedInputExtensions.contains(
+                    normalized.pathExtension.lowercased()
+                  ),
+                  seenURLs.insert(normalized).inserted else {
+                rejectedCount += 1
+                continue
+            }
+            // Keep the exact URL returned by fileImporter/drop. Normalization
+            // is only a deduplication key: replacing the original value can
+            // discard the security-scoped grant attached by AppKit.
+            accepted.append(inputURL)
         }
-        guard inputURL.isFileURL,
-              Self.supportedInputExtensions.contains(
-                  inputURL.pathExtension.lowercased()
-              ) else {
-            presentValidationError("Choose one MOV or MP4 video.")
+
+        guard !accepted.isEmpty else {
+            presentValidationError("Choose one or more MOV or MP4 videos.")
             return
         }
 
-        operation = .importing
-        transientState = .importing
+        let imports = accepted.map { JobQueueImport(inputURL: $0) }
+        pendingImportedSelectionID = imports.first?.id
+        selectedJobID = pendingImportedSelectionID
+        isImporting = true
+        validationMessage = nil
         recomputeScreenState()
-        defer { operation = nil }
-        var createdJobID: CompressionJob.ID?
-
-        do {
-            if let currentJob, case .ready = currentJob.state {
-                await coordinator.cancel(jobID: currentJob.id)
-                await synchronizeSnapshot()
-                guard self.currentJob?.state == .cancelled else {
-                    presentValidationError(
-                        "The current video could not be replaced safely."
-                    )
-                    return
+        defer {
+            isImporting = false
+            if let pendingImportedSelectionID {
+                self.pendingImportedSelectionID = nil
+                if job(id: pendingImportedSelectionID) == nil {
+                    selectedJobID = snapshot.activeJobID
+                        ?? snapshot.jobs.first?.id
                 }
             }
+            recomputeScreenState()
+        }
 
-            let job = try await coordinator.createJob(
-                inputURL: inputURL,
-                id: UUID(),
-                createdAt: Date()
-            )
-            createdJobID = job.id
-            currentJobID = job.id
-            outputDirectoryURL = nil
-            draftSettings = CompressionDraftSettings()
-            transientState = nil
+        do {
+            _ = try await coordinator.add(imports)
             await synchronizeSnapshot()
-            _ = try await coordinator.prepare(jobID: job.id)
-            await synchronizeSnapshot()
-        } catch {
-            transientState = nil
-            await synchronizeSnapshot()
-            if createdJobID == nil
-                || currentJob.map(Self.isWorkflowOutcome) != true {
+            if rejectedCount > 0 {
                 presentValidationError(
-                    "The selected video could not be prepared."
+                    "Some items were skipped. Resizer accepts local MOV and MP4 videos."
                 )
             }
+        } catch {
+            await synchronizeSnapshot()
+            presentValidationError(
+                "The selected videos could not be added to the queue."
+            )
         }
     }
 
     func reportInputSelectionError() {
-        presentValidationError("The video could not be selected.")
+        presentValidationError("The videos could not be selected.")
     }
 
     func reportOutputDirectorySelectionError() {
@@ -262,7 +334,6 @@ final class CompressionFeatureModel: ObservableObject {
     }
 
     func selectOutputDirectory(_ directoryURL: URL) {
-        guard canEditSettings else { return }
         guard directoryURL.isFileURL else {
             presentValidationError("Choose a local output folder.")
             return
@@ -272,18 +343,15 @@ final class CompressionFeatureModel: ObservableObject {
     }
 
     func clearOutputDirectory() {
-        guard canEditSettings else { return }
         outputDirectoryURL = nil
     }
 
     func applyPreset(_ preset: CompressionPreset) {
-        guard canEditSettings else { return }
         draftSettings.apply(preset: preset)
         dismissValidationError()
     }
 
     func setQuality(_ value: Double) {
-        guard canEditSettings else { return }
         do {
             try draftSettings.setQuality(value)
             dismissValidationError()
@@ -295,7 +363,6 @@ final class CompressionFeatureModel: ObservableObject {
     func setResolution(
         _ option: CompressionDraftSettings.ResolutionOption
     ) {
-        guard canEditSettings else { return }
         draftSettings.setResolution(option)
         dismissValidationError()
     }
@@ -303,31 +370,30 @@ final class CompressionFeatureModel: ObservableObject {
     func setFrameRate(
         _ option: CompressionDraftSettings.FrameRateOption
     ) {
-        guard canEditSettings else { return }
         draftSettings.setFrameRate(option)
         dismissValidationError()
     }
 
     func setAudio(_ option: CompressionDraftSettings.AudioOption) {
-        guard canEditSettings else { return }
         draftSettings.setAudio(option)
         dismissValidationError()
     }
 
     func setMetadata(_ option: CompressionDraftSettings.MetadataOption) {
-        guard canEditSettings else { return }
         draftSettings.setMetadata(option)
         dismissValidationError()
     }
 
+    /// Captures the current session defaults for every ready job, then wakes
+    /// the one FIFO driver. The method returns while encoding continues.
     func start(
         filenameSuffix: String = "-compressed",
         conflictPolicy: OutputConflictPolicy = .appendNumericSuffix
     ) async {
-        guard operation == nil,
-              let currentJob,
-              case .ready = currentJob.state else {
-            presentValidationError("Prepare one video before starting.")
+        guard !isImporting, !isStartingQueue else { return }
+        let jobIDs = startableReadyJobs.map(\.id)
+        guard !jobIDs.isEmpty else {
+            presentValidationError("Prepare at least one video before starting.")
             return
         }
         guard let configuration = makeConfiguration(
@@ -337,26 +403,49 @@ final class CompressionFeatureModel: ObservableObject {
             return
         }
 
-        operation = .workflow
-        transientState = nil
-        defer { operation = nil }
-        do {
-            _ = try await coordinator.startPrepared(
-                jobID: currentJob.id,
-                configuration: configuration
-            )
-            await synchronizeSnapshot()
-        } catch {
-            await synchronizeSnapshot()
-            if self.currentJob.map(Self.isWorkflowOutcome) != true {
-                presentValidationError("Compression could not be started.")
+        isStartingQueue = true
+        pendingActionJobIDs.formUnion(jobIDs)
+        validationMessage = nil
+        defer {
+            pendingActionJobIDs.subtract(jobIDs)
+            isStartingQueue = false
+        }
+
+        var enqueuedCount = 0
+        var failedCount = 0
+        for jobID in jobIDs {
+            do {
+                _ = try await coordinator.enqueue(
+                    jobID: jobID,
+                    configuration: configuration
+                )
+                enqueuedCount += 1
+            } catch {
+                failedCount += 1
             }
+        }
+
+        if enqueuedCount > 0 {
+            await coordinator.startQueue()
+        } else {
+            presentValidationError("No prepared videos could be queued.")
+        }
+        await synchronizeSnapshot()
+        if failedCount > 0, enqueuedCount > 0 {
+            presentValidationError(
+                "Some prepared videos could not be added to the queue."
+            )
         }
     }
 
     func cancel() async {
-        guard let currentJob, canCancel else { return }
-        await coordinator.cancel(jobID: currentJob.id)
+        guard let selectedJobID else { return }
+        await cancel(jobID: selectedJobID)
+    }
+
+    func cancel(jobID: CompressionJob.ID) async {
+        guard canCancel(jobID: jobID) else { return }
+        await coordinator.cancel(jobID: jobID)
         await synchronizeSnapshot()
     }
 
@@ -364,62 +453,154 @@ final class CompressionFeatureModel: ObservableObject {
         filenameSuffix: String = "-compressed",
         conflictPolicy: OutputConflictPolicy = .appendNumericSuffix
     ) async {
-        guard operation == nil, let currentJob else { return }
+        guard let selectedJobID else { return }
+        await retry(
+            jobID: selectedJobID,
+            filenameSuffix: filenameSuffix,
+            conflictPolicy: conflictPolicy
+        )
+    }
 
-        let retriesProbe: Bool
-        switch currentJob.state {
-        case .failed(let failure):
-            retriesProbe = failure.retryTarget == .probing
-        case .cancelled:
-            retriesProbe = currentJob.mediaInfo == nil
-        case .draft, .probing, .ready, .queued, .running, .finishing,
-             .cancelling, .completed:
+    func retry(
+        jobID: CompressionJob.ID,
+        filenameSuffix: String = "-compressed",
+        conflictPolicy: OutputConflictPolicy = .appendNumericSuffix
+    ) async {
+        guard canRetry(jobID: jobID),
+              let job = job(id: jobID),
+              let retriesProbe = Self.retriesProbe(job) else {
             return
         }
 
-        operation = .workflow
-        transientState = nil
-        defer { operation = nil }
+        let configuration: JobConfiguration?
+        if retriesProbe {
+            configuration = nil
+        } else {
+            guard let value = makeConfiguration(
+                filenameSuffix: filenameSuffix,
+                conflictPolicy: conflictPolicy
+            ) else {
+                return
+            }
+            configuration = value
+        }
+
+        pendingActionJobIDs.insert(jobID)
+        validationMessage = nil
+        defer { pendingActionJobIDs.remove(jobID) }
         do {
             if retriesProbe {
-                _ = try await coordinator.prepare(jobID: currentJob.id)
-            } else {
-                guard let configuration = makeConfiguration(
-                    filenameSuffix: filenameSuffix,
-                    conflictPolicy: conflictPolicy
-                ) else {
-                    return
-                }
-                _ = try await coordinator.retry(
-                    jobID: currentJob.id,
+                // Probe failures return to `ready`; the user can then inspect
+                // metadata and choose an output folder before queueing.
+                _ = try await coordinator.prepare(jobID: jobID)
+            } else if let configuration {
+                _ = try await coordinator.retryQueued(
+                    jobID: jobID,
                     configuration: configuration
                 )
             }
             await synchronizeSnapshot()
         } catch {
             await synchronizeSnapshot()
-            if self.currentJob.map(Self.isWorkflowOutcome) != true {
-                presentValidationError("The operation could not be retried.")
-            }
+            presentValidationError("The job could not be retried.")
+        }
+    }
+
+    func removeSelectedQueuedJob() async {
+        guard let selectedJobID else { return }
+        await removeQueued(jobID: selectedJobID)
+    }
+
+    func removeQueued(jobID: CompressionJob.ID) async {
+        guard canRemove(jobID: jobID) else { return }
+        do {
+            try await coordinator.removeQueued(jobID: jobID)
+            await synchronizeSnapshot()
+        } catch {
+            presentValidationError("Only waiting jobs can be removed.")
+        }
+    }
+
+    func moveSelectedUp() async {
+        guard let selectedJobID,
+              let index = snapshot.queuedJobIDs.firstIndex(
+                of: selectedJobID
+              ),
+              index > 0 else {
+            return
+        }
+        await moveQueued(
+            jobID: selectedJobID,
+            before: snapshot.queuedJobIDs[index - 1]
+        )
+    }
+
+    func moveSelectedDown() async {
+        guard let selectedJobID,
+              let index = snapshot.queuedJobIDs.firstIndex(
+                of: selectedJobID
+              ),
+              index + 1 < snapshot.queuedJobIDs.count else {
+            return
+        }
+        let successorIndex = index + 2
+        let successor = successorIndex < snapshot.queuedJobIDs.count
+            ? snapshot.queuedJobIDs[successorIndex]
+            : nil
+        await moveQueued(jobID: selectedJobID, before: successor)
+    }
+
+    func moveQueued(
+        jobID: CompressionJob.ID,
+        before successorID: CompressionJob.ID?
+    ) async {
+        do {
+            try await coordinator.moveQueued(
+                jobID: jobID,
+                before: successorID
+            )
+            await synchronizeSnapshot()
+        } catch {
+            presentValidationError("Only waiting jobs can be reordered.")
         }
     }
 
     func revealResultInFinder() {
-        guard let currentJob,
-              case .completed(let result) = currentJob.state else {
+        guard let selectedJobID else { return }
+        revealResultInFinder(jobID: selectedJobID)
+    }
+
+    func revealResultInFinder(jobID: CompressionJob.ID) {
+        guard let job = job(id: jobID),
+              case .completed(let result) = job.state else {
             return
         }
         outputRevealer.reveal(result.outputURL)
     }
 
+    func diagnosticText(for jobID: CompressionJob.ID) -> String? {
+        guard let job = job(id: jobID),
+              case .failed(let failure) = job.state else {
+            return nil
+        }
+        return failure.diagnosticTail?.text
+    }
+
     func copyDiagnostics() {
-        guard let diagnosticText, !diagnosticText.isEmpty else { return }
-        diagnosticCopier.copyDiagnostic(diagnosticText)
+        guard let selectedJobID else { return }
+        copyDiagnostics(jobID: selectedJobID)
+    }
+
+    func copyDiagnostics(jobID: CompressionJob.ID) {
+        guard let diagnostic = diagnosticText(for: jobID),
+              !diagnostic.isEmpty else {
+            return
+        }
+        diagnosticCopier.copyDiagnostic(diagnostic)
     }
 
     func dismissValidationError() {
-        guard case .validationError = transientState else { return }
-        transientState = nil
+        validationMessage = nil
         recomputeScreenState()
     }
 
@@ -458,25 +639,51 @@ final class CompressionFeatureModel: ObservableObject {
     }
 
     private func consume(_ snapshot: CompressionSnapshot) {
+        if let lastConsumedSnapshotRevision,
+           snapshot.revision < lastConsumedSnapshotRevision {
+            return
+        }
+        lastConsumedSnapshotRevision = snapshot.revision
         self.snapshot = snapshot
-        updateETA(from: currentJob)
+
+        let preservesPendingImportedSelection: Bool
+        if let pendingImportedSelectionID {
+            if snapshot.jobs.contains(where: {
+                $0.id == pendingImportedSelectionID
+            }) {
+                self.pendingImportedSelectionID = nil
+                preservesPendingImportedSelection = false
+            } else {
+                preservesPendingImportedSelection =
+                    selectedJobID == pendingImportedSelectionID
+            }
+        } else {
+            preservesPendingImportedSelection = false
+        }
+
+        if !preservesPendingImportedSelection {
+            if let selectedJobID, job(id: selectedJobID) == nil {
+                self.selectedJobID = snapshot.activeJobID
+                    ?? snapshot.jobs.first?.id
+            } else if selectedJobID == nil {
+                selectedJobID = snapshot.activeJobID
+                    ?? snapshot.jobs.first?.id
+            }
+        }
+
+        updateETA(from: activeJob)
         recomputeScreenState()
     }
 
     private func recomputeScreenState() {
-        switch transientState {
-        case .importing:
-            screenState = .importing
-            return
-        case .validationError(let message):
-            screenState = .validationError(message)
-            return
-        case nil:
-            break
-        }
-
         guard let currentJob else {
-            screenState = .empty
+            if let validationMessage {
+                screenState = .validationError(validationMessage)
+            } else if isImporting {
+                screenState = .importing
+            } else {
+                screenState = .empty
+            }
             return
         }
 
@@ -487,8 +694,13 @@ final class CompressionFeatureModel: ObservableObject {
             screenState = .probing(currentJob)
         case .ready:
             screenState = .ready(currentJob)
-        case .queued:
+        case .queued where snapshot.activeJobID == currentJob.id:
             screenState = .running(currentJob, .preparing)
+        case .queued:
+            screenState = .queued(
+                currentJob,
+                position: queuePosition(for: currentJob.id) ?? 1
+            )
         case .running(let progress):
             screenState = .running(
                 currentJob,
@@ -510,7 +722,7 @@ final class CompressionFeatureModel: ObservableObject {
     }
 
     private func presentValidationError(_ message: String) {
-        transientState = .validationError(message)
+        validationMessage = message
         recomputeScreenState()
     }
 
@@ -524,12 +736,19 @@ final class CompressionFeatureModel: ObservableObject {
             return
         }
 
-        if etaJobID != job.id
-            || etaLastProcessedMicroseconds.map({
-                progress.processedMicroseconds <= $0
-            }) == true {
+        if etaJobID != job.id {
             etaJobID = job.id
             etaSpeedSamples.removeAll(keepingCapacity: true)
+            etaLastProcessedMicroseconds = nil
+        } else if let last = etaLastProcessedMicroseconds {
+            if progress.processedMicroseconds < last {
+                etaSpeedSamples.removeAll(keepingCapacity: true)
+            } else if progress.processedMicroseconds == last {
+                // Queue mutations publish the active job again without new
+                // progress. Do not treat that unrelated snapshot as a rewind
+                // or duplicate speed sample.
+                return
+            }
         }
 
         etaJobID = job.id
@@ -548,17 +767,19 @@ final class CompressionFeatureModel: ObservableObject {
         etaLastProcessedMicroseconds = nil
     }
 
-    private static func isWorkflowOutcome(_ job: CompressionJob) -> Bool {
-        switch job.state {
-        case .ready, .cancelled, .completed, .failed:
-            true
-        case .draft, .probing, .queued, .running, .finishing,
-             .cancelling:
-            false
-        }
-    }
-
     private static let supportedInputExtensions: Set<String> = [
         "mov", "mp4",
     ]
+
+    private static func retriesProbe(_ job: CompressionJob) -> Bool? {
+        switch job.state {
+        case .failed(let failure):
+            return failure.retryTarget == .probing
+        case .cancelled:
+            return job.mediaInfo == nil
+        case .draft, .probing, .ready, .queued, .running, .finishing,
+             .cancelling, .completed:
+            return nil
+        }
+    }
 }

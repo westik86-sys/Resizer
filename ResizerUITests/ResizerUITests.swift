@@ -6,7 +6,7 @@ final class ResizerUITests: XCTestCase {
     }
 
     @MainActor
-    func testInitialScreenOffersOneLocalVideoImport() throws {
+    func testInitialScreenOffersSessionQueueAndMultiFileImport() throws {
         let app = launchFreshApp()
         defer { app.terminate() }
 
@@ -14,7 +14,13 @@ final class ResizerUITests: XCTestCase {
             app.buttons["choose-video"].waitForExistence(timeout: 5)
         )
         XCTAssertTrue(app.buttons["choose-video-toolbar"].exists)
+        XCTAssertTrue(
+            app.otherElements["empty-queue"].exists
+                || app.groups["empty-queue"].exists
+                || app.staticTexts["No videos"].exists
+        )
         XCTAssertFalse(app.buttons["start-compression"].exists)
+        XCTAssertFalse(app.buttons["start-queue-toolbar"].exists)
     }
 
     @MainActor

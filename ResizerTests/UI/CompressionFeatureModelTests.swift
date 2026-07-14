@@ -2,178 +2,342 @@ import Foundation
 import Testing
 @testable import Resizer
 
-@Suite("Compression feature model", .serialized)
+@Suite("Compression queue feature model", .serialized)
 @MainActor
 struct CompressionFeatureModelTests {
-    @Test("Import accepts one MOV or MP4 and prepares it without encoding")
-    func importPreparesSingleVideo() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("Batch import keeps supported files in selection order")
+    func batchImportIsAdditiveAndOrdered() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
 
-        await model.importVideo(
-            URL(fileURLWithPath: "/tmp/Camera.MOV")
-        )
-
-        let calls = await coordinator.recordedCalls()
-        #expect(calls.createdInputs == [
-            URL(fileURLWithPath: "/tmp/Camera.MOV"),
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/one.mp4"),
+            URL(fileURLWithPath: "/tmp/not-video.avi"),
+            URL(fileURLWithPath: "/tmp/two.MOV"),
         ])
-        #expect(calls.prepareCount == 1)
-        #expect(calls.startCount == 0)
-        #expect(model.currentJob?.state == .ready)
-        #expect(model.outputDirectoryURL == nil)
-        guard case .ready(let job) = model.screenState else {
-            Issue.record("Expected ready presentation state")
-            return
-        }
-        #expect(job.mediaInfo == (try TestFixtures.mediaInfo()))
+
+        #expect(model.jobs.map(\.inputURL.lastPathComponent) == [
+            "one.mp4", "two.MOV",
+        ])
+        #expect(model.jobs.allSatisfy { $0.state == .ready })
+        #expect(model.selectedJobID == model.jobs.first?.id)
+        #expect(model.validationMessage?.contains("skipped") == true)
+        let calls = await coordinator.recordedCalls()
+        #expect(calls.addedInputs.map(\.lastPathComponent) == [
+            "one.mp4", "two.MOV",
+        ])
+        #expect(calls.prepareCount == 2)
+        #expect(calls.startQueueCount == 0)
     }
 
-    @Test("Ready input is abandoned before replacement; active work stays blocked")
-    func safeSingleInputReplacement() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("Import deduplicates normalized paths without replacing the original URL")
+    func importPreservesOriginalURLWhileDeduplicating() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
-
-        await model.importVideo(
-            URL(fileURLWithPath: "/tmp/not-a-video.avi")
+        let originalURL = URL(
+            fileURLWithPath: "/tmp/security-scope/../source.mp4"
         )
-        guard case .validationError = model.screenState else {
-            Issue.record("Expected an import validation error")
-            return
-        }
-        #expect((await coordinator.recordedCalls()).createdInputs.isEmpty)
+        let duplicateURL = originalURL.standardizedFileURL
 
-        model.dismissValidationError()
-        await model.importVideo(URL(fileURLWithPath: "/tmp/one.mp4"))
-        let firstJobID = try #require(model.currentJobID)
-        await model.importVideo(URL(fileURLWithPath: "/tmp/two.mov"))
+        #expect(originalURL != duplicateURL)
+        await model.importVideos([originalURL, duplicateURL])
 
-        let replacementCalls = await coordinator.recordedCalls()
-        #expect(replacementCalls.createdInputs.count == 2)
-        #expect(replacementCalls.prepareCount == 2)
-        #expect(replacementCalls.cancelCount == 1)
-        #expect(model.currentJob?.inputURL == URL(fileURLWithPath: "/tmp/two.mov"))
-        #expect(model.currentJob?.state == .ready)
-        #expect(
-            model.snapshot.jobs.first { $0.id == firstJobID }?.state
-                == .cancelled
-        )
-        #expect(model.snapshot.jobs.filter(\.state.isActive).count == 1)
-
-        let secondJobID = try #require(model.currentJobID)
-        try await coordinator.replaceWithRunningJob(jobID: secondJobID)
-        #expect(await eventually { model.canCancel })
-        await model.importVideo(URL(fileURLWithPath: "/tmp/three.mp4"))
-
-        #expect((await coordinator.recordedCalls()).createdInputs.count == 2)
-        guard case .validationError(let message) = model.screenState else {
-            Issue.record("Expected active-job validation error")
-            return
-        }
-        #expect(message.contains("current operation"))
+        let job = try #require(model.jobs.first)
+        let calls = await coordinator.recordedCalls()
+        #expect(model.jobs.count == 1)
+        #expect(job.inputURL == originalURL)
+        #expect(calls.addedInputs == [originalURL])
+        #expect(model.validationMessage?.contains("skipped") == true)
     }
 
-    @Test("A replacement registration failure never leaves importing stuck")
-    func replacementRegistrationFailure() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("Adding a batch while another job runs never replaces it")
+    func addWhileRunningIsNonDestructive() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
-        await model.importVideo(URL(fileURLWithPath: "/tmp/first.mp4"))
-        let firstJobID = try #require(model.currentJobID)
-        await coordinator.failNextCreate()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/active.mp4"))
+        let activeID = try #require(model.selectedJobID)
+        try await coordinator.replaceWithRunningJob(jobID: activeID)
+        #expect(await eventually { model.snapshot.activeJobID == activeID })
 
-        await model.importVideo(URL(fileURLWithPath: "/tmp/second.mov"))
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/second.mov"),
+            URL(fileURLWithPath: "/tmp/third.mp4"),
+        ])
 
-        guard case .validationError(let message) = model.screenState else {
-            Issue.record("Expected a registration validation error")
-            return
-        }
-        #expect(message.contains("could not be prepared"))
-        #expect(model.currentJobID == firstJobID)
-        #expect(model.currentJob?.state == .cancelled)
+        #expect(model.jobs.count == 3)
+        #expect(model.job(id: activeID)?.state.phase == .running)
+        #expect(model.selectedJobID != activeID)
+        #expect((await coordinator.recordedCalls()).cancelledJobIDs.isEmpty)
     }
 
-    @Test("Start requires an explicit folder and sends only typed settings")
-    func startUsesTypedConfiguration() async throws {
-        let coordinator = FeatureCoordinatorFake()
-        let revealer = OutputRevealerSpy()
-        let model = CompressionFeatureModel(
-            coordinator: coordinator,
-            outputRevealer: revealer
-        )
-        await model.importVideo(URL(fileURLWithPath: "/tmp/source.mp4"))
+    @Test("Start captures one typed configuration for every ready job")
+    func startCapturesBatchConfiguration() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/a.mp4"),
+            URL(fileURLWithPath: "/tmp/b.mov"),
+        ])
 
-        #expect(!model.canStart)
         await model.start()
-        guard case .validationError = model.screenState else {
-            Issue.record("Expected output-folder validation")
-            return
-        }
+        #expect((await coordinator.recordedCalls()).enqueuedJobIDs.isEmpty)
+        #expect(model.validationMessage?.contains("output folder") == true)
 
         model.selectOutputDirectory(
             URL(fileURLWithPath: "/tmp/export", isDirectory: true)
         )
         model.applyPreset(.smallFile)
-        #expect(model.canStart)
-
         await model.start(
             filenameSuffix: "-web",
             conflictPolicy: .fail
         )
 
         let calls = await coordinator.recordedCalls()
-        #expect(calls.startCount == 1)
-        #expect(calls.lastConfiguration?.recipe == (
-            try CompressionRecipe(preset: .smallFile)
-        ))
-        #expect(
-            calls.lastConfiguration?.outputPolicy.directoryURL
-                == URL(fileURLWithPath: "/tmp/export", isDirectory: true)
-        )
-        #expect(calls.lastConfiguration?.outputPolicy.filenameSuffix == "-web")
-        #expect(calls.lastConfiguration?.outputPolicy.conflictPolicy == .fail)
-        guard case .success = model.screenState else {
-            Issue.record("Expected success presentation")
-            return
+        #expect(calls.enqueuedJobIDs == model.jobs.map(\.id))
+        #expect(calls.startQueueCount == 1)
+        #expect(calls.configurations.count == 2)
+        for configuration in calls.configurations.values {
+            #expect(configuration.recipe == (
+                try CompressionRecipe(preset: .smallFile)
+            ))
+            #expect(configuration.outputPolicy.filenameSuffix == "-web")
+            #expect(configuration.outputPolicy.conflictPolicy == .fail)
         }
-
-        model.revealResultInFinder()
-        #expect(
-            revealer.revealedURLs
-                == [URL(fileURLWithPath: "/tmp/export/result.mp4")]
-        )
+        #expect(model.snapshot.activeJobID == model.jobs.first?.id)
+        #expect(model.snapshot.queuedJobIDs == [model.jobs[1].id])
     }
 
-    @Test("Probe retry repeats preparation without requiring output settings")
-    func probeRetryRoutesToPrepare() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("Overlapping start calls enqueue and wake the queue exactly once")
+    func overlappingStartsAreIdempotent() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
-        await model.importVideo(URL(fileURLWithPath: "/tmp/source.mov"))
-        let jobID = try #require(model.currentJobID)
+        await model.importVideo(URL(fileURLWithPath: "/tmp/once.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        let enqueueGate = SynchronousCallGate()
+        await coordinator.gateNextEnqueue(enqueueGate)
 
-        try await coordinator.replaceWithProbeFailure(jobID: jobID)
-        #expect(await eventually {
-            guard case .failure(_, .transcode(let failure)) = model.screenState
-            else { return false }
-            return failure.stage == .probe
-        })
-        #expect(model.outputDirectoryURL == nil)
-        #expect(model.canRetry)
+        let firstStart = Task { await model.start() }
+        await enqueueGate.waitUntilEntered()
+        #expect(model.isStartingQueue)
 
-        await model.retry()
+        await model.start()
+        #expect(model.isStartingQueue)
 
+        enqueueGate.release()
+        await firstStart.value
         let calls = await coordinator.recordedCalls()
-        #expect(calls.prepareCount == 2)
-        #expect(calls.retryCount == 0)
-        #expect(model.currentJob?.state == .ready)
+        #expect(calls.enqueuedJobIDs == [jobID])
+        #expect(calls.startQueueCount == 1)
+        #expect(calls.configurations.count == 1)
     }
 
-    @Test("Encode retry reuses the job and copies only bounded diagnostics")
-    func encodeRetryAndDiagnostics() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("A ready snapshot cannot start before its import finishes")
+    func readySnapshotWaitsForImportCompletion() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        let prepareGate = AsyncCallGate<CompressionJob.ID>()
+        await coordinator.gateNextPrepareAfterReady(prepareGate)
+
+        let importTask = Task { @MainActor in
+            await model.importVideo(
+                URL(fileURLWithPath: "/tmp/preparing.mp4")
+            )
+        }
+        let jobID = await prepareGate.waitUntilEntered()
+        #expect(await eventually {
+            model.isImporting && model.job(id: jobID)?.state == .ready
+        })
+
+        #expect(!model.canStart)
+        await model.start()
+        var calls = await coordinator.recordedCalls()
+        #expect(calls.enqueuedJobIDs.isEmpty)
+        #expect(calls.startQueueCount == 0)
+
+        await prepareGate.release()
+        await importTask.value
+
+        #expect(model.canStart)
+        calls = await coordinator.recordedCalls()
+        #expect(calls.enqueuedJobIDs.isEmpty)
+        #expect(calls.startQueueCount == 0)
+    }
+
+    @Test("A ready probe-retry snapshot cannot start before retry finishes")
+    func readySnapshotWaitsForProbeRetryCompletion() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(
+            URL(fileURLWithPath: "/tmp/retrying-probe.mp4")
+        )
+        let jobID = try #require(model.selectedJobID)
+        try await coordinator.replaceWithProbeFailure(jobID: jobID)
+        #expect(await eventually {
+            model.job(id: jobID)?.state.phase == .failed
+        })
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        let prepareGate = AsyncCallGate<CompressionJob.ID>()
+        await coordinator.gateNextPrepareAfterReady(prepareGate)
+
+        let retryTask = Task { @MainActor in
+            await model.retry(jobID: jobID)
+        }
+        #expect(await prepareGate.waitUntilEntered() == jobID)
+        #expect(await eventually {
+            model.pendingActionJobIDs.contains(jobID)
+                && model.job(id: jobID)?.state == .ready
+        })
+
+        #expect(!model.canStart)
+        await model.start()
+        var calls = await coordinator.recordedCalls()
+        #expect(calls.enqueuedJobIDs.isEmpty)
+        #expect(calls.startQueueCount == 0)
+
+        await prepareGate.release()
+        await retryTask.value
+
+        #expect(model.canStart)
+        calls = await coordinator.recordedCalls()
+        #expect(calls.enqueuedJobIDs.isEmpty)
+        #expect(calls.startQueueCount == 0)
+    }
+
+    @Test("Stale import snapshots preserve pending selection until user selects")
+    func staleImportSnapshotPreservesPendingSelection() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/existing.mp4"))
+        let existingID = try #require(model.selectedJobID)
+        let addGate = AsyncCallGate<[CompressionJob.ID]>()
+        await coordinator.gateNextAddBeforeCreate(addGate)
+
+        let importTask = Task { @MainActor in
+            await model.importVideo(URL(fileURLWithPath: "/tmp/new.mp4"))
+        }
+        let importedID = try #require(
+            await addGate.waitUntilEntered().first
+        )
+
+        // A valid concurrent queue update does not contain the not-yet-added
+        // import ID. Consuming it must not replace the pending selection.
+        try await coordinator.replaceWithRunningJob(jobID: existingID)
+        #expect(await eventually {
+            model.snapshot.activeJobID == existingID
+        })
+        #expect(model.selectedJobID == importedID)
+
+        // An explicit user choice wins over the automatic import selection.
+        model.selectJob(existingID)
+        await addGate.release()
+        await importTask.value
+
+        #expect(model.selectedJobID == existingID)
+        #expect(model.job(id: importedID)?.state == .ready)
+    }
+
+    @Test("A lower revision cannot overtake a completed import")
+    func lowerRevisionCannotOvertakeCompletedImport() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/old.mp4"))
+        let staleSnapshot = await coordinator.snapshot()
+
+        await model.importVideo(URL(fileURLWithPath: "/tmp/fresh.mp4"))
+        let importedID = try #require(model.selectedJobID)
+        let freshSnapshot = model.snapshot
+        #expect(freshSnapshot.revision > staleSnapshot.revision)
+        #expect(freshSnapshot.jobs.count == 2)
+        #expect(model.job(id: importedID)?.inputURL.lastPathComponent == "fresh.mp4")
+
+        // Deliver the captured snapshot through the same direct-sync seam
+        // used by model actions. This avoids scheduler timing in the stream
+        // while reproducing an older response arriving after the import.
+        await coordinator.replayOnNextSnapshotRead(staleSnapshot)
+        await model.refresh()
+
+        #expect(model.snapshot == freshSnapshot)
+        #expect(model.selectedJobID == importedID)
+        #expect(model.jobs.map(\.inputURL.lastPathComponent) == [
+            "old.mp4", "fresh.mp4",
+        ])
+    }
+
+    @Test("Cancel targets one waiting job without disturbing the active job")
+    func explicitQueuedCancellation() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/a.mp4"),
+            URL(fileURLWithPath: "/tmp/b.mp4"),
+        ])
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        let activeID = try #require(model.snapshot.activeJobID)
+        let waitingID = try #require(model.snapshot.queuedJobIDs.first)
+
+        await model.cancel(jobID: waitingID)
+
+        #expect(model.job(id: waitingID)?.state == .cancelled)
+        #expect(model.job(id: activeID)?.state.phase == .running)
+        #expect((await coordinator.recordedCalls()).cancelledJobIDs == [
+            waitingID,
+        ])
+    }
+
+    @Test("Waiting jobs can be reordered and removed with stable selection")
+    func reorderAndRemoveWaitingJobs() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/a.mp4"),
+            URL(fileURLWithPath: "/tmp/b.mp4"),
+            URL(fileURLWithPath: "/tmp/c.mp4"),
+        ])
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        let activeID = try #require(model.snapshot.activeJobID)
+        let secondID = model.snapshot.queuedJobIDs[0]
+        let thirdID = model.snapshot.queuedJobIDs[1]
+        model.selectJob(thirdID)
+
+        await model.moveSelectedUp()
+        #expect(model.snapshot.queuedJobIDs == [thirdID, secondID])
+
+        await model.removeSelectedQueuedJob()
+        #expect(model.job(id: thirdID) == nil)
+        #expect(model.snapshot.queuedJobIDs == [secondID])
+        #expect(model.selectedJobID == activeID)
+        let calls = await coordinator.recordedCalls()
+        #expect(calls.removedJobIDs == [thirdID])
+    }
+
+    @Test("Retry preserves identity and copies only bounded diagnostics")
+    func retryAndDiagnostics() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let copier = DiagnosticCopierSpy()
         let model = CompressionFeatureModel(
             coordinator: coordinator,
@@ -181,110 +345,167 @@ struct CompressionFeatureModelTests {
         )
         await coordinator.waitUntilSubscribed()
         await model.importVideo(URL(fileURLWithPath: "/tmp/source.mp4"))
-        let jobID = try #require(model.currentJobID)
+        let jobID = try #require(model.selectedJobID)
         let diagnostic = try BoundedDiagnostic(
             text: "bounded encoder tail",
             utf8ByteLimit: 64,
             wasTruncated: false
         )
-
         try await coordinator.replaceWithEncodeFailure(
             jobID: jobID,
             diagnostic: diagnostic
         )
         #expect(await eventually { model.diagnosticText == diagnostic.text })
-        model.copyDiagnostics()
-        #expect(copier.copiedTexts == [diagnostic.text])
 
+        model.copyDiagnostics(jobID: jobID)
+        #expect(copier.copiedTexts == [diagnostic.text])
         model.selectOutputDirectory(
             URL(fileURLWithPath: "/tmp/retry", isDirectory: true)
         )
-        await model.retry(filenameSuffix: "-retry")
+        await model.retry(jobID: jobID, filenameSuffix: "-retry")
 
         let calls = await coordinator.recordedCalls()
-        #expect(calls.retryCount == 1)
-        #expect(calls.prepareCount == 1)
-        #expect(calls.lastConfiguration?.outputPolicy.filenameSuffix == "-retry")
-        #expect(model.currentJob?.id == jobID)
-        guard case .success = model.screenState else {
-            Issue.record("Expected retry success")
-            return
-        }
+        #expect(calls.retriedJobIDs == [jobID])
+        #expect(calls.configurations[jobID]?.outputPolicy.filenameSuffix == "-retry")
+        #expect(model.job(id: jobID) != nil)
+        #expect(model.snapshot.activeJobID == jobID)
     }
 
-    @Test("Cancel routes to the coordinator and presents cancellation")
-    func cancellation() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("Probe failure retries preparation without requiring an output folder")
+    func probeFailureRetryReturnsToReady() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
-        await model.importVideo(URL(fileURLWithPath: "/tmp/source.mp4"))
-        let jobID = try #require(model.currentJobID)
+        await model.importVideo(URL(fileURLWithPath: "/tmp/probe-failure.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        try await coordinator.replaceWithProbeFailure(jobID: jobID)
+        #expect(await eventually {
+            model.job(id: jobID)?.state.phase == .failed
+        })
+        let prepareCountBeforeRetry = await coordinator.recordedCalls()
+            .prepareCount
 
-        try await coordinator.replaceWithRunningJob(jobID: jobID)
-        #expect(await eventually { model.canCancel })
-        await model.cancel()
+        #expect(model.outputDirectoryURL == nil)
+        #expect(model.canRetry(jobID: jobID))
+        await model.retry(jobID: jobID)
 
-        #expect((await coordinator.recordedCalls()).cancelCount == 1)
-        guard case .failure(let job, .cancelled) = model.screenState else {
-            Issue.record("Expected cancelled presentation")
-            return
-        }
-        #expect(job.id == jobID)
+        let calls = await coordinator.recordedCalls()
+        #expect(calls.prepareCount == prepareCountBeforeRetry + 1)
+        #expect(calls.retriedJobIDs.isEmpty)
+        #expect(calls.enqueuedJobIDs.isEmpty)
+        #expect(calls.startQueueCount == 0)
+        #expect(model.job(id: jobID)?.state == .ready)
+        #expect(model.selectedJobID == jobID)
     }
 
-    @Test("ETA appears only after three stable, mature speed samples")
-    func conservativeETA() async throws {
-        let coordinator = FeatureCoordinatorFake()
+    @Test("ETA follows the active encode instead of sidebar selection")
+    func etaUsesActiveJob() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
         let model = CompressionFeatureModel(coordinator: coordinator)
         await coordinator.waitUntilSubscribed()
-        await model.importVideo(URL(fileURLWithPath: "/tmp/source.mp4"))
-        let jobID = try #require(model.currentJobID)
-        try await coordinator.replaceWithRunningJob(jobID: jobID)
-        #expect(await eventually { model.canCancel })
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/active.mp4"),
+            URL(fileURLWithPath: "/tmp/selected.mp4"),
+        ])
+        let activeID = model.jobs[0].id
+        let selectedID = model.jobs[1].id
+        try await coordinator.replaceWithRunningJob(jobID: activeID)
+        model.selectJob(selectedID)
 
-        try await coordinator.sendProgress(
-            jobID: jobID,
-            processedMicroseconds: 3_000_000,
-            totalMicroseconds: 20_000_000,
-            speed: 2
-        )
-        #expect(await eventually {
-            model.currentProgressMicroseconds == 3_000_000
-        })
-        #expect(model.estimatedRemainingSeconds == nil)
+        for sample in [(3_000_000, 2.0), (4_000_000, 2.1), (5_000_000, 1.9)] {
+            try await coordinator.sendProgress(
+                jobID: activeID,
+                processedMicroseconds: Int64(sample.0),
+                totalMicroseconds: 20_000_000,
+                speed: sample.1
+            )
+            #expect(await eventually {
+                model.activeProgressMicroseconds == Int64(sample.0)
+            })
+        }
 
-        try await coordinator.sendProgress(
-            jobID: jobID,
-            processedMicroseconds: 4_000_000,
-            totalMicroseconds: 20_000_000,
-            speed: 2.1
-        )
-        #expect(await eventually {
-            model.currentProgressMicroseconds == 4_000_000
-        })
-        #expect(model.estimatedRemainingSeconds == nil)
-
-        try await coordinator.sendProgress(
-            jobID: jobID,
-            processedMicroseconds: 5_000_000,
-            totalMicroseconds: 20_000_000,
-            speed: 1.9
-        )
-        #expect(await eventually {
-            model.currentProgressMicroseconds == 5_000_000
-        })
+        #expect(model.selectedJobID == selectedID)
         #expect(model.estimatedRemainingSeconds == 7.5)
+    }
 
-        try await coordinator.sendProgress(
-            jobID: jobID,
-            processedMicroseconds: 6_000_000,
-            totalMicroseconds: 20_000_000,
-            speed: 0.5
+    @Test("Unchanged active progress snapshot preserves a mature ETA")
+    func unchangedProgressSnapshotPreservesETA() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/active.mp4"))
+        let activeID = try #require(model.selectedJobID)
+        try await coordinator.replaceWithRunningJob(jobID: activeID)
+
+        for sample in [(3_000_000, 2.0), (4_000_000, 2.1), (5_000_000, 1.9)] {
+            try await coordinator.sendProgress(
+                jobID: activeID,
+                processedMicroseconds: Int64(sample.0),
+                totalMicroseconds: 20_000_000,
+                speed: sample.1
+            )
+            #expect(await eventually {
+                model.activeProgressMicroseconds == Int64(sample.0)
+            })
+        }
+        let matureETA = try #require(model.estimatedRemainingSeconds)
+
+        await model.refresh()
+
+        #expect(model.estimatedRemainingSeconds == matureETA)
+    }
+
+    @Test("Nil selection cannot deselect a nonempty queue")
+    func nilSelectionPreservesExistingSelection() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/first.mp4"),
+            URL(fileURLWithPath: "/tmp/second.mp4"),
+        ])
+        let secondID = model.jobs[1].id
+        model.selectJob(secondID)
+
+        model.selectJob(nil)
+
+        #expect(model.selectedJobID == secondID)
+        #expect(model.currentJob?.id == secondID)
+    }
+
+    @Test("Completed results can be revealed by explicit queue identity")
+    func revealExplicitCompletedJob() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/done.mp4"),
+            URL(fileURLWithPath: "/tmp/other.mp4"),
+        ])
+        let completedID = model.jobs[0].id
+        let otherID = model.jobs[1].id
+        let outputURL = URL(fileURLWithPath: "/tmp/export/done.mp4")
+        try await coordinator.replaceWithCompletedJob(
+            jobID: completedID,
+            outputURL: outputURL
         )
         #expect(await eventually {
-            model.currentProgressMicroseconds == 6_000_000
+            guard let completed = model.job(id: completedID),
+                  case .completed = completed.state else {
+                return false
+            }
+            return true
         })
-        #expect(model.estimatedRemainingSeconds == nil)
+        model.selectJob(otherID)
+
+        model.revealResultInFinder(jobID: completedID)
+
+        #expect(revealer.revealedURLs == [outputURL])
+        #expect(model.selectedJobID == otherID)
     }
 
     private func eventually(
@@ -299,24 +520,12 @@ struct CompressionFeatureModelTests {
 }
 
 private extension CompressionFeatureModel {
-    var currentProgressMicroseconds: Int64? {
-        guard let currentJob,
-              case .running(let progress) = currentJob.state else {
+    var activeProgressMicroseconds: Int64? {
+        guard let activeJob,
+              case .running(let progress) = activeJob.state else {
             return nil
         }
         return progress?.processedMicroseconds
-    }
-}
-
-private extension JobState {
-    var isActive: Bool {
-        switch self {
-        case .draft, .probing, .ready, .queued, .running, .finishing,
-             .cancelling:
-            true
-        case .cancelled, .completed, .failed:
-            false
-        }
     }
 }
 
@@ -338,35 +547,132 @@ private final class DiagnosticCopierSpy: DiagnosticCopying {
     }
 }
 
-private actor FeatureCoordinatorFake: CompressionCoordinating {
+private final class SynchronousCallGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseSignal = DispatchSemaphore(value: 0)
+    private var didEnter = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enterAndWait() {
+        lock.lock()
+        didEnter = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        lock.unlock()
+        waiters.forEach { $0.resume() }
+        releaseSignal.wait()
+    }
+
+    func waitUntilEntered() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if didEnter {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                entryWaiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        releaseSignal.signal()
+    }
+}
+
+private actor AsyncCallGate<Value: Sendable> {
+    private var enteredValue: Value?
+    private var entryWaiters: [CheckedContinuation<Value, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    func enterAndWait(_ value: Value) async {
+        enteredValue = value
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: value) }
+
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            if isReleased {
+                continuation.resume()
+            } else {
+                releaseWaiter = continuation
+            }
+        }
+    }
+
+    func waitUntilEntered() async -> Value {
+        if let enteredValue { return enteredValue }
+        return await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !isReleased else { return }
+        isReleased = true
+        let waiter = releaseWaiter
+        releaseWaiter = nil
+        waiter?.resume()
+    }
+}
+
+private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
     nonisolated struct Calls: Sendable {
-        var createdInputs: [URL] = []
+        var addedInputs: [URL] = []
         var prepareCount = 0
-        var startCount = 0
-        var retryCount = 0
-        var cancelCount = 0
-        var lastConfiguration: JobConfiguration?
+        var enqueuedJobIDs: [CompressionJob.ID] = []
+        var configurations: [CompressionJob.ID: JobConfiguration] = [:]
+        var startQueueCount = 0
+        var retriedJobIDs: [CompressionJob.ID] = []
+        var cancelledJobIDs: [CompressionJob.ID] = []
+        var removedJobIDs: [CompressionJob.ID] = []
     }
 
     private var calls = Calls()
     private var jobsByID: [CompressionJob.ID: CompressionJob] = [:]
     private var jobOrder: [CompressionJob.ID] = []
+    private var activeJobID: CompressionJob.ID?
+    private var snapshotRevision: UInt64 = 0
+    private var replayedSnapshotForNextDirectRead: CompressionSnapshot?
     private var continuations: [
         UUID: AsyncStream<CompressionSnapshot>.Continuation
     ] = [:]
     private var hasSubscriber = false
-    private var shouldFailNextCreate = false
     private var subscriberWaiters: [CheckedContinuation<Void, Never>] = []
+    private var nextEnqueueGate: SynchronousCallGate?
+    private var nextPrepareAfterReadyGate: AsyncCallGate<CompressionJob.ID>?
+    private var nextAddBeforeCreateGate: AsyncCallGate<[CompressionJob.ID]>?
+
+    @discardableResult
+    func add(
+        _ imports: [JobQueueImport]
+    ) async throws -> [CompressionJob.ID] {
+        if let gate = nextAddBeforeCreateGate {
+            nextAddBeforeCreateGate = nil
+            await gate.enterAndWait(imports.map(\.id))
+        }
+        for item in imports {
+            _ = try createJob(
+                inputURL: item.inputURL,
+                id: item.id,
+                createdAt: item.createdAt
+            )
+            calls.addedInputs.append(item.inputURL)
+        }
+        for item in imports {
+            _ = try await prepare(jobID: item.id)
+        }
+        return imports.map(\.id)
+    }
 
     func createJob(
         inputURL: URL,
         id: CompressionJob.ID,
         createdAt: Date
     ) throws -> CompressionJob {
-        if shouldFailNextCreate {
-            shouldFailNextCreate = false
-            throw CompressionCoordinatorError.activeJobExists(id)
-        }
         let job = try CompressionJob(
             id: id,
             inputURL: inputURL,
@@ -374,7 +680,6 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
         )
         jobsByID[id] = job
         jobOrder.append(id)
-        calls.createdInputs.append(inputURL)
         publish()
         return job
     }
@@ -389,56 +694,163 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
         try job.transition(to: .ready)
         jobsByID[jobID] = job
         publish()
+        if let gate = nextPrepareAfterReadyGate {
+            nextPrepareAfterReadyGate = nil
+            await gate.enterAndWait(jobID)
+        }
         return job
     }
 
-    func startPrepared(
+    @discardableResult
+    func enqueue(
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
-    ) async throws -> CompressionJob {
-        calls.startCount += 1
-        calls.lastConfiguration = configuration
-        return try complete(jobID: jobID, configuration: configuration)
+    ) throws -> CompressionJob {
+        if let gate = nextEnqueueGate {
+            nextEnqueueGate = nil
+            gate.enterAndWait()
+        }
+        var job = try requireJob(jobID)
+        switch job.state {
+        case .ready:
+            break
+        case .failed(let failure) where failure.retryTarget == .ready:
+            try job.transition(to: .ready)
+        case .cancelled where job.mediaInfo != nil:
+            try job.transition(to: .ready)
+        default:
+            throw CompressionWorkflowError.workflowStateChanged(job.state.phase)
+        }
+        try job.configure(configuration)
+        try job.transition(to: .queued)
+        jobsByID[jobID] = job
+        calls.enqueuedJobIDs.append(jobID)
+        calls.configurations[jobID] = configuration
+        publish()
+        return job
     }
 
-    func retry(
+    func startQueue() {
+        calls.startQueueCount += 1
+        guard activeJobID == nil,
+              let jobID = firstWaitingJobID(),
+              var job = jobsByID[jobID] else {
+            publish()
+            return
+        }
+        activeJobID = jobID
+        try? job.transition(to: .running(progress: nil))
+        jobsByID[jobID] = job
+        publish()
+    }
+
+    @discardableResult
+    func retryQueued(
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
     ) async throws -> CompressionJob {
-        calls.retryCount += 1
-        calls.lastConfiguration = configuration
         var job = try requireJob(jobID)
-        try job.transition(to: .ready)
+        switch job.state {
+        case .failed(let failure) where failure.retryTarget == .probing:
+            let old = job
+            job = try CompressionJob(
+                id: old.id,
+                inputURL: old.inputURL,
+                createdAt: old.createdAt
+            )
+            try job.transition(to: .probing)
+            try job.recordMediaInfo(TestFixtures.mediaInfo())
+            try job.transition(to: .ready)
+        case .cancelled where job.mediaInfo == nil:
+            let old = job
+            job = try CompressionJob(
+                id: old.id,
+                inputURL: old.inputURL,
+                createdAt: old.createdAt
+            )
+            try job.transition(to: .probing)
+            try job.recordMediaInfo(TestFixtures.mediaInfo())
+            try job.transition(to: .ready)
+        case .failed, .cancelled:
+            try job.transition(to: .ready)
+        default:
+            throw CompressionWorkflowError.workflowStateChanged(job.state.phase)
+        }
         jobsByID[jobID] = job
-        return try complete(jobID: jobID, configuration: configuration)
+        jobOrder.removeAll { $0 == jobID }
+        jobOrder.append(jobID)
+        calls.retriedJobIDs.append(jobID)
+        let queued = try enqueue(
+            jobID: jobID,
+            configuration: configuration
+        )
+        startQueue()
+        return queued
+    }
+
+    func moveQueued(
+        jobID: CompressionJob.ID,
+        before successorID: CompressionJob.ID?
+    ) throws {
+        try requireWaiting(jobID)
+        if let successorID { try requireWaiting(successorID) }
+        jobOrder.removeAll { $0 == jobID }
+        if let successorID,
+           let index = jobOrder.firstIndex(of: successorID) {
+            jobOrder.insert(jobID, at: index)
+        } else {
+            jobOrder.append(jobID)
+        }
+        publish()
+    }
+
+    func removeQueued(jobID: CompressionJob.ID) throws {
+        try requireWaiting(jobID)
+        jobsByID.removeValue(forKey: jobID)
+        jobOrder.removeAll { $0 == jobID }
+        calls.removedJobIDs.append(jobID)
+        publish()
     }
 
     func cancel(jobID: CompressionJob.ID) async {
-        calls.cancelCount += 1
+        calls.cancelledJobIDs.append(jobID)
         guard var job = jobsByID[jobID] else { return }
         do {
             switch job.state {
             case .running(let progress):
                 try job.transition(to: .cancelling(lastProgress: progress))
-                jobsByID[jobID] = job
-                publish()
                 try job.transition(to: .cancelled)
-            case .probing, .queued, .ready:
+            case .draft, .probing, .ready, .queued:
                 try job.transition(to: .cancelled)
-            case .draft, .finishing, .cancelling, .cancelled, .completed,
-                 .failed:
+            case .finishing, .cancelling, .cancelled, .completed, .failed:
                 return
             }
             jobsByID[jobID] = job
+            if activeJobID == jobID { activeJobID = nil }
             publish()
         } catch {
-            Issue.record("Fake cancellation transition failed: \(error)")
+            Issue.record("Fake cancellation failed: \(error)")
         }
     }
 
     func snapshot() -> CompressionSnapshot {
+        if let replayedSnapshotForNextDirectRead {
+            self.replayedSnapshotForNextDirectRead = nil
+            return replayedSnapshotForNextDirectRead
+        }
+        return currentSnapshot()
+    }
+
+    func replayOnNextSnapshotRead(_ snapshot: CompressionSnapshot) {
+        replayedSnapshotForNextDirectRead = snapshot
+    }
+
+    private func currentSnapshot() -> CompressionSnapshot {
         CompressionSnapshot(
-            jobs: jobOrder.compactMap { jobsByID[$0] }
+            jobs: jobOrder.compactMap { jobsByID[$0] },
+            activeJobID: activeJobID,
+            isDraining: activeJobID != nil,
+            revision: snapshotRevision
         )
     }
 
@@ -451,7 +863,7 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
         pair.continuation.onTermination = { [weak self] _ in
             Task { await self?.removeContinuation(identifier) }
         }
-        pair.continuation.yield(snapshot())
+        pair.continuation.yield(currentSnapshot())
         hasSubscriber = true
         let waiters = subscriberWaiters
         subscriberWaiters.removeAll()
@@ -470,24 +882,29 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
         calls
     }
 
-    func failNextCreate() {
-        shouldFailNextCreate = true
+    func gateNextEnqueue(_ gate: SynchronousCallGate) {
+        nextEnqueueGate = gate
     }
 
-    func replaceWithProbeFailure(
-        jobID: CompressionJob.ID
-    ) throws {
-        let oldJob = try requireJob(jobID)
-        var job = try CompressionJob(
-            id: jobID,
-            inputURL: oldJob.inputURL,
-            createdAt: oldJob.createdAt
-        )
-        try job.transition(to: .probing)
-        try job.transition(
-            to: .failed(TestFixtures.failure(stage: .probe))
-        )
+    func gateNextPrepareAfterReady(
+        _ gate: AsyncCallGate<CompressionJob.ID>
+    ) {
+        nextPrepareAfterReadyGate = gate
+    }
+
+    func gateNextAddBeforeCreate(
+        _ gate: AsyncCallGate<[CompressionJob.ID]>
+    ) {
+        nextAddBeforeCreateGate = gate
+    }
+
+    func replaceWithRunningJob(jobID: CompressionJob.ID) throws {
+        var job = try makeReadyJob(jobID: jobID)
+        try job.configure(TestFixtures.configuration())
+        try job.transition(to: .queued)
+        try job.transition(to: .running(progress: nil))
         jobsByID[jobID] = job
+        activeJobID = jobID
         publish()
     }
 
@@ -509,15 +926,53 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
             )
         )
         jobsByID[jobID] = job
+        activeJobID = nil
         publish()
     }
 
-    func replaceWithRunningJob(jobID: CompressionJob.ID) throws {
+    func replaceWithProbeFailure(jobID: CompressionJob.ID) throws {
+        let old = try requireJob(jobID)
+        var job = try CompressionJob(
+            id: old.id,
+            inputURL: old.inputURL,
+            createdAt: old.createdAt
+        )
+        try job.transition(to: .probing)
+        try job.transition(
+            to: .failed(
+                TranscodeFailure(
+                    stage: .probe,
+                    reason: .invalidMedia,
+                    diagnosticTail: nil
+                )
+            )
+        )
+        jobsByID[jobID] = job
+        if activeJobID == jobID { activeJobID = nil }
+        publish()
+    }
+
+    func replaceWithCompletedJob(
+        jobID: CompressionJob.ID,
+        outputURL: URL
+    ) throws {
         var job = try makeReadyJob(jobID: jobID)
         try job.configure(TestFixtures.configuration())
         try job.transition(to: .queued)
         try job.transition(to: .running(progress: nil))
+        try job.transition(to: .finishing(.validating))
+        try job.transition(to: .finishing(.committing))
+        try job.transition(
+            to: .completed(
+                try CompressionResult(
+                    outputURL: outputURL,
+                    outputByteCount: 2_048,
+                    elapsed: .seconds(2)
+                )
+            )
+        )
         jobsByID[jobID] = job
+        if activeJobID == jobID { activeJobID = nil }
         publish()
     }
 
@@ -539,41 +994,40 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
         publish()
     }
 
-    private func complete(
-        jobID: CompressionJob.ID,
-        configuration: JobConfiguration
-    ) throws -> CompressionJob {
-        var job = try requireJob(jobID)
-        try job.configure(configuration)
-        try job.transition(to: .queued)
-        try job.transition(to: .running(progress: nil))
-        try job.transition(to: .finishing(.validating))
-        try job.transition(to: .finishing(.committing))
-        let result = try CompressionResult(
-            outputURL: configuration.outputPolicy.directoryURL
-                .appendingPathComponent("result.mp4"),
-            outputByteCount: 1_024,
-            elapsed: .seconds(2)
-        )
-        try job.transition(to: .completed(result))
-        jobsByID[jobID] = job
-        publish()
-        return job
-    }
-
     private func makeReadyJob(
         jobID: CompressionJob.ID
     ) throws -> CompressionJob {
-        let oldJob = try requireJob(jobID)
+        let old = try requireJob(jobID)
         var job = try CompressionJob(
-            id: jobID,
-            inputURL: oldJob.inputURL,
-            createdAt: oldJob.createdAt
+            id: old.id,
+            inputURL: old.inputURL,
+            createdAt: old.createdAt
         )
         try job.transition(to: .probing)
         try job.recordMediaInfo(TestFixtures.mediaInfo())
         try job.transition(to: .ready)
         return job
+    }
+
+    private func firstWaitingJobID() -> CompressionJob.ID? {
+        jobOrder.first { id in
+            guard id != activeJobID,
+                  let job = jobsByID[id],
+                  case .queued = job.state else {
+                return false
+            }
+            return true
+        }
+    }
+
+    private func requireWaiting(_ jobID: CompressionJob.ID) throws {
+        let job = try requireJob(jobID)
+        guard jobID != activeJobID,
+              case .queued = job.state else {
+            throw CompressionCoordinatorError.queueMutationRequiresQueued(
+                jobID
+            )
+        }
     }
 
     private func requireJob(
@@ -586,7 +1040,8 @@ private actor FeatureCoordinatorFake: CompressionCoordinating {
     }
 
     private func publish() {
-        let value = snapshot()
+        snapshotRevision &+= 1
+        let value = currentSnapshot()
         continuations.values.forEach { $0.yield(value) }
     }
 

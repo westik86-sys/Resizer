@@ -4,6 +4,19 @@ import Testing
 
 @Suite("CompressionJob invariants")
 struct CompressionJobTests {
+    @Test("A queued batch import can be cancelled before probing begins")
+    func draftCancellation() throws {
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/not-yet-probed.mov")
+        )
+
+        try job.transition(to: .cancelled)
+
+        #expect(job.state == .cancelled)
+        #expect(job.mediaInfo == nil)
+        #expect(job.configuration == nil)
+    }
+
     @Test("Jobs accept only local file inputs")
     func localInputOnly() {
         #expect(throws: CompressionJobValidationError.invalidInputURL) {

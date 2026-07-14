@@ -25,8 +25,49 @@ nonisolated struct CompressionCoordinatorDependencies: Sendable {
 
 nonisolated struct CompressionSnapshot: Sendable, Equatable {
     let jobs: [CompressionJob]
+    let activeJobID: CompressionJob.ID?
+    let isDraining: Bool
+    let revision: UInt64
+
+    init(
+        jobs: [CompressionJob],
+        activeJobID: CompressionJob.ID? = nil,
+        isDraining: Bool = false,
+        revision: UInt64 = 0
+    ) {
+        self.jobs = jobs
+        self.activeJobID = activeJobID
+        self.isDraining = isDraining
+        self.revision = revision
+    }
+
+    var queuedJobIDs: [CompressionJob.ID] {
+        jobs.compactMap { job in
+            guard case .queued = job.state,
+                  job.id != activeJobID else {
+                return nil
+            }
+            return job.id
+        }
+    }
 
     static let empty = CompressionSnapshot(jobs: [])
+}
+
+nonisolated struct JobQueueImport: Sendable, Equatable {
+    let id: CompressionJob.ID
+    let inputURL: URL
+    let createdAt: Date
+
+    init(
+        inputURL: URL,
+        id: CompressionJob.ID = UUID(),
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.inputURL = inputURL
+        self.createdAt = createdAt
+    }
 }
 
 nonisolated enum CompressionCoordinatorError: Error, Sendable, Equatable {
@@ -34,6 +75,9 @@ nonisolated enum CompressionCoordinatorError: Error, Sendable, Equatable {
     case jobNotFound(CompressionJob.ID)
     case activeJobExists(CompressionJob.ID)
     case workflowAlreadyRunning(CompressionJob.ID)
+    case queueMutationRequiresQueued(CompressionJob.ID)
+    case activeQueueJob(CompressionJob.ID)
+    case invalidQueueSuccessor(CompressionJob.ID)
 }
 
 nonisolated enum CompressionWorkflowError: Error, Sendable, Equatable {
@@ -56,6 +100,49 @@ private nonisolated struct PreRunCancellation: Sendable {
 /// allowing deterministic presentation tests to supply an in-memory actor.
 /// Its synchronous requirements are actor-isolated and therefore must be
 /// called with `await` from the main actor.
+nonisolated protocol JobQueueCoordinating: Actor {
+    @discardableResult
+    func add(
+        _ imports: [JobQueueImport]
+    ) async throws -> [CompressionJob.ID]
+
+    func createJob(
+        inputURL: URL,
+        id: CompressionJob.ID,
+        createdAt: Date
+    ) throws -> CompressionJob
+
+    func prepare(jobID: CompressionJob.ID) async throws -> CompressionJob
+
+    @discardableResult
+    func enqueue(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) throws -> CompressionJob
+
+    func startQueue()
+
+    @discardableResult
+    func retryQueued(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob
+
+    func moveQueued(
+        jobID: CompressionJob.ID,
+        before successorID: CompressionJob.ID?
+    ) throws
+
+    func removeQueued(jobID: CompressionJob.ID) throws
+
+    func cancel(jobID: CompressionJob.ID) async
+    func snapshot() -> CompressionSnapshot
+    func snapshots() -> AsyncStream<CompressionSnapshot>
+}
+
+/// Low-level workflow operations stay outside the UI-facing queue protocol so
+/// production presentation code cannot bypass the single FIFO driver. They
+/// remain available to the headless integration and focused workflow tests.
 nonisolated protocol CompressionCoordinating: Actor {
     func createJob(
         inputURL: URL,
@@ -80,7 +167,7 @@ nonisolated protocol CompressionCoordinating: Actor {
     func snapshots() -> AsyncStream<CompressionSnapshot>
 }
 
-actor CompressionCoordinator: CompressionCoordinating {
+actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     private let dependencies: CompressionCoordinatorDependencies
     private var jobsByID: [CompressionJob.ID: CompressionJob] = [:]
     private var jobOrder: [CompressionJob.ID] = []
@@ -95,9 +182,65 @@ actor CompressionCoordinator: CompressionCoordinating {
     private var transcodeCancellations: [
         CompressionJob.ID: PreRunCancellation
     ] = [:]
+    private var activeQueueJobID: CompressionJob.ID?
+    private var queueDriverToken: UUID?
+    private var queueDriverTask: Task<Void, Never>?
+    private var snapshotRevision: UInt64 = 0
 
     init(dependencies: CompressionCoordinatorDependencies) {
         self.dependencies = dependencies
+    }
+
+    deinit {
+        queueDriverTask?.cancel()
+    }
+
+    /// Registers every selected file before probing begins so concurrent UI
+    /// actions can address stable job IDs. Probe/capability failure belongs to
+    /// that job and never prevents the remaining imports from being prepared.
+    @discardableResult
+    func add(
+        _ imports: [JobQueueImport]
+    ) async throws -> [CompressionJob.ID] {
+        let jobs = try imports.map { item in
+            try CompressionJob(
+                id: item.id,
+                inputURL: item.inputURL,
+                createdAt: item.createdAt
+            )
+        }
+
+        var seenIDs: Set<CompressionJob.ID> = []
+        for job in jobs {
+            guard jobsByID[job.id] == nil,
+                  seenIDs.insert(job.id).inserted else {
+                throw CompressionCoordinatorError.duplicateJob(job.id)
+            }
+            try requireAvailableActiveSlot(for: job)
+        }
+
+        for job in jobs {
+            jobsByID[job.id] = job
+            jobOrder.append(job.id)
+        }
+        if !jobs.isEmpty {
+            publishSnapshot()
+        }
+
+        for job in jobs {
+            guard !Task.isCancelled,
+                  jobsByID[job.id]?.state.phase == .draft else {
+                continue
+            }
+            do {
+                _ = try await prepare(jobID: job.id)
+            } catch {
+                // The workflow records a bounded per-job failure/cancellation.
+                // Batch import intentionally proceeds to the next input.
+            }
+        }
+
+        return jobs.map(\.id)
     }
 
     @discardableResult
@@ -214,17 +357,19 @@ actor CompressionCoordinator: CompressionCoordinating {
         }
     }
 
-    /// Runs encode/validate/commit for a job whose input was already probed.
-    /// Retrying an encode-side failure reuses its immutable probe result while
-    /// still rebuilding the complete typed configuration and output plan.
+    /// Captures an immutable configuration and appends a prepared job to the
+    /// FIFO without starting it. Keeping this transition separate is what
+    /// makes queued cancellation, removal, and reordering deterministic.
     @discardableResult
-    func startPrepared(
+    func enqueue(
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
-    ) async throws -> CompressionJob {
+    ) throws -> CompressionJob {
         let job = try requireJob(jobID)
-        try beginWorkflow(jobID: jobID)
-        defer { endWorkflow(jobID: jobID) }
+        guard activeQueueJobID != jobID,
+              !workflowJobIDs.contains(jobID) else {
+            throw CompressionCoordinatorError.activeQueueJob(jobID)
+        }
 
         switch job.state {
         case .ready:
@@ -239,7 +384,146 @@ actor CompressionCoordinator: CompressionCoordinating {
             )
         }
         _ = try configure(configuration, for: jobID)
-        _ = try transition(jobID: jobID, to: .queued)
+        let queued = try transition(jobID: jobID, to: .queued)
+        // FIFO is defined by admission to the waiting queue, not by import
+        // time. This also keeps a later retry behind every existing waiter.
+        jobOrder.removeAll { $0 == jobID }
+        jobOrder.append(jobID)
+        publishSnapshot()
+        return queued
+    }
+
+    /// Starts the single actor-owned driver. Repeated wakeups are no-ops; a
+    /// newly enqueued job is observed by the existing loop before it exits.
+    func startQueue() {
+        guard queueDriverTask == nil,
+              firstWaitingJobID() != nil else {
+            return
+        }
+
+        let token = UUID()
+        queueDriverToken = token
+        queueDriverTask = Task { [weak self] in
+            await self?.drainQueue(token: token)
+        }
+        publishSnapshot()
+    }
+
+    /// Restores one terminal job, appends exactly one new attempt to the tail,
+    /// and wakes the same FIFO driver used by every other queue entry.
+    @discardableResult
+    func retryQueued(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
+        guard activeQueueJobID != jobID,
+              !workflowJobIDs.contains(jobID) else {
+            throw CompressionCoordinatorError.activeQueueJob(jobID)
+        }
+
+        let repeatedPreparation: Bool
+        switch job.state {
+        case .failed(let failure) where failure.retryTarget == .probing:
+            _ = try await prepare(jobID: jobID)
+            repeatedPreparation = true
+        case .cancelled where job.mediaInfo == nil:
+            _ = try await prepare(jobID: jobID)
+            repeatedPreparation = true
+        case .failed(let failure) where failure.retryTarget == .ready:
+            repeatedPreparation = false
+        case .cancelled where job.mediaInfo != nil:
+            repeatedPreparation = false
+        default:
+            throw CompressionWorkflowError.workflowStateChanged(
+                job.state.phase
+            )
+        }
+
+        // `prepare` publishes `ready` before returning. A cancellation can win
+        // that suspension point; never revive that cancelled attempt.
+        if repeatedPreparation {
+            let prepared = try requireJob(jobID)
+            guard case .ready = prepared.state else {
+                throw CompressionWorkflowError.workflowStateChanged(
+                    prepared.state.phase
+                )
+            }
+        }
+
+        let queued = try enqueue(
+            jobID: jobID,
+            configuration: configuration
+        )
+        startQueue()
+        return queued
+    }
+
+    func moveQueued(
+        jobID: CompressionJob.ID,
+        before successorID: CompressionJob.ID?
+    ) throws {
+        try requireWaitingQueueMutation(jobID)
+        if let successorID {
+            guard successorID != jobID else { return }
+            try requireWaitingQueueMutation(successorID)
+        }
+
+        guard let currentIndex = jobOrder.firstIndex(of: jobID) else {
+            throw CompressionCoordinatorError.jobNotFound(jobID)
+        }
+        jobOrder.remove(at: currentIndex)
+
+        if let successorID {
+            guard let successorIndex = jobOrder.firstIndex(of: successorID) else {
+                throw CompressionCoordinatorError.invalidQueueSuccessor(
+                    successorID
+                )
+            }
+            jobOrder.insert(jobID, at: successorIndex)
+        } else if let lastWaitingIndex = jobOrder.lastIndex(where: {
+            isWaitingQueueJob($0)
+        }) {
+            jobOrder.insert(jobID, at: lastWaitingIndex + 1)
+        } else {
+            jobOrder.insert(jobID, at: min(currentIndex, jobOrder.count))
+        }
+        publishSnapshot()
+    }
+
+    func removeQueued(jobID: CompressionJob.ID) throws {
+        try requireWaitingQueueMutation(jobID)
+        jobsByID.removeValue(forKey: jobID)
+        jobOrder.removeAll { $0 == jobID }
+        cancellationIntents.remove(jobID)
+        preRunCancellations.removeValue(forKey: jobID)
+        transcodeCancellations.removeValue(forKey: jobID)
+        publishSnapshot()
+    }
+
+    /// Compatibility entry point for the already-tested one-file workflow.
+    /// Production UI receives only `JobQueueCoordinating` and cannot call it.
+    @discardableResult
+    func startPrepared(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob {
+        _ = try enqueue(jobID: jobID, configuration: configuration)
+        return try await runQueued(jobID: jobID)
+    }
+
+    private func runQueued(
+        jobID: CompressionJob.ID
+    ) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
+        guard case .queued = job.state,
+              let configuration = job.configuration else {
+            throw CompressionWorkflowError.workflowStateChanged(
+                job.state.phase
+            )
+        }
+        try beginWorkflow(jobID: jobID)
+        defer { endWorkflow(jobID: jobID) }
 
         return try await runWorkflowWithSelectedAccess(
             jobID: jobID,
@@ -339,14 +623,19 @@ actor CompressionCoordinator: CompressionCoordinating {
     func cancel(jobID: CompressionJob.ID) async {
         guard var job = jobsByID[jobID] else { return }
 
-        // Preparation intentionally ends at `ready`. At that point there is
-        // no process to cancel, but the single active slot still has to be
-        // released before the UI can select a different input.
+        // Draft imports, prepared inputs, and waiting queue entries have no
+        // process to stop. Their cancellation is an immediate state change.
         guard workflowJobIDs.contains(jobID) else {
-            if case .ready = job.state,
-               (try? job.transition(to: .cancelled)) != nil {
+            switch job.state {
+            case .draft, .ready, .queued:
+                guard (try? job.transition(to: .cancelled)) != nil else {
+                    return
+                }
                 jobsByID[jobID] = job
                 publishSnapshot()
+            case .probing, .running, .finishing, .cancelling,
+                 .cancelled, .completed, .failed:
+                break
             }
             return
         }
@@ -390,7 +679,12 @@ actor CompressionCoordinator: CompressionCoordinating {
     }
 
     func snapshot() -> CompressionSnapshot {
-        CompressionSnapshot(jobs: jobOrder.compactMap { jobsByID[$0] })
+        CompressionSnapshot(
+            jobs: jobOrder.compactMap { jobsByID[$0] },
+            activeJobID: activeQueueJobID,
+            isDraining: queueDriverTask != nil,
+            revision: snapshotRevision
+        )
     }
 
     /// Delivers the current snapshot immediately and then only the newest
@@ -1079,7 +1373,95 @@ actor CompressionCoordinator: CompressionCoordinating {
         transcodeCancellations.removeValue(forKey: jobID)
     }
 
+    private func firstWaitingJobID() -> CompressionJob.ID? {
+        jobOrder.first(where: { isWaitingQueueJob($0) })
+    }
+
+    private func isWaitingQueueJob(_ jobID: CompressionJob.ID) -> Bool {
+        guard jobID != activeQueueJobID,
+              !workflowJobIDs.contains(jobID),
+              let job = jobsByID[jobID],
+              case .queued = job.state else {
+            return false
+        }
+        return true
+    }
+
+    private func requireWaitingQueueMutation(
+        _ jobID: CompressionJob.ID
+    ) throws {
+        let job = try requireJob(jobID)
+        guard case .queued = job.state else {
+            throw CompressionCoordinatorError.queueMutationRequiresQueued(
+                jobID
+            )
+        }
+        guard jobID != activeQueueJobID,
+              !workflowJobIDs.contains(jobID) else {
+            throw CompressionCoordinatorError.activeQueueJob(jobID)
+        }
+    }
+
+    private func drainQueue(token: UUID) async {
+        while queueDriverToken == token, !Task.isCancelled {
+            guard activeQueueJobID == nil else {
+                finishQueueDriver(token: token)
+                return
+            }
+            guard let jobID = firstWaitingJobID() else {
+                finishQueueDriver(token: token)
+                return
+            }
+
+            // Claim the head before the first await. Every concurrent wakeup,
+            // reorder, remove, or cancel observes this ownership immediately.
+            activeQueueJobID = jobID
+            publishSnapshot()
+
+            do {
+                _ = try await runQueued(jobID: jobID)
+            } catch {
+                terminalizeUnexpectedQueueDriverError(jobID: jobID)
+            }
+
+            if activeQueueJobID == jobID {
+                activeQueueJobID = nil
+                publishSnapshot()
+            }
+        }
+
+        finishQueueDriver(token: token)
+    }
+
+    private func terminalizeUnexpectedQueueDriverError(
+        jobID: CompressionJob.ID
+    ) {
+        guard let job = jobsByID[jobID],
+              case .queued = job.state else {
+            return
+        }
+        _ = try? transition(
+            jobID: jobID,
+            to: .failed(
+                TranscodeFailure(
+                    stage: .preflight,
+                    reason: .unknown,
+                    diagnosticTail: nil
+                )
+            )
+        )
+    }
+
+    private func finishQueueDriver(token: UUID) {
+        guard queueDriverToken == token else { return }
+        activeQueueJobID = nil
+        queueDriverToken = nil
+        queueDriverTask = nil
+        publishSnapshot()
+    }
+
     private func publishSnapshot() {
+        snapshotRevision &+= 1
         let value = snapshot()
         for continuation in snapshotContinuations.values {
             continuation.yield(value)
@@ -1120,3 +1502,7 @@ actor CompressionCoordinator: CompressionCoordinating {
         }
     }
 }
+
+/// Source compatibility for the completed single-file stages and their
+/// headless tests. New production code names the queue-owning actor directly.
+typealias CompressionCoordinator = JobQueueCoordinator

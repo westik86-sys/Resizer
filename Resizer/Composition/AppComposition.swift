@@ -5,7 +5,7 @@ struct AppComposition {
     let compressionFeatureModel: CompressionFeatureModel
 
     init(dependencies: CompressionCoordinatorDependencies) {
-        let coordinator = CompressionCoordinator(dependencies: dependencies)
+        let coordinator = JobQueueCoordinator(dependencies: dependencies)
         compressionFeatureModel = CompressionFeatureModel(coordinator: coordinator)
     }
 
