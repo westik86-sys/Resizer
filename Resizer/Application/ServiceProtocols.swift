@@ -215,9 +215,9 @@ nonisolated struct OutputPlan: Sendable, Equatable {
     }
 }
 
-/// Owns the anonymous temporary file and the directory selected for its final
-/// publication. Production reservations keep both descriptors open until the
-/// workflow has validated and committed or abandoned the job.
+/// Owns the anonymous per-job staging file and the directory selected for
+/// clone publication. Production reservations keep both descriptors open
+/// until the workflow has validated and committed or abandoned the job.
 nonisolated final class TemporaryOutputLease: @unchecked Sendable, Equatable {
     let fileDescriptor: Int32?
     let directoryDescriptor: Int32?
@@ -272,9 +272,10 @@ nonisolated enum TemporaryOutputLeaseValidationError:
     case invalidDescriptor
 }
 
-/// An empty regular file created atomically for exactly one output plan. Its
-/// directory entry is removed immediately; the held descriptor is the sole
-/// authority used by FFmpeg, FFprobe, cleanup, and final publication.
+/// An empty regular file created atomically and identity-checked for exactly
+/// one output plan. Its directory entry is then removed; the held anonymous
+/// descriptor is the sole authority used by FFmpeg, FFprobe, cleanup, and
+/// final clone publication.
 nonisolated struct TemporaryOutputReservation: Sendable, Equatable {
     let jobID: CompressionJob.ID
     let temporaryURL: URL

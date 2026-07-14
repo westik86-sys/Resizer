@@ -217,9 +217,9 @@ final class CompressionFeatureModel: ObservableObject {
             return false
         }
         switch job.state {
-        case .draft, .probing, .queued, .running, .cancelling:
+        case .draft, .probing, .queued, .running, .finishing, .cancelling:
             return true
-        case .ready, .finishing, .cancelled, .completed, .failed:
+        case .ready, .cancelled, .completed, .failed:
             return false
         }
     }
@@ -287,7 +287,9 @@ final class CompressionFeatureModel: ObservableObject {
         }
 
         guard !accepted.isEmpty else {
-            presentValidationError("Choose one or more MOV or MP4 videos.")
+            presentValidationError(
+                String(localized: "Choose one or more MOV or MP4 videos.")
+            )
             return
         }
 
@@ -314,28 +316,38 @@ final class CompressionFeatureModel: ObservableObject {
             await synchronizeSnapshot()
             if rejectedCount > 0 {
                 presentValidationError(
-                    "Some items were skipped. Resizer accepts local MOV and MP4 videos."
+                    String(
+                        localized: "Some items were skipped. Resizer accepts local MOV and MP4 videos."
+                    )
                 )
             }
         } catch {
             await synchronizeSnapshot()
             presentValidationError(
-                "The selected videos could not be added to the queue."
+                String(
+                    localized: "The selected videos could not be added to the queue."
+                )
             )
         }
     }
 
     func reportInputSelectionError() {
-        presentValidationError("The videos could not be selected.")
+        presentValidationError(
+            String(localized: "The videos could not be selected.")
+        )
     }
 
     func reportOutputDirectorySelectionError() {
-        presentValidationError("The output folder could not be selected.")
+        presentValidationError(
+            String(localized: "The output folder could not be selected.")
+        )
     }
 
     func selectOutputDirectory(_ directoryURL: URL) {
         guard directoryURL.isFileURL else {
-            presentValidationError("Choose a local output folder.")
+            presentValidationError(
+                String(localized: "Choose a local output folder.")
+            )
             return
         }
         outputDirectoryURL = directoryURL
@@ -356,7 +368,9 @@ final class CompressionFeatureModel: ObservableObject {
             try draftSettings.setQuality(value)
             dismissValidationError()
         } catch {
-            presentValidationError("Quality must be between 0 and 1.")
+            presentValidationError(
+                String(localized: "Quality must be between 0 and 1.")
+            )
         }
     }
 
@@ -393,7 +407,9 @@ final class CompressionFeatureModel: ObservableObject {
         guard !isImporting, !isStartingQueue else { return }
         let jobIDs = startableReadyJobs.map(\.id)
         guard !jobIDs.isEmpty else {
-            presentValidationError("Prepare at least one video before starting.")
+            presentValidationError(
+                String(localized: "Prepare at least one video before starting.")
+            )
             return
         }
         guard let configuration = makeConfiguration(
@@ -428,12 +444,16 @@ final class CompressionFeatureModel: ObservableObject {
         if enqueuedCount > 0 {
             await coordinator.startQueue()
         } else {
-            presentValidationError("No prepared videos could be queued.")
+            presentValidationError(
+                String(localized: "No prepared videos could be queued.")
+            )
         }
         await synchronizeSnapshot()
         if failedCount > 0, enqueuedCount > 0 {
             presentValidationError(
-                "Some prepared videos could not be added to the queue."
+                String(
+                    localized: "Some prepared videos could not be added to the queue."
+                )
             )
         }
     }
@@ -502,7 +522,9 @@ final class CompressionFeatureModel: ObservableObject {
             await synchronizeSnapshot()
         } catch {
             await synchronizeSnapshot()
-            presentValidationError("The job could not be retried.")
+            presentValidationError(
+                String(localized: "The job could not be retried.")
+            )
         }
     }
 
@@ -517,7 +539,9 @@ final class CompressionFeatureModel: ObservableObject {
             try await coordinator.removeQueued(jobID: jobID)
             await synchronizeSnapshot()
         } catch {
-            presentValidationError("Only waiting jobs can be removed.")
+            presentValidationError(
+                String(localized: "Only waiting jobs can be removed.")
+            )
         }
     }
 
@@ -561,7 +585,9 @@ final class CompressionFeatureModel: ObservableObject {
             )
             await synchronizeSnapshot()
         } catch {
-            presentValidationError("Only waiting jobs can be reordered.")
+            presentValidationError(
+                String(localized: "Only waiting jobs can be reordered.")
+            )
         }
     }
 
@@ -583,7 +609,12 @@ final class CompressionFeatureModel: ObservableObject {
               case .failed(let failure) = job.state else {
             return nil
         }
-        return failure.diagnosticTail?.text
+        return DiagnosticReportBuilder.make(
+            failure: failure,
+            inputURL: job.inputURL,
+            outputPolicy: job.configuration?.outputPolicy,
+            jobID: job.id
+        )
     }
 
     func copyDiagnostics() {
@@ -608,12 +639,24 @@ final class CompressionFeatureModel: ObservableObject {
         await synchronizeSnapshot()
     }
 
+    /// Stops snapshot observation, asks the coordinator to cancel and reap
+    /// every active workflow, then captures the terminal state before normal
+    /// application termination is allowed to continue.
+    func shutdown() async {
+        observationTask?.cancel()
+        observationTask = nil
+        await coordinator.shutdown()
+        await synchronizeSnapshot()
+    }
+
     private func makeConfiguration(
         filenameSuffix: String,
         conflictPolicy: OutputConflictPolicy
     ) -> JobConfiguration? {
         guard let outputDirectoryURL else {
-            presentValidationError("Choose an output folder before starting.")
+            presentValidationError(
+                String(localized: "Choose an output folder before starting.")
+            )
             return nil
         }
 
@@ -628,7 +671,9 @@ final class CompressionFeatureModel: ObservableObject {
             )
         } catch {
             presentValidationError(
-                "Check the compression settings and output filename suffix."
+                String(
+                    localized: "Check the compression settings and output filename suffix."
+                )
             )
             return nil
         }

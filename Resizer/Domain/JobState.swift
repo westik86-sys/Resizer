@@ -88,6 +88,8 @@ nonisolated enum JobState: Sendable, Equatable {
             failure.stage == .encode
         case (.finishing(.validating), .finishing(.committing)):
             true
+        case (.finishing, .cancelling):
+            true
         case (.finishing(.validating), .failed(let failure)):
             failure.stage == .validate
         case (.finishing(.committing), .completed):
@@ -96,8 +98,14 @@ nonisolated enum JobState: Sendable, Equatable {
             failure.stage == .commit
         case (.cancelling, .cancelled):
             true
+        case (.cancelling, .completed):
+            // Publication is the linearization point. A cancellation that
+            // races after an exclusive final commit must not hide a result
+            // that is already visible on disk.
+            true
         case (.cancelling, .failed(let failure)):
-            failure.stage == .encode && failure.reason == .fileSystem
+            [.encode, .validate, .commit].contains(failure.stage)
+                && failure.reason.isFileSystemRelated
         case (.cancelled, .ready):
             true
         case (.cancelled, .probing):

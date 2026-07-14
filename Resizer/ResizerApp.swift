@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct ResizerApp: App {
+    @NSApplicationDelegateAdaptor(ApplicationLifecycleDelegate.self)
+    private var lifecycleDelegate
+
     private let bootstrap: AppBootstrap
 
     init() {
@@ -15,6 +18,11 @@ struct ResizerApp: App {
                 CompressionRootView(
                     model: composition.compressionFeatureModel
                 )
+                .onAppear {
+                    lifecycleDelegate.installShutdownAction {
+                        await composition.compressionFeatureModel.shutdown()
+                    }
+                }
             case .failed:
                 StartupFailureView()
             }
@@ -57,10 +65,12 @@ private struct CompressionRootView: View {
 private struct StartupFailureView: View {
     var body: some View {
         ContentUnavailableView(
-            "Resizer couldn’t start",
+            String(localized: "Resizer couldn’t start"),
             systemImage: "exclamationmark.triangle",
             description: Text(
-                "The bundled video tools are unavailable or invalid. Reinstall Resizer and try again."
+                String(
+                    localized: "The bundled video tools are unavailable or invalid. Reinstall Resizer and try again."
+                )
             )
         )
         .accessibilityIdentifier("startup-failure")

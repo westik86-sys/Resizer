@@ -390,7 +390,7 @@ struct JobQueueCoordinatorTests {
         if let conflictedJob = snapshot.job(id: ids[1]),
            case .failed(let failure) = conflictedJob.state {
             #expect(failure.stage == .preflight)
-            #expect(failure.reason == .fileSystem)
+            #expect(failure.reason == .outputConflict)
         } else {
             Issue.record("Expected only the conflicted job to fail")
         }
@@ -454,6 +454,35 @@ struct JobQueueCoordinatorTests {
         #expect(Set(starts).count == starts.count)
         #expect(cancelled.isDisjoint(with: starts))
         #expect(await harness.transcoder.maximumConcurrentCount() == 1)
+    }
+
+    @Test("Shutdown cancels the active job and every waiter before returning")
+    func shutdownDrainsQueueAndRejectsNewWork() async throws {
+        let harness = try await QueueHarness.make()
+        let ids = [UUID(), UUID(), UUID()]
+        try await harness.addAndEnqueue(ids)
+        await harness.coordinator.startQueue()
+        try await harness.transcoder.waitUntilStarted(ids[0])
+
+        await harness.coordinator.shutdown()
+
+        let snapshot = await harness.coordinator.snapshot()
+        #expect(!snapshot.isDraining)
+        #expect(snapshot.activeJobID == nil)
+        #expect(snapshot.queuedJobIDs.isEmpty)
+        #expect(snapshot.jobs.allSatisfy { $0.state.phase == .cancelled })
+        #expect(await harness.transcoder.startedJobIDs() == [ids[0]])
+        #expect(
+            (await harness.transcoder.cancelledJobIDs()).contains(ids[0])
+        )
+
+        await harness.coordinator.startQueue()
+        #expect(!(await harness.coordinator.snapshot().isDraining))
+        await expectCoordinatorError(.shuttingDown) {
+            _ = try await harness.coordinator.add([
+                JobQueueImport(inputURL: QueueHarness.inputURL(for: UUID())),
+            ])
+        }
     }
 
     private func expectCoordinatorError(

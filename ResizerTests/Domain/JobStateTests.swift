@@ -57,10 +57,13 @@ struct JobStateTests {
             "running->cancelling",
             "running->failedEncode",
             "validating->committing",
+            "validating->cancelling",
             "validating->failedValidate",
             "committing->completed",
+            "committing->cancelling",
             "committing->failedCommit",
             "cancelling->cancelled",
+            "cancelling->completed",
             "cancelled->ready",
             "cancelled->probing",
             "failedProbe->probing",
@@ -115,7 +118,7 @@ struct JobStateTests {
         #expect(running.canTransition(to: cancelling))
         #expect(cancelling.canTransition(to: .cancelled))
         #expect(!cancelling.canTransition(to: .finishing(.validating)))
-        #expect(!cancelling.canTransition(
+        #expect(cancelling.canTransition(
             to: .completed(try TestFixtures.result())
         ))
         #expect(!cancelling.canTransition(

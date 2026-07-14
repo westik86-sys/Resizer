@@ -217,7 +217,7 @@ struct CompressionWorkflowTests {
         }
     }
 
-    @Test("An invalid FFprobe source is a probe file-system failure")
+    @Test("An invalid FFprobe source is an input-unavailable failure")
     func invalidProbeSourceFailure() async throws {
         let harness = try await WorkflowHarness.make(
             options: .init(
@@ -228,7 +228,7 @@ struct CompressionWorkflowTests {
         let failure = try await requireFailure(harness)
 
         #expect(failure.stage == .probe)
-        #expect(failure.reason == .fileSystem)
+        #expect(failure.reason == .inputUnavailable)
         try await expectFailedState(
             coordinator: harness.coordinator,
             jobID: harness.jobID,
@@ -431,7 +431,7 @@ struct CompressionWorkflowTests {
         let failure = try await requireFailure(harness)
 
         #expect(failure.stage == .preflight)
-        #expect(failure.reason == .fileSystem)
+        #expect(failure.reason == .outputConflict)
         #expect(await harness.transcoder.observedTranscodeRequests().isEmpty)
         #expect(await harness.fileAccess.cleanedPlans().isEmpty)
         #expect(await harness.fileAccess.committedPlans().isEmpty)
@@ -627,8 +627,35 @@ struct CompressionWorkflowTests {
         try await expectOnlyExactCleanup(harness)
     }
 
-    @Test("Finishing validation wins over a late cancel")
-    func finishingWinsLateCancellation() async throws {
+    @Test("A bounded no-space diagnostic becomes actionable storage failure")
+    func noSpaceProcessFailureMapping() async throws {
+        let diagnostic = try BoundedData(
+            data: Data("muxer: No space left on device\n".utf8),
+            byteLimit: 128,
+            wasTruncated: false
+        )
+        let harness = try await WorkflowHarness.make(
+            options: .init(
+                transcodingServiceFailure: .processFailed(
+                    termination: ProcessTerminationStatus(
+                        status: 1,
+                        reason: .exit
+                    ),
+                    diagnosticTail: diagnostic
+                )
+            )
+        )
+
+        let failure = try await requireFailure(harness)
+
+        #expect(failure.stage == .encode)
+        #expect(failure.reason == .insufficientStorage)
+        #expect(failure.diagnosticTail?.text.contains("No space") == true)
+        try await expectOnlyExactCleanup(harness)
+    }
+
+    @Test("Cancellation during validation cleans up without publishing")
+    func cancellationDuringValidation() async throws {
         let validationStarted = WorkflowGate()
         let validationRelease = WorkflowGate()
         let harness = try await WorkflowHarness.make(
@@ -652,16 +679,64 @@ struct CompressionWorkflowTests {
         await harness.coordinator.cancel(jobID: harness.jobID)
         await validationRelease.open()
 
-        let completed = try await operation.value
-
-        guard case .completed(let result) = completed.state else {
-            Issue.record("Expected completed state, got \(completed.state)")
-            return
+        do {
+            _ = try await operation.value
+            Issue.record("Expected validation cancellation")
+        } catch is CancellationError {
+            // Expected after the cancellable validation operation unwinds.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
         }
-        #expect(result.outputURL == harness.urls.final)
+
+        let cancelled = try #require(
+            await harness.coordinator.job(id: harness.jobID)
+        )
+        #expect(cancelled.state == .cancelled)
         #expect(await harness.transcoder.cancelCount() == 0)
-        #expect(await harness.fileAccess.cleanedPlans().isEmpty)
-        #expect(await harness.fileAccess.committedPlans().map(\.finalURL) == [harness.urls.final])
+        #expect(await harness.fileAccess.committedPlans().isEmpty)
+        try await expectOnlyExactCleanup(harness)
+    }
+
+    @Test("Cancellation before final publication cleans up without committing")
+    func cancellationDuringCommit() async throws {
+        let commitStarted = WorkflowGate()
+        let commitRelease = WorkflowGate()
+        let harness = try await WorkflowHarness.make(
+            options: .init(
+                commitStarted: commitStarted,
+                commitRelease: commitRelease
+            )
+        )
+        let operation = Task {
+            try await harness.coordinator.process(
+                jobID: harness.jobID,
+                configuration: harness.configuration
+            )
+        }
+
+        try await commitStarted.waitUntilOpen()
+        let finishing = try #require(
+            await harness.coordinator.job(id: harness.jobID)
+        )
+        #expect(finishing.state == .finishing(.committing))
+        await harness.coordinator.cancel(jobID: harness.jobID)
+        await commitRelease.open()
+
+        do {
+            _ = try await operation.value
+            Issue.record("Expected commit cancellation")
+        } catch is CancellationError {
+            // Expected before the exclusive publication operation completes.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+
+        let cancelled = try #require(
+            await harness.coordinator.job(id: harness.jobID)
+        )
+        #expect(cancelled.state == .cancelled)
+        #expect(await harness.fileAccess.committedPlans().isEmpty)
+        try await expectOnlyExactCleanup(harness)
     }
 
     @Test("Cleanup failures after encode and cancel become file-system failures")
@@ -817,6 +892,8 @@ private nonisolated struct WorkflowHarness: Sendable {
         var transcodeRelease: WorkflowGate?
         var validationProbeStarted: WorkflowGate?
         var validationProbeRelease: WorkflowGate?
+        var commitStarted: WorkflowGate?
+        var commitRelease: WorkflowGate?
     }
 
     let jobID: CompressionJob.ID
@@ -893,6 +970,8 @@ private nonisolated struct WorkflowHarness: Sendable {
             temporaryOutputExists: options.temporaryOutputExists,
             commitFailure: options.commitFailure,
             cleanupFailure: options.cleanupFailure,
+            commitStarted: options.commitStarted,
+            commitRelease: options.commitRelease,
             temporaryMetadataChangesAfterProbe:
                 options.temporaryMetadataChangesAfterProbe,
             events: events
@@ -1198,6 +1277,8 @@ private actor WorkflowFileAccess: FileAccessing {
     private let temporaryOutputExists: Bool
     private let commitFailure: WorkflowFakeError?
     private let cleanupFailure: WorkflowFakeError?
+    private let commitStarted: WorkflowGate?
+    private let commitRelease: WorkflowGate?
     private let temporaryMetadataChangesAfterProbe: Bool
     private let events: WorkflowEventLog
     private var temporaryIsReserved = false
@@ -1212,6 +1293,8 @@ private actor WorkflowFileAccess: FileAccessing {
         temporaryOutputExists: Bool,
         commitFailure: WorkflowFakeError?,
         cleanupFailure: WorkflowFakeError?,
+        commitStarted: WorkflowGate?,
+        commitRelease: WorkflowGate?,
         temporaryMetadataChangesAfterProbe: Bool,
         events: WorkflowEventLog
     ) {
@@ -1221,6 +1304,8 @@ private actor WorkflowFileAccess: FileAccessing {
         self.temporaryOutputExists = temporaryOutputExists
         self.commitFailure = commitFailure
         self.cleanupFailure = cleanupFailure
+        self.commitStarted = commitStarted
+        self.commitRelease = commitRelease
         self.temporaryMetadataChangesAfterProbe =
             temporaryMetadataChangesAfterProbe
         self.events = events
@@ -1318,6 +1403,8 @@ private actor WorkflowFileAccess: FileAccessing {
             !expectedTemporaryMetadata.isDirectory else {
             throw WorkflowFakeError.unexpectedRequest
         }
+        await commitStarted?.open()
+        try await commitRelease?.wait()
         commits.append(plan)
         events.append("commit")
         if let commitFailure {

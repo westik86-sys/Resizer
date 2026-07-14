@@ -53,18 +53,33 @@ struct SettingsView: View {
                     value: CompressionPreferences.bundledFFmpegLicenseProfile
                 )
 
-                Text(
-                    "FFmpeg is bundled with Resizer and built using an LGPL-only profile. "
-                    + "GPL and nonfree components, including libx264 and libx265, are not included."
-                )
+                Text(String(
+                    localized: "FFmpeg is bundled with Resizer and built using an LGPL-only profile. GPL and nonfree components, including libx264 and libx265, are not included."
+                ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-ffmpeg-license-disclosure")
+
+                legalDisclosure(
+                    title: String(localized: "Third-party notices"),
+                    text: BundledLegalDocuments.thirdPartyNotices,
+                    identifier: "settings-third-party-notices"
+                )
+                legalDisclosure(
+                    title: String(localized: "GNU LGPL 2.1 license"),
+                    text: BundledLegalDocuments.lgpl21,
+                    identifier: "settings-lgpl-21"
+                )
+                legalDisclosure(
+                    title: String(localized: "GNU LGPL 3 license"),
+                    text: BundledLegalDocuments.lgpl3,
+                    identifier: "settings-lgpl-3"
+                )
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 420)
+        .frame(width: 540, height: 560)
         .onAppear(perform: restoreValidatedPreferences)
         .onChange(of: filenameSuffixDraft) { _, newValue in
             persistFilenameSuffixIfValid(newValue)
@@ -92,6 +107,24 @@ struct SettingsView: View {
             ?? CompressionPreferences.defaultOutputConflictPolicy
     }
 
+    private func legalDisclosure(
+        title: String,
+        text: String,
+        identifier: String
+    ) -> some View {
+        DisclosureGroup(title) {
+            ScrollView {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            }
+            .frame(height: 130)
+        }
+        .accessibilityIdentifier(identifier)
+    }
+
     private var appVersionDescription: String {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -102,13 +135,13 @@ struct SettingsView: View {
 
         return switch (version, build) {
         case let (version?, build?):
-            "Version \(version) (\(build))"
+            String(localized: "Version \(version) (\(build))")
         case let (version?, nil):
-            "Version \(version)"
+            String(localized: "Version \(version)")
         case let (nil, build?):
-            "Build \(build)"
+            String(localized: "Build \(build)")
         case (nil, nil):
-            "Development build"
+            String(localized: "Development build")
         }
     }
 
@@ -143,6 +176,34 @@ struct SettingsView: View {
         }
 
         filenameSuffixDraft = normalizedValue
+    }
+}
+
+private enum BundledLegalDocuments {
+    static let thirdPartyNotices = load(
+        resource: "THIRD_PARTY_NOTICES",
+        fileExtension: "md"
+    )
+    static let lgpl21 = load(
+        resource: "COPYING.LGPLv2.1",
+        fileExtension: "txt"
+    )
+    static let lgpl3 = load(
+        resource: "COPYING.LGPLv3",
+        fileExtension: "txt"
+    )
+
+    private static func load(
+        resource: String,
+        fileExtension: String
+    ) -> String {
+        guard let url = Bundle.main.url(
+            forResource: resource,
+            withExtension: fileExtension
+        ), let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return String(localized: "Bundled legal document unavailable.")
+        }
+        return text
     }
 }
 

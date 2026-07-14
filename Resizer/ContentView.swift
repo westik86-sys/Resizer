@@ -3,6 +3,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private enum AccessibilityFocusTarget: Hashable {
+        case validationError
+        case validationBanner
+        case failure
+        case success
+    }
+
     private enum ImportTarget {
         case input
         case outputDirectory
@@ -29,6 +36,8 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var isAdvancedSettingsExpanded = false
     @State private var isDiagnosticsExpanded = false
+    @AccessibilityFocusState private var accessibilityFocus:
+        AccessibilityFocusTarget?
 
     init(model: CompressionFeatureModel) {
         _model = ObservedObject(wrappedValue: model)
@@ -81,6 +90,7 @@ struct ContentView: View {
                     .disabled(!model.canStart)
                     .accessibilityIdentifier("start-queue-toolbar")
                     .help("Add all prepared videos to the FIFO queue")
+                    .keyboardShortcut(.return, modifiers: [.command])
                 }
             }
 
@@ -108,6 +118,24 @@ struct ContentView: View {
             Task { await model.importVideos(urls) }
             return true
         } isTargeted: { isDropTargeted = $0 }
+        .onChange(of: model.screenState) { _, state in
+            switch state {
+            case .validationError:
+                accessibilityFocus = .validationError
+            case .failure:
+                accessibilityFocus = .failure
+            case .success:
+                accessibilityFocus = .success
+            case .empty, .importing, .probing, .ready, .queued,
+                 .running, .cancelling:
+                break
+            }
+        }
+        .onChange(of: model.validationMessage) { _, message in
+            if message != nil, !model.jobs.isEmpty {
+                accessibilityFocus = .validationBanner
+            }
+        }
     }
 
     private var header: some View {
@@ -200,6 +228,11 @@ struct ContentView: View {
                 .disabled(!model.canMoveSelectedUp)
                 .accessibilityLabel("Move selected job up")
                 .accessibilityIdentifier("move-queue-job-up")
+                .keyboardShortcut(
+                    .upArrow,
+                    modifiers: [.command, .option]
+                )
+                .help("Move selected job up (Option-Command-Up Arrow)")
 
                 Button {
                     guard let jobID = model.selectedJobID,
@@ -226,6 +259,11 @@ struct ContentView: View {
                 .disabled(!model.canMoveSelectedDown)
                 .accessibilityLabel("Move selected job down")
                 .accessibilityIdentifier("move-queue-job-down")
+                .keyboardShortcut(
+                    .downArrow,
+                    modifiers: [.command, .option]
+                )
+                .help("Move selected job down (Option-Command-Down Arrow)")
 
                 Button(role: .destructive) {
                     guard let jobID = model.selectedJobID else { return }
@@ -236,6 +274,8 @@ struct ContentView: View {
                 .disabled(!model.canRemoveSelected)
                 .accessibilityLabel("Remove selected waiting job")
                 .accessibilityIdentifier("remove-queue-job")
+                .keyboardShortcut(.delete, modifiers: [])
+                .help("Remove selected waiting job (Delete)")
 
                 Spacer()
 
@@ -308,15 +348,19 @@ struct ContentView: View {
             emptyState
         case .importing:
             activityCard(
-                title: "Adding videos…",
-                detail: "Acquiring secure access and preparing queue items."
+                title: String(localized: "Adding videos…"),
+                detail: String(
+                    localized: "Acquiring secure access and preparing queue items."
+                )
             )
         case .probing(let job):
             VStack(spacing: 20) {
                 sourceCard(job)
                 activityCard(
-                    title: "Reading video details…",
-                    detail: "Checking duration, streams, codecs, and dimensions.",
+                    title: String(localized: "Reading video details…"),
+                    detail: String(
+                        localized: "Checking duration, streams, codecs, and dimensions."
+                    ),
                     cancellableJobID: job.id
                 )
             }
@@ -342,6 +386,7 @@ struct ContentView: View {
             Image(systemName: "arrow.down.doc.fill")
                 .font(.system(size: 46, weight: .light))
                 .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+                .accessibilityHidden(true)
 
             VStack(spacing: 7) {
                 Text("Drop videos here")
@@ -483,12 +528,16 @@ struct ContentView: View {
                                 .percent.precision(.fractionLength(0))
                             )
                         )
+                        .accessibilityHint(
+                            "Move left for a smaller file or right for better quality"
+                        )
                         .accessibilityIdentifier("quality-slider")
                 }
 
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Text(recipeSummary)
                         .font(.callout)
                 }
@@ -583,6 +632,7 @@ struct ContentView: View {
                 Image(systemName: "folder")
                     .font(.title2)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 3) {
                     if let outputURL = model.outputDirectoryURL {
@@ -606,6 +656,12 @@ struct ContentView: View {
                     importTarget = .outputDirectory
                     isImporterPresented = true
                 }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .accessibilityLabel(
+                    model.outputDirectoryURL == nil
+                        ? "Choose output folder"
+                        : "Change output folder"
+                )
                 .accessibilityIdentifier("choose-output-folder")
             }
             .padding(.vertical, 4)
@@ -655,6 +711,7 @@ struct ContentView: View {
                         }
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
                     }
 
                     HStack {
@@ -695,6 +752,12 @@ struct ContentView: View {
                     }
                     if let fraction = progress?.fractionCompleted {
                         ProgressView(value: fraction)
+                            .accessibilityLabel("Cancelling compression")
+                            .accessibilityValue(
+                                fraction.formatted(
+                                    .percent.precision(.fractionLength(0))
+                                )
+                            )
                             .accessibilityIdentifier("compression-progress")
                     }
                 }
@@ -720,6 +783,11 @@ struct ContentView: View {
                     VStack(spacing: 5) {
                         Text("Compressed copy is ready")
                             .font(.title2.weight(.semibold))
+                            .accessibilityFocused(
+                                $accessibilityFocus,
+                                equals: .success
+                            )
+                            .accessibilityAddTraits(.isHeader)
                         Text(result.outputURL.lastPathComponent)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -728,25 +796,38 @@ struct ContentView: View {
 
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 28) {
-                            resultMetric("Before", value: Self.byteCountString(inputBytes))
+                            resultMetric(
+                                String(localized: "Before"),
+                                value: Self.byteCountString(inputBytes)
+                            )
                             Image(systemName: "arrow.right")
                                 .foregroundStyle(.tertiary)
-                            resultMetric("After", value: Self.byteCountString(result.outputByteCount))
+                                .accessibilityHidden(true)
+                            resultMetric(
+                                String(localized: "After"),
+                                value: Self.byteCountString(result.outputByteCount)
+                            )
                             if let savings = Self.savings(input: inputBytes, output: result.outputByteCount) {
-                                resultMetric("Saved", value: savings)
+                                resultMetric(String(localized: "Saved"), value: savings)
                             }
-                            resultMetric("Time", value: Self.durationString(result.elapsed))
+                            resultMetric(
+                                String(localized: "Time"),
+                                value: Self.durationString(result.elapsed)
+                            )
                         }
 
                         VStack(spacing: 12) {
                             resultMetric(
-                                "Size",
+                                String(localized: "Size"),
                                 value: "\(Self.byteCountString(inputBytes)) → \(Self.byteCountString(result.outputByteCount))"
                             )
                             if let savings = Self.savings(input: inputBytes, output: result.outputByteCount) {
-                                resultMetric("Saved", value: savings)
+                                resultMetric(String(localized: "Saved"), value: savings)
                             }
-                            resultMetric("Time", value: Self.durationString(result.elapsed))
+                            resultMetric(
+                                String(localized: "Time"),
+                                value: Self.durationString(result.elapsed)
+                            )
                         }
                     }
 
@@ -774,7 +855,9 @@ struct ContentView: View {
         _ job: CompressionJob,
         presentation: CompressionFailurePresentation
     ) -> some View {
-        VStack(spacing: 20) {
+        let diagnosticText = model.diagnosticText(for: job.id)
+
+        return VStack(spacing: 20) {
             sourceCard(job)
 
             if job.mediaInfo != nil {
@@ -792,13 +875,21 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(presentation.title)
                                 .font(.title3.weight(.semibold))
+                                .accessibilityFocused(
+                                    $accessibilityFocus,
+                                    equals: .failure
+                                )
+                                .accessibilityAddTraits(.isHeader)
                             Text(presentation.detail)
                                 .foregroundStyle(.secondary)
                         }
                     }
 
-                    if model.diagnosticText(for: job.id) != nil {
-                        diagnosticDisclosure(jobID: job.id)
+                    if let diagnosticText {
+                        diagnosticDisclosure(
+                            diagnosticText,
+                            jobID: job.id
+                        )
                     }
 
                     HStack {
@@ -821,6 +912,8 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.canRetry(jobID: job.id))
                         .accessibilityIdentifier("retry-compression")
+                        .keyboardShortcut("r", modifiers: [.command])
+                        .help("Retry selected job (Command-R)")
                     }
                 }
                 .padding(.vertical, 8)
@@ -829,6 +922,7 @@ struct ContentView: View {
     }
 
     private func diagnosticDisclosure(
+        _ diagnosticText: String,
         jobID: CompressionJob.ID
     ) -> some View {
         DisclosureGroup("Diagnostics", isExpanded: $isDiagnosticsExpanded) {
@@ -837,27 +931,27 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if let text = model.diagnosticText(for: jobID) {
-                    ScrollView {
-                        Text(text)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 160)
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                ScrollView {
+                    Text(diagnosticText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .padding(10)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
 
-                    HStack {
-                        Text("Only the bounded tail of the encoder diagnostic is shown.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Copy Diagnostics") {
-                            model.copyDiagnostics(jobID: jobID)
-                        }
-                        .accessibilityIdentifier("copy-diagnostics")
+                HStack {
+                    Text(
+                        "Technical details include only a bounded, redacted diagnostic tail."
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Copy Diagnostics") {
+                        model.copyDiagnostics(jobID: jobID)
                     }
+                    .accessibilityIdentifier("copy-diagnostics")
                 }
             }
             .padding(.top, 10)
@@ -873,6 +967,11 @@ struct ContentView: View {
                 .accessibilityHidden(true)
             Text("Check your selection")
                 .font(.title2.weight(.semibold))
+                .accessibilityFocused(
+                    $accessibilityFocus,
+                    equals: .validationError
+                )
+                .accessibilityAddTraits(.isHeader)
             Text(message)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -901,6 +1000,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 42, height: 42)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(job.inputURL.lastPathComponent)
@@ -917,11 +1017,26 @@ struct ContentView: View {
                             alignment: .leading,
                             spacing: 8
                         ) {
-                            metadataValue("Size", Self.byteCountString(mediaInfo.byteCount))
-                            metadataValue("Duration", Self.mediaDurationString(mediaInfo.durationMicroseconds))
-                            metadataValue("Resolution", Self.resolutionString(mediaInfo))
-                            metadataValue("Frame rate", Self.frameRateString(mediaInfo))
-                            metadataValue("Codecs", Self.codecString(mediaInfo))
+                            metadataValue(
+                                String(localized: "Size"),
+                                Self.byteCountString(mediaInfo.byteCount)
+                            )
+                            metadataValue(
+                                String(localized: "Duration"),
+                                Self.mediaDurationString(mediaInfo.durationMicroseconds)
+                            )
+                            metadataValue(
+                                String(localized: "Resolution"),
+                                Self.resolutionString(mediaInfo)
+                            )
+                            metadataValue(
+                                String(localized: "Frame rate"),
+                                Self.frameRateString(mediaInfo)
+                            )
+                            metadataValue(
+                                String(localized: "Codecs"),
+                                Self.codecString(mediaInfo)
+                            )
                         }
                     } else {
                         Text("Waiting for metadata…")
@@ -977,12 +1092,15 @@ struct ContentView: View {
         if case .encoding(let progress?) = stage,
            let fraction = progress.fractionCompleted {
             ProgressView(value: fraction)
+                .accessibilityLabel(stage.title)
                 .accessibilityValue(
                     fraction.formatted(.percent.precision(.fractionLength(0)))
                 )
                 .accessibilityIdentifier("compression-progress")
         } else {
             ProgressView()
+                .accessibilityLabel(stage.title)
+                .accessibilityValue("In progress")
                 .accessibilityIdentifier("compression-progress")
         }
     }
@@ -996,6 +1114,8 @@ struct ContentView: View {
                 .font(.callout)
                 .lineLimit(1)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label): \(value)")
     }
 
     private func resultMetric(_ label: String, value: String) -> some View {
@@ -1007,6 +1127,8 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label): \(value)")
     }
 
     private var selectionBinding: Binding<CompressionJob.ID?> {
@@ -1023,6 +1145,11 @@ struct ContentView: View {
                 .accessibilityHidden(true)
             Text(message)
                 .font(.callout)
+                .accessibilityFocused(
+                    $accessibilityFocus,
+                    equals: .validationBanner
+                )
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             Button("Dismiss") {
                 model.dismissValidationError()
@@ -1038,37 +1165,39 @@ struct ContentView: View {
     private func queueStatus(for job: CompressionJob) -> String {
         switch job.state {
         case .draft:
-            "Waiting to inspect"
+            String(localized: "Waiting to inspect")
         case .probing:
-            "Reading details"
+            String(localized: "Reading details")
         case .ready:
-            "Ready"
+            String(localized: "Ready")
         case .queued where model.snapshot.activeJobID == job.id:
-            "Preparing"
+            String(localized: "Preparing")
         case .queued:
             if let position = model.queuePosition(for: job.id) {
-                "Waiting · #\(position)"
+                String(localized: "Waiting · #\(position)")
             } else {
-                "Waiting"
+                String(localized: "Waiting")
             }
         case .running(let progress):
             if let fraction = progress?.fractionCompleted {
-                "Compressing · \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+                String(
+                    localized: "Compressing · \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+                )
             } else {
-                "Compressing"
+                String(localized: "Compressing")
             }
         case .finishing(.validating):
-            "Validating"
+            String(localized: "Validating")
         case .finishing(.committing):
-            "Saving"
+            String(localized: "Saving")
         case .cancelling:
-            "Cancelling"
+            String(localized: "Cancelling")
         case .cancelled:
-            "Cancelled"
+            String(localized: "Cancelled")
         case .completed:
-            "Completed"
+            String(localized: "Completed")
         case .failed:
-            "Failed"
+            String(localized: "Failed")
         }
     }
 
@@ -1208,9 +1337,9 @@ struct ContentView: View {
 private extension CompressionPreset {
     var title: String {
         switch self {
-        case .highQuality: "Best Quality"
-        case .balanced: "Balanced"
-        case .smallFile: "Smaller File"
+        case .highQuality: String(localized: "Best Quality")
+        case .balanced: String(localized: "Balanced")
+        case .smallFile: String(localized: "Smaller File")
         }
     }
 }
@@ -1218,33 +1347,33 @@ private extension CompressionPreset {
 private extension CompressionDraftSettings.ResolutionOption {
     var title: String {
         switch self {
-        case .original: "Original"
-        case .p2160: "Up to 2160p"
-        case .p1080: "Up to 1080p"
-        case .p720: "Up to 720p"
-        case .p480: "Up to 480p"
+        case .original: String(localized: "Original")
+        case .p2160: String(localized: "Up to 2160p")
+        case .p1080: String(localized: "Up to 1080p")
+        case .p720: String(localized: "Up to 720p")
+        case .p480: String(localized: "Up to 480p")
         }
     }
 
-    var summary: String { title.lowercased() }
+    var summary: String { title.lowercased(with: .current) }
 }
 
 private extension CompressionDraftSettings.FrameRateOption {
     var title: String {
         switch self {
-        case .original: "Original"
-        case .fps60: "Up to 60 fps"
-        case .fps30: "Up to 30 fps"
-        case .fps24: "Up to 24 fps"
+        case .original: String(localized: "Original")
+        case .fps60: String(localized: "Up to 60 fps")
+        case .fps30: String(localized: "Up to 30 fps")
+        case .fps24: String(localized: "Up to 24 fps")
         }
     }
 
     var summary: String {
         switch self {
-        case .original: "original FPS"
-        case .fps60: "up to 60 FPS"
-        case .fps30: "up to 30 FPS"
-        case .fps24: "up to 24 FPS"
+        case .original: String(localized: "original FPS")
+        case .fps60: String(localized: "up to 60 FPS")
+        case .fps30: String(localized: "up to 30 FPS")
+        case .fps24: String(localized: "up to 24 FPS")
         }
     }
 }
@@ -1252,17 +1381,18 @@ private extension CompressionDraftSettings.FrameRateOption {
 private extension CompressionDraftSettings.AudioOption {
     var title: String {
         switch self {
-        case .aac192Kbps: "AAC 192 kbps"
-        case .aac128Kbps: "AAC 128 kbps"
-        case .aac96Kbps: "AAC 96 kbps"
-        case .remove: "No audio"
+        case .aac192Kbps: String(localized: "AAC 192 kbps")
+        case .aac128Kbps: String(localized: "AAC 128 kbps")
+        case .aac96Kbps: String(localized: "AAC 96 kbps")
+        case .remove: String(localized: "No audio")
         }
     }
 
     var summary: String {
         switch self {
-        case .remove: "no audio"
-        case .aac192Kbps, .aac128Kbps, .aac96Kbps: "AAC"
+        case .remove: String(localized: "no audio")
+        case .aac192Kbps, .aac128Kbps, .aac96Kbps:
+            String(localized: "AAC")
         }
     }
 }
@@ -1270,8 +1400,8 @@ private extension CompressionDraftSettings.AudioOption {
 private extension CompressionDraftSettings.MetadataOption {
     var title: String {
         switch self {
-        case .preserve: "Preserve common metadata"
-        case .remove: "Remove metadata"
+        case .preserve: String(localized: "Preserve common metadata")
+        case .remove: String(localized: "Remove metadata")
         }
     }
 }
@@ -1279,10 +1409,11 @@ private extension CompressionDraftSettings.MetadataOption {
 private extension CompressionRunningStage {
     var title: String {
         switch self {
-        case .preparing: "Preparing compression…"
-        case .encoding: "Compressing video…"
-        case .validating: "Validating compressed copy…"
-        case .committing: "Saving final copy…"
+        case .preparing: String(localized: "Preparing compression…")
+        case .encoding: String(localized: "Compressing video…")
+        case .validating:
+            String(localized: "Validating compressed copy…")
+        case .committing: String(localized: "Saving final copy…")
         }
     }
 
@@ -1297,45 +1428,6 @@ private extension CompressionRunningStage {
 }
 
 private extension CompressionFailurePresentation {
-    var title: String {
-        switch self {
-        case .cancelled:
-            "Compression cancelled"
-        case .transcode(let failure):
-            switch failure.stage {
-            case .probe: "Couldn’t read this video"
-            case .preflight: "Couldn’t prepare compression"
-            case .encode: "Compression failed"
-            case .validate: "Couldn’t validate the compressed copy"
-            case .commit: "Couldn’t save the compressed copy"
-            }
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .cancelled:
-            "No final output was published. You can safely retry."
-        case .transcode(let failure):
-            switch failure.reason {
-            case .serviceUnavailable:
-                "The bundled video tools or required encoder are unavailable."
-            case .invalidMedia:
-                "The selected video contains media this version cannot process."
-            case .processFailed(let exitCode):
-                if let exitCode {
-                    "The bundled encoder exited with status \(exitCode)."
-                } else {
-                    "The bundled encoder stopped unexpectedly."
-                }
-            case .fileSystem:
-                "Check that the selected file and output folder are still available."
-            case .unknown:
-                "The operation stopped unexpectedly. Diagnostics may contain more detail."
-            }
-        }
-    }
-
     var symbolName: String {
         switch self {
         case .cancelled: "xmark.circle"
@@ -1357,7 +1449,7 @@ private extension ContentView {
     }
 
     static func mediaDurationString(_ microseconds: Int64?) -> String {
-        guard let microseconds else { return "Unknown" }
+        guard let microseconds else { return String(localized: "Unknown") }
         return durationString(seconds: Double(microseconds) / 1_000_000)
     }
 
@@ -1369,7 +1461,9 @@ private extension ContentView {
     }
 
     static func durationString(seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "Unknown" }
+        guard seconds.isFinite, seconds >= 0 else {
+            return String(localized: "Unknown")
+        }
         let rounded = Int(seconds.rounded())
         let hours = rounded / 3_600
         let minutes = (rounded % 3_600) / 60
@@ -1384,7 +1478,7 @@ private extension ContentView {
         guard let video = primaryVideo(in: mediaInfo),
               let encodedWidth = video.encodedWidth,
               let encodedHeight = video.encodedHeight else {
-            return "Unknown"
+            return String(localized: "Unknown")
         }
         let rotation = abs(video.rotationDegrees ?? 0) % 180
         let width = rotation == 90 ? encodedHeight : encodedWidth
@@ -1394,15 +1488,20 @@ private extension ContentView {
 
     static func frameRateString(_ mediaInfo: MediaInfo) -> String {
         guard let value = primaryVideo(in: mediaInfo)?.frameRate?.doubleValue else {
-            return "Unknown"
+            return String(localized: "Unknown")
         }
-        return "\(value.formatted(.number.precision(.fractionLength(0 ... 2)))) fps"
+        return String(
+            localized: "\(value.formatted(.number.precision(.fractionLength(0 ... 2)))) fps"
+        )
     }
 
     static func codecString(_ mediaInfo: MediaInfo) -> String {
-        let video = primaryVideo(in: mediaInfo)?.codecName?.uppercased() ?? "Unknown video"
+        let video = primaryVideo(in: mediaInfo)?.codecName?.uppercased()
+            ?? String(localized: "Unknown video")
         let audio = mediaInfo.audioStreams.first?.codecName?.uppercased()
-        return audio.map { "\(video) / \($0)" } ?? "\(video) / No audio"
+        return audio.map {
+            String(localized: "\(video) / \($0)")
+        } ?? String(localized: "\(video) / No audio")
     }
 
     static func savings(input: Int64, output: Int64) -> String? {

@@ -131,7 +131,23 @@ nonisolated enum FailureStage: Sendable, Equatable {
 nonisolated enum FailureReason: Sendable, Equatable {
     case serviceUnavailable
     case invalidMedia
+    case inputUnavailable
+    case outputUnavailable
+    case outputConflict
+    case unsupportedOutputFileSystem
+    case insufficientStorage
     case processFailed(exitCode: Int32?)
     case fileSystem
     case unknown
+
+    var isFileSystemRelated: Bool {
+        switch self {
+        case .inputUnavailable, .outputUnavailable, .outputConflict,
+             .unsupportedOutputFileSystem, .insufficientStorage,
+             .fileSystem:
+            true
+        case .serviceUnavailable, .invalidMedia, .processFailed, .unknown:
+            false
+        }
+    }
 }

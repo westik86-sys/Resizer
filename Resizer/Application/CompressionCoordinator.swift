@@ -78,6 +78,7 @@ nonisolated enum CompressionCoordinatorError: Error, Sendable, Equatable {
     case queueMutationRequiresQueued(CompressionJob.ID)
     case activeQueueJob(CompressionJob.ID)
     case invalidQueueSuccessor(CompressionJob.ID)
+    case shuttingDown
 }
 
 nonisolated enum CompressionWorkflowError: Error, Sendable, Equatable {
@@ -136,6 +137,7 @@ nonisolated protocol JobQueueCoordinating: Actor {
     func removeQueued(jobID: CompressionJob.ID) throws
 
     func cancel(jobID: CompressionJob.ID) async
+    func shutdown() async
     func snapshot() -> CompressionSnapshot
     func snapshots() -> AsyncStream<CompressionSnapshot>
 }
@@ -163,8 +165,15 @@ nonisolated protocol CompressionCoordinating: Actor {
     ) async throws -> CompressionJob
 
     func cancel(jobID: CompressionJob.ID) async
+    func shutdown() async
     func snapshot() -> CompressionSnapshot
     func snapshots() -> AsyncStream<CompressionSnapshot>
+}
+
+extension JobQueueCoordinating {
+    /// Lightweight presentation fakes have no child processes to drain.
+    /// Production overrides this requirement with the full shutdown barrier.
+    func shutdown() async {}
 }
 
 actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
@@ -186,6 +195,13 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     private var queueDriverToken: UUID?
     private var queueDriverTask: Task<Void, Never>?
     private var snapshotRevision: UInt64 = 0
+    private var cancellationFailureStages: [
+        CompressionJob.ID: FailureStage
+    ] = [:]
+    private var isShuttingDown = false
+    private var workflowDrainWaiters: [
+        CheckedContinuation<Void, Never>
+    ] = []
 
     init(dependencies: CompressionCoordinatorDependencies) {
         self.dependencies = dependencies
@@ -202,6 +218,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     func add(
         _ imports: [JobQueueImport]
     ) async throws -> [CompressionJob.ID] {
+        guard !isShuttingDown else {
+            throw CompressionCoordinatorError.shuttingDown
+        }
         let jobs = try imports.map { item in
             try CompressionJob(
                 id: item.id,
@@ -259,6 +278,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     }
 
     func register(_ job: CompressionJob) throws {
+        guard !isShuttingDown else {
+            throw CompressionCoordinatorError.shuttingDown
+        }
         guard jobsByID[job.id] == nil else {
             throw CompressionCoordinatorError.duplicateJob(job.id)
         }
@@ -365,6 +387,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
     ) throws -> CompressionJob {
+        guard !isShuttingDown else {
+            throw CompressionCoordinatorError.shuttingDown
+        }
         let job = try requireJob(jobID)
         guard activeQueueJobID != jobID,
               !workflowJobIDs.contains(jobID) else {
@@ -396,7 +421,8 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     /// Starts the single actor-owned driver. Repeated wakeups are no-ops; a
     /// newly enqueued job is observed by the existing loop before it exits.
     func startQueue() {
-        guard queueDriverTask == nil,
+        guard !isShuttingDown,
+              queueDriverTask == nil,
               firstWaitingJobID() != nil else {
             return
         }
@@ -416,6 +442,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
     ) async throws -> CompressionJob {
+        guard !isShuttingDown else {
+            throw CompressionCoordinatorError.shuttingDown
+        }
         let job = try requireJob(jobID)
         guard activeQueueJobID != jobID,
               !workflowJobIDs.contains(jobID) else {
@@ -655,6 +684,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             return
         case .running(let progress):
             cancellationIntents.insert(jobID)
+            cancellationFailureStages[jobID] = .encode
             transcodeCancellations[jobID]?.cancel()
             guard (try? job.transition(
                 to: .cancelling(lastProgress: progress)
@@ -666,12 +696,52 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         case .cancelling:
             cancellationIntents.insert(jobID)
             transcodeCancellations[jobID]?.cancel()
-        case .finishing, .draft, .cancelled, .completed, .failed:
-            // Once validation has been claimed, normal completion wins.
+        case .finishing(let phase):
+            cancellationIntents.insert(jobID)
+            cancellationFailureStages[jobID] = switch phase {
+            case .validating: .validate
+            case .committing: .commit
+            }
+            preRunCancellations[jobID]?.cancel()
+            guard (try? job.transition(
+                to: .cancelling(lastProgress: nil)
+            )) != nil else {
+                return
+            }
+            jobsByID[jobID] = job
+            publishSnapshot()
+            return
+        case .draft, .cancelled, .completed, .failed:
             return
         }
 
         await dependencies.transcoder.cancel(jobID: jobID)
+    }
+
+    /// Stops admission, cancels every active or waiting job, and does not
+    /// return until all workflow tasks have completed their exact cleanup.
+    /// The application delegate uses this barrier before acknowledging a
+    /// normal macOS termination request, preventing orphan encoder children.
+    func shutdown() async {
+        if !isShuttingDown {
+            isShuttingDown = true
+            queueDriverTask?.cancel()
+            publishSnapshot()
+        }
+
+        let jobIDs = jobOrder
+        for jobID in jobIDs {
+            await cancel(jobID: jobID)
+        }
+
+        await waitForWorkflowDrain()
+
+        // A queue driver can be between its workflow return and its final
+        // actor hop after the workflow set becomes empty.
+        if let queueDriverTask {
+            queueDriverTask.cancel()
+            await queueDriverTask.value
+        }
     }
 
     func job(id: CompressionJob.ID) -> CompressionJob? {
@@ -789,17 +859,19 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 source: sourceMedia,
                 recipe: configuration.recipe,
                 transcodeResult: transcodeResult,
-                reservation: reservation
+                reservation: reservation,
+                jobID: jobID
             )
 
             _ = try transition(
                 jobID: jobID,
                 to: .finishing(.committing)
             )
-            try await commitWithoutCallerCancellation(
+            try await commitCancellableUntilPublication(
                 plan,
                 reservation: reservation,
-                expectedTemporaryMetadata: validatedOutput
+                expectedTemporaryMetadata: validatedOutput,
+                jobID: jobID
             )
             didCommit = true
 
@@ -873,12 +945,13 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         source: MediaInfo,
         recipe: CompressionRecipe,
         transcodeResult: TranscodeResult,
-        reservation: TemporaryOutputReservation
+        reservation: TemporaryOutputReservation,
+        jobID: CompressionJob.ID
     ) async throws -> FileMetadata {
         let prober = dependencies.mediaProber
         let validator = dependencies.outputValidator
         let fileAccess = dependencies.fileAccess
-        let task = Task.detached {
+        return try await runPreRunOperation(jobID: jobID) {
             let expectedMetadata = transcodeResult.temporaryMetadata
             guard let metadata = try await fileAccess.metadata(
                       for: reservation
@@ -902,7 +975,6 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             )
             return metadataAfterProbe
         }
-        return try await task.value
     }
 
     private func claimValidation(jobID: CompressionJob.ID) throws {
@@ -953,9 +1025,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         let cancellationCanStillWin = currentState.map {
             switch $0.phase {
             case .probing, .ready, .queued, .running, .cancelling,
-                 .cancelled:
+                 .finishing, .cancelled:
                 true
-            case .draft, .finishing, .completed, .failed:
+            case .draft, .completed, .failed:
                 false
             }
         } ?? false
@@ -989,8 +1061,20 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                         shouldCancelProcess = true
                     }
                 case .cancelling:
-                    shouldCancelProcess = true
-                case .draft, .cancelled, .completed, .failed, .finishing:
+                    shouldCancelProcess =
+                        (cancellationFailureStages[jobID] ?? .encode)
+                        == .encode
+                case .finishing(let phase):
+                    cancellationFailureStages[jobID] = switch phase {
+                    case .validating: .validate
+                    case .committing: .commit
+                    }
+                    if (try? job.transition(
+                        to: .cancelling(lastProgress: nil)
+                    )) != nil {
+                        jobsByID[jobID] = job
+                    }
+                case .draft, .cancelled, .completed, .failed:
                     break
                 }
             }
@@ -1007,7 +1091,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         }
 
         guard let state = jobsByID[jobID]?.state,
-              let stage = failureStage(for: state) else {
+              let stage = failureStage(for: state, jobID: jobID) else {
             throw error
         }
         let failure = makeFailure(stage: stage, error: error)
@@ -1015,7 +1099,10 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         throw failure
     }
 
-    private func failureStage(for state: JobState) -> FailureStage? {
+    private func failureStage(
+        for state: JobState,
+        jobID: CompressionJob.ID
+    ) -> FailureStage? {
         switch state {
         case .probing:
             .probe
@@ -1028,7 +1115,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         case .finishing(.committing):
             .commit
         case .cancelling:
-            .encode
+            cancellationFailureStages[jobID] ?? .encode
         case .draft, .ready, .cancelled, .completed, .failed:
             nil
         }
@@ -1064,15 +1151,42 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         }
 
         let reason: FailureReason
-        if error is SecurityScopedFileAccessError
-            || error is OutputPlannerError {
-            reason = .fileSystem
+        if let fileError = error as? SecurityScopedFileAccessError {
+            switch fileError {
+            case .inputMissing:
+                reason = .inputUnavailable
+            case .outputDirectoryMissing, .reservationFailed,
+                 .commitFailed, .invalidOutputPlan:
+                reason = .outputUnavailable
+            case .temporaryOutputAlreadyExists, .finalOutputAlreadyExists:
+                reason = .outputConflict
+            case .unsupportedOutputFileSystem:
+                reason = .unsupportedOutputFileSystem
+            case .insufficientStorage:
+                reason = .insufficientStorage
+            case .invalidURL, .temporaryOutputMissing,
+                 .temporaryOutputChanged, .symbolicLinkNotAllowed,
+                 .unsupportedFileType, .inputOutputAlias,
+                 .metadataReadFailed, .cleanupFailed:
+                reason = .fileSystem
+            }
+        } else if let plannerError = error as? OutputPlannerError {
+            switch plannerError {
+            case .invalidInputURL:
+                reason = .inputUnavailable
+            case .invalidOutputDirectoryURL:
+                reason = .outputUnavailable
+            case .outputCollision, .temporaryCollision:
+                reason = .outputConflict
+            case .invalidOutputName, .invalidGeneratedPlan:
+                reason = .fileSystem
+            }
         } else if error is ProcessRunnerError {
             reason = .serviceUnavailable
         } else if let probeError = error as? FFprobeClientError {
             switch probeError {
             case .invalidSourceURL:
-                reason = .fileSystem
+                reason = .inputUnavailable
             case .bundledExecutableUnavailable, .invalidExecutableURL,
                  .invalidConfiguration, .invalidProcessEventSequence,
                  .outputTooLarge:
@@ -1096,15 +1210,18 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             switch builderError {
             case .missingVideoStream, .unsupportedVideoFormat:
                 reason = .invalidMedia
-            case .invalidInputURL, .invalidTemporaryOutputURL,
-                 .inputOutputAlias:
-                reason = .fileSystem
+            case .invalidInputURL:
+                reason = .inputUnavailable
+            case .invalidTemporaryOutputURL:
+                reason = .outputUnavailable
+            case .inputOutputAlias:
+                reason = .outputConflict
             }
         } else if let serviceError =
             error as? FFmpegTranscodingServiceError {
             switch serviceError {
             case .temporaryOutputMissing, .invalidTemporaryOutput:
-                reason = .fileSystem
+                reason = .outputUnavailable
             case .bundledExecutableUnavailable, .invalidExecutableURL,
                  .invalidProcessRequest, .invalidTemporaryReservation,
                  .invalidProcessEventSequence, .progressParsing:
@@ -1114,10 +1231,15 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             }
         } else if let workflowError = error as? CompressionWorkflowError {
             switch workflowError {
-            case .inputEmpty, .temporaryOutputInvalid:
+            case .inputEmpty:
                 reason = .invalidMedia
-            case .inputMissing, .outputDirectoryUnavailable,
-                 .temporaryOutputAlreadyExists, .finalOutputAlreadyExists:
+            case .inputMissing:
+                reason = .inputUnavailable
+            case .outputDirectoryUnavailable:
+                reason = .outputUnavailable
+            case .temporaryOutputAlreadyExists, .finalOutputAlreadyExists:
+                reason = .outputConflict
+            case .temporaryOutputInvalid:
                 reason = .fileSystem
             case .temporaryCleanupFailed:
                 reason = .fileSystem
@@ -1149,13 +1271,25 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         tail: BoundedData
     ) -> TranscodeFailure {
         let diagnostic = boundedDiagnostic(from: tail)
-        return TranscodeFailure(
-            stage: stage,
-            reason: .processFailed(
+        let normalizedDiagnostic = String(
+            decoding: tail.data,
+            as: UTF8.self
+        ).lowercased()
+        let reason: FailureReason
+        if stage != .probe,
+           normalizedDiagnostic.contains("no space left on device")
+            || normalizedDiagnostic.contains("disk quota exceeded") {
+            reason = .insufficientStorage
+        } else {
+            reason = .processFailed(
                 exitCode: termination.reason == .exit
                     ? termination.status
                     : nil
-            ),
+            )
+        }
+        return TranscodeFailure(
+            stage: stage,
+            reason: reason,
             diagnosticTail: diagnostic
         )
     }
@@ -1329,19 +1463,20 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         }
     }
 
-    private func commitWithoutCallerCancellation(
+    private func commitCancellableUntilPublication(
         _ plan: OutputPlan,
         reservation: TemporaryOutputReservation,
-        expectedTemporaryMetadata: FileMetadata
+        expectedTemporaryMetadata: FileMetadata,
+        jobID: CompressionJob.ID
     ) async throws {
         let fileAccess = dependencies.fileAccess
-        try await Task.detached {
+        try await runPreRunOperation(jobID: jobID) {
             try await fileAccess.commitWithoutReplacing(
                 plan,
                 reservation: reservation,
                 expectedTemporaryMetadata: expectedTemporaryMetadata
             )
-        }.value
+        }
     }
 
     private func cleanupWithoutCallerCancellation(
@@ -1361,6 +1496,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     }
 
     private func beginWorkflow(jobID: CompressionJob.ID) throws {
+        guard !isShuttingDown else {
+            throw CompressionCoordinatorError.shuttingDown
+        }
         guard workflowJobIDs.insert(jobID).inserted else {
             throw CompressionCoordinatorError.workflowAlreadyRunning(jobID)
         }
@@ -1369,8 +1507,24 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     private func endWorkflow(jobID: CompressionJob.ID) {
         workflowJobIDs.remove(jobID)
         cancellationIntents.remove(jobID)
+        cancellationFailureStages.removeValue(forKey: jobID)
         preRunCancellations.removeValue(forKey: jobID)
         transcodeCancellations.removeValue(forKey: jobID)
+
+        if workflowJobIDs.isEmpty {
+            let waiters = workflowDrainWaiters
+            workflowDrainWaiters.removeAll(keepingCapacity: false)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+    }
+
+    private func waitForWorkflowDrain() async {
+        guard !workflowJobIDs.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            workflowDrainWaiters.append(continuation)
+        }
     }
 
     private func firstWaitingJobID() -> CompressionJob.ID? {
@@ -1403,7 +1557,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     }
 
     private func drainQueue(token: UUID) async {
-        while queueDriverToken == token, !Task.isCancelled {
+        while queueDriverToken == token,
+              !isShuttingDown,
+              !Task.isCancelled {
             guard activeQueueJobID == nil else {
                 finishQueueDriver(token: token)
                 return

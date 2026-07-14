@@ -14,46 +14,37 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
-Implementation is currently at stage 7. The production headless workflow now
-retains security-scoped input and output access while it probes the source,
-performs capability-aware preflight, encodes into a unique job-owned
-`.partial.mp4`, parses bounded machine-readable progress, probes and validates
-the result, and publishes it with a single no-replace filesystem call.
-Before launch, the workflow atomically creates the temporary with `O_EXCL` and
-`O_RDWR`, immediately unlinks its directory entry, and retains the exact file
-and output-directory descriptors. FFmpeg writes MP4 to child descriptor 3 as
-`fd:3`; stdout is reserved for `-progress pipe:1`, while stderr feeds only the
-bounded diagnostic tail. FFprobe then validates that same anonymous file via
-child descriptor 3. Only a successful validation may publish the result with a
-single no-replace `fclonefileat` call. Closing the retained descriptor cleans up
-a cancelled or failed job without deleting any later pathname replacement.
-Graceful cancellation sends `q` before the process runner escalates through
-signals, and a recorded cancellation takes precedence over a later nonzero
-exit. The bundled FFmpeg capabilities are queried in parallel with a bounded
-15-second discovery deadline, cached only after complete success, and checked
-against the selected input and recipe before launch.
+Implementation is at stage 10. The native product UI supports multi-file MOV
+and MP4 import, one sequential FIFO queue, three typed presets, bounded custom
+settings, safe output naming, progress and ETA, cancellation, retry, reordering,
+results, and Finder reveal. English and Russian localizations, keyboard access,
+VoiceOver-focused state changes, actionable typed errors, and redacted bounded
+diagnostics are included.
 
-Descriptor publication currently requires a clone-capable filesystem and a
-source/destination on the same volume. The anonymous temporary is created in
-the selected output directory, which guarantees the same-volume part. Resizer
-checks the held output-directory descriptor before launching FFmpeg and rejects
-an unsupported filesystem during reservation. `fclonefileat` remains the final
-authority: a late collision or publication error still fails closed, without a
-path-based copy fallback, replacement, or change to the original input.
+The application coordinator remains the sole workflow owner. It retains
+security-scoped input and output access through probe, capability preflight,
+encode, validation, and publication. FFmpeg writes to the exact per-job staging
+descriptor as `fd:3`; stdout is reserved for `-progress pipe:1`, and stderr is
+kept only as a bounded diagnostic tail. Normal application termination first
+cancels the queue and waits for every child process and pipe to finish, so a
+normal quit cannot leave an FFmpeg process behind.
 
-The stage also includes a real bundled-tool integration test and deterministic
-tests for progress parsing, capability discovery, process failures,
-cancellation races, output validation, security-scoped lifetimes, symlink and
-identity guards, exact cleanup, and no-replace commit. See
-[`docs/architecture.md`](docs/architecture.md) and
-[`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md)
-for the complete contracts.
+Publication never replaces the original or an existing final file and requires
+a clone-capable output filesystem. Resizer writes through an anonymous staging
+descriptor and publishes it with no-replace `fclonefileat`. Unsupported volumes
+fail before encode; there is no named, path-based rename or copy fallback.
+Failure and cancellation close only the job's anonymous lease, never a glob or
+a later pathname replacement.
 
-The temporary stage-2 diagnostic UI remains available and still uses its narrow
-spike runner to prove the bundled toolchain. It is not the final product UI.
-The product UI and queue remain later PLAN stages. The production headless
-workflow is intentionally not wired into the temporary diagnostic UI; stage 8
-will replace that spike UI with the single-file product experience.
+The bundled FFmpeg 8.1.2 tools are reproducibly built as Universal 2 from the
+pinned official source with an LGPL-only profile. The app includes the exact
+third-party notice and LGPL texts and exposes them in Settings. Deterministic
+tests cover the state machine, queue races, process teardown, validation,
+filesystem publication paths, localization, accessibility-facing copy, and a
+real bundled `probe → transcode → probe` flow. See
+[`docs/architecture.md`](docs/architecture.md),
+[`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md),
+and [`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md).
 
 Sandbox checkpoint A passed locally on 2026-07-13: an ad hoc-signed Universal 2
 Release app used PowerBox-selected input and output locations to run bundled
@@ -105,7 +96,7 @@ To work in Xcode, open `Resizer.xcodeproj` and use the `Resizer` scheme with the
 Resizer.xcodeproj/  Xcode project
 Resizer/            SwiftUI app plus Domain/Application/Infrastructure/UI layers
 ResizerTests/       Swift Testing domain, application, and boundary tests
-ResizerUITests/     Xcode-generated UI-test target (not part of bootstrap verification)
+ResizerUITests/     Product UI, localization, and accessibility smoke tests
 Tests/ProcessHarness/ Deterministic native process fixture used only by unit tests
 Scripts/            Shell-first build and test entry points
 Vendor/FFmpeg/      Binaries, exact source, checksums, licenses, and build reports

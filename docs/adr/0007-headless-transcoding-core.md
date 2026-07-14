@@ -1,6 +1,8 @@
 # ADR 0007: Headless transcoding transaction and safe publication
 
-- Status: Accepted for implementation stage 7
+- Status: Accepted for implementation stage 7; cancellation and publication
+  sections amended by
+  [`ADR 0008`](0008-stage-10-hardening.md)
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 
@@ -17,6 +19,11 @@ read-only collision check and publication.
 Stage 7 needs one non-UI transaction that preserves the immutable original,
 works under App Sandbox, leaves no job-owned temporary after failure or
 cancellation, and publishes only a freshly probed, recipe-compatible MP4.
+
+Stage 10 later extended this contract to cancellable finalization and an
+exclusive-rename fallback for suitable non-clone filesystems. ADR 0008 is
+authoritative where those later decisions differ from the original stage-7
+constraints below.
 
 ## Decision
 

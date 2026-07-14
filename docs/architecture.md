@@ -1,9 +1,9 @@
 # Resizer architecture
 
-This document describes the stage-3 contracts, stage-4 process boundary,
-stage-5 FFprobe adapter, stage-6 preset and output-planning boundaries, and the
-stage-7 headless transcoding workflow. The single-file product UI and queue are
-not implemented yet.
+This document describes the production architecture through stage 10: domain
+and service contracts, process and FFmpeg boundaries, the transactional
+workflow, the session FIFO queue, the SwiftUI feature model, and hardening for
+shutdown, publication, diagnostics, accessibility, and localization.
 
 ## Dependency direction
 
@@ -30,7 +30,7 @@ FFmpegTranscodingService
 
 SecurityScopedFileAccess
     -> retained user-selected URL scopes
-    -> anonymous O_RDWR temporary plus retained directory descriptor
+    -> anonymous O_RDWR staging file plus retained directory descriptor
     -> exact descriptor metadata and file-type checks
     -> no-replace fclonefileat publication
 
@@ -57,8 +57,8 @@ accepts the complete coordinator dependency set and exposes only the feature
 model, not the mutable coordinator. Debug previews and tests use immutable
 closure-based fakes. Production implementations now exist for process
 execution, probing, command construction, capability discovery, transcoding,
-validation, output planning, and file publication. The product UI remains a
-later PLAN stage.
+validation, output planning, file publication, the FIFO coordinator, and the
+product feature model.
 
 ## Source layout and module boundary
 
@@ -77,10 +77,9 @@ Because the app target defaults to `MainActor` isolation, pure domain and port
 declarations are explicitly `nonisolated`. UI state remains explicitly
 `@MainActor`, and mutable coordinator state belongs to an actor.
 
-The visible stage-2 toolchain diagnostic predates this composition root and
-remains an isolated spike. It does not use the production workflow. Stage 8
-will replace it with the single-file product UI and compose the stage-7
-services for interactive use.
+`ResizerApp` displays the production `CompressionFeatureModel` created by the
+composition root. `ApplicationLifecycleDelegate` delays normal termination
+until that model has shut down the coordinator and all active workflows.
 
 ## Process execution contract
 
@@ -261,9 +260,9 @@ probe input
     -> record MediaInfo and configuration
     -> plan unique temporary and final paths
     -> file and bundled-capability preflight
-    -> verify clone-capable publication on the held output-directory fd
-    -> atomically create, unlink, and retain the O_RDWR temporary
-    -> run FFmpeg with the anonymous file as child fd 3
+    -> verify clone publication on the held output-directory fd
+    -> atomically create, identity-check, unlink, and retain O_RDWR staging
+    -> run FFmpeg with that exact file as child fd 3
     -> claim finishing(validating)
     -> inspect and re-probe that same child-fd-3 file
     -> validate the encoded media contract
@@ -272,17 +271,17 @@ probe input
 ```
 
 The workflow never gives FFmpeg the final URL. Before launch it verifies a
-regular, non-empty input, a real output directory, absent temporary and final
-entries, and clone support reported for the opened output-directory descriptor,
-then creates the temporary with
-`O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW`. It immediately unlinks the temporary
-name and retains both descriptors as a job lease. A collision cannot be
-mistaken for ownership, and any later file created at the old temporary name is
-unrelated and remains untouched. Failures before commit and cancellations
-validate and release only that lease; cleanup never accepts an arbitrary URL or
-uses a wildcard or directory scan. A second
-concurrent workflow for the same job is rejected, and the coordinator continues
-to enforce one running/finishing/cancelling job.
+regular, non-empty input, a real output directory, absent staging and final
+entries, and clone publication support on the opened output-directory
+descriptor. It creates the staging file with
+`O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW`, verifies its descriptor/name
+identity, unlinks the name immediately, and retains both descriptors as a job
+lease. Volumes without clone support fail before encode. `fclonefileat`
+publishes the exact anonymous descriptor and refuses an existing final entry.
+Failures before commit and cancellations release only that lease; cleanup never
+accepts an arbitrary URL or uses a wildcard or directory scan. A second
+concurrent workflow for the same job is rejected, and the coordinator
+continues to enforce one running/finishing/cancelling job.
 
 `FFmpegCapabilityClient` queries the actual bundled executable for decoders,
 encoders, filters, demuxers, muxers, and protocols. Discovery is single-flight
@@ -316,9 +315,11 @@ stop. The coordinator also cancels its retained transcode task, so cancellation
 cannot be lost if the service has not registered the execution yet. The process policy
 sends bounded `q\n`, waits two seconds, then lets `ProcessRunner` escalate
 through SIGINT, SIGTERM, and SIGKILL while still awaiting process termination
-and configured stream completion. Once cancellation has won, a later nonzero exit cannot
-become an ordinary failure. Once validation has atomically claimed
-`finishing`, normal validation and commit win over a late cancellation.
+and configured stream completion. Once cancellation has won, a later nonzero
+exit cannot become an ordinary failure. Validation and commit also register
+their in-flight operations. Cancellation before publication moves the job to
+`cancelling` and cleans its staging file; once the atomic publication syscall
+has succeeded, completion wins a simultaneous late cancellation.
 
 ## Output validation and publication
 
@@ -327,32 +328,65 @@ result: one non-attached H.264 `yuv420p` video stream, no subtitles,
 attachments, or other streams, normalized rotation, SDR-compatible depth and
 range, the recipe's AAC-or-no-audio policy, expected no-upscale dimensions and
 aspect ratio, and duration within a bounded tolerance. Validation uses a fresh
-probe of the same retained anonymous descriptor after the process and both-pipe
+probe of the same retained staging descriptor after the process and both-pipe
 completion barrier. The output probe receives that exact file as child fd 3;
 it does not resolve or reopen the planned temporary pathname.
 
 `SecurityScopedFileAccess` rejects terminal symlinks and unsupported file types
-during input and directory checks, then uses `fstat` for all temporary metadata.
-Immediately before unlink it compares `fstatat(..., AT_SYMLINK_NOFOLLOW)` with
-the held descriptor and requires one link; after unlink it requires the same
-inode with zero links before returning the lease.
-It compares device/inode identity to reject an input/temp hard-link alias and
-checks size and timestamps before and after FFprobe. Publication passes the
-exact anonymous source fd, the retained output-directory fd, and only the final
-basename to macOS `fclonefileat`. The syscall is no-replace: a late destination
-collision is a typed commit failure and existing user data is preserved. There
-is no temporary pathname to swap between validation and commit. On failure or
-cancellation, closing the lease removes the already-unlinked temporary; a file
-created later at the former planned name is never unlinked.
+during input and directory checks, then uses `fstat` for all staging metadata.
+Immediately before unlink it compares
+`fstatat(..., AT_SYMLINK_NOFOLLOW)` with the held descriptor and requires one
+link; after unlink it requires the same inode with zero links before returning
+the lease. It compares device/inode identity to reject an input/temp hard-link alias and
+checks size and timestamps before and after FFprobe. Clone publication passes
+the exact anonymous source fd, retained directory fd, and final basename to
+`fclonefileat`, which refuses an existing destination. On failure or
+cancellation, cleanup closes only the anonymous lease; a later replacement at
+the planned temporary pathname is preserved.
 
-This publication strategy deliberately supports only clone-capable filesystems
-with source and destination on the same volume. Creating the anonymous source
-inside the selected output directory guarantees the same-volume requirement.
-An unsupported volume returns a typed reservation error before FFmpeg starts.
-`fclonefileat` is still authoritative at publication, so a later filesystem
-error fails closed without a path-based copy or rename fallback. No final output
-is claimed, no existing destination is replaced, and the immutable input is
-never opened for writing.
+A volume without clone support returns a typed reservation error before FFmpeg
+starts. There is no named, copy-overwrite, or check-then-move fallback. No final
+output is claimed, no existing destination is replaced, and the immutable input
+is never opened for writing.
+
+Darwin has no conditional unlink-by-inode operation. The staging identity check
+and unlink are therefore a synchronous best-effort boundary against accidental
+replacement, with no suspension between them and an unpredictable per-job
+name. A hostile process running as the same macOS user and able to write to the
+selected directory is outside that boundary: it could race the tiny window and
+cause its replacement entry to be unlinked. The zero-link descriptor check and
+`fclonefileat` still bind validation and final publication to Resizer's retained
+file, so the race cannot substitute encoded content or replace the immutable
+input or an existing final output.
+
+## Session queue and product UI
+
+`JobQueueCoordinator` owns ordered job identity, the one active workflow, and a
+single FIFO drain task. Imports may probe concurrently, but queue admission
+order defines encode order. One job cannot be active twice; cancel, retry,
+remove, and reorder are actor-serialized. A failed or cancelled job releases
+the active slot and does not block the next waiter. Monotonic snapshot revisions
+prevent a delayed observation from replacing newer UI state.
+
+`CompressionFeatureModel` is `MainActor`-isolated and consumes immutable
+snapshots. It owns only transient presentation state: selection, import and
+button activity, session defaults, validation messages, and smoothed ETA.
+SwiftUI views never launch or retain a process. Every queued attempt captures a
+validated immutable `JobConfiguration`; later settings edits affect only future
+admissions and retries.
+
+Typed `FailureReason` values provide actionable primary messages. Process exit
+status is confined to `DiagnosticReportBuilder`, which adds app/tool versions,
+license profile, stage, reason, truncation state, and a bounded sanitized tail.
+Selected paths and filenames are redacted before either display or pasteboard
+copy. The string catalog contains English and Russian values and plural rules.
+Accessibility focus moves to validation, failure, and success headings; controls
+and metrics expose explicit labels, values, and keyboard actions.
+
+Normal app termination calls `CompressionFeatureModel.shutdown()`. The queue
+stops accepting work, cancels its driver and every workflow, then waits for its
+workflow set and child-process completion barriers to drain before AppKit is
+allowed to terminate.
 
 ## Job state contract
 
@@ -367,9 +401,9 @@ self-transitions.
 | `ready` | `queued`, `cancelled` |
 | `queued` | `running`, `cancelled`, `failed(preflight)` |
 | `running` | `finishing(validating)`, `cancelling`, `failed(encode)` |
-| `finishing(validating)` | `finishing(committing)`, `failed(validate)` |
-| `finishing(committing)` | `completed`, `failed(commit)` |
-| `cancelling` | `cancelled`, `failed(encode, file-system only)` |
+| `finishing(validating)` | `finishing(committing)`, `cancelling`, `failed(validate)` |
+| `finishing(committing)` | `completed`, `cancelling`, `failed(commit)` |
+| `cancelling` | `cancelled`, `completed`, `failed(file-system only)` |
 | `cancelled` | `ready`, `probing` |
 | `failed(retry: probing)` | `probing` |
 | `failed(retry: ready)` | `ready` |
@@ -391,9 +425,9 @@ to `probing`. Post-probe failures return to `ready`.
   `ready` is the explicit exception;
 - the coordinator permits at most one `running`, `finishing`, or `cancelling`
   job at a time;
-- once process cancellation wins the transition to `cancelling`, normal
-  finishing, completion, and ordinary failures are rejected; only an
-  exact-cleanup filesystem failure can replace cancellation;
+- once cancellation wins the transition to `cancelling`, ordinary workflow
+  failures are rejected; an exact-cleanup filesystem failure may replace it,
+  while `completed` is allowed only when atomic publication already won;
 - retrying a failed probe clears stale media and configuration before probing
   again;
 - a completed result must be a non-empty local file and cannot directly resolve
@@ -418,7 +452,7 @@ through `probing`; later cancellation can reuse `ready`.
   the `.partial.mp4` name must contain the job UUID. `OutputPlanner` supplies
   conflict-free names from read-only filesystem checks. File cleanup and commit
   accept the exact reservation rather than an arbitrary URL; commit is
-  explicitly no-replace. `SecurityScopedFileAccess` implements the descriptor
+  explicitly no-replace. `SecurityScopedFileAccess` implements descriptor
   identity, symlink, anonymous cleanup, and final-publication checks.
 - `ProcessRequest` represents the executable, controlled environment, argument
   array, bounded event capacity, diagnostic limit, generic cancellation policy,

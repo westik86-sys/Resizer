@@ -298,6 +298,44 @@ struct FFmpegCapabilitiesTests {
         #expect(await runner.heldExecutionCount() == 0)
     }
 
+    @Test("The final cancelled waiter stays suspended until discovery drains")
+    func finalWaiterCancellationWaitsForDiscoveryDrain() async throws {
+        let runner = HoldingCapabilityRunner(blocksCancellation: true)
+        let client = try FFmpegCapabilityClient(
+            executableURL: URL(fileURLWithPath: "/Bundle/ffmpeg"),
+            processRunner: runner,
+            discoveryTimeout: .seconds(30)
+        )
+        let operation = Task { try await client.capabilities() }
+        let completion = CapabilityCompletionProbe()
+        let observer = Task {
+            _ = await operation.result
+            await completion.markCompleted()
+        }
+        try await waitForRequestCount(6, runner: runner)
+
+        operation.cancel()
+        try await waitForCancellationCount(6, runner: runner)
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        #expect(!(await completion.isCompleted()))
+        #expect(await runner.heldExecutionCount() == 6)
+
+        await runner.releaseCancellation()
+        do {
+            _ = try await operation.value
+            Issue.record("Expected capability discovery cancellation")
+        } catch is CancellationError {
+            // Expected only after every held query has drained.
+        }
+        await observer.value
+
+        #expect(await completion.isCompleted())
+        #expect(await runner.heldExecutionCount() == 0)
+    }
+
     @Test("A new caller never joins a cancelled discovery generation")
     func cancelledGenerationIsDetachedBeforeTeardown() async throws {
         let runner = HoldingCapabilityRunner(blocksCancellation: true)
@@ -598,6 +636,18 @@ private actor HoldingCapabilityRunner: ProcessRunning {
         let waiters = cancellationWaiters
         cancellationWaiters.removeAll()
         waiters.forEach { $0.resume() }
+    }
+}
+
+private actor CapabilityCompletionProbe {
+    private var completed = false
+
+    func markCompleted() {
+        completed = true
+    }
+
+    func isCompleted() -> Bool {
+        completed
     }
 }
 

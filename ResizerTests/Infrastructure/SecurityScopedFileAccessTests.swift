@@ -235,6 +235,81 @@ struct SecurityScopedFileAccessTests {
         )
     }
 
+    @Test("Descriptor commit maps an fsync storage failure")
+    func descriptorCommitMapsFsyncInsufficientStorage() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        let inputData = Data("original".utf8)
+        try inputData.write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess(
+            supportsFileCloning: { _ in true },
+            synchronizeFile: { _ in
+                errno = ENOSPC
+                return -1
+            }
+        )
+        let reservation = try await access.reserveTemporaryOutput(fixture.plan)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        try FileHandle(
+            fileDescriptor: descriptor,
+            closeOnDealloc: false
+        ).write(contentsOf: Data("validated output".utf8))
+        let producedMetadata = try #require(
+            await access.metadata(for: reservation)
+        )
+
+        await expectError(.insufficientStorage) {
+            try await access.commitWithoutReplacing(
+                fixture.plan,
+                reservation: reservation,
+                expectedTemporaryMetadata: producedMetadata
+            )
+        }
+
+        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.finalURL.path
+        ))
+    }
+
+    @Test("Descriptor commit maps a clone storage failure")
+    func descriptorCommitMapsCloneInsufficientStorage() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        let inputData = Data("original".utf8)
+        try inputData.write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess(
+            supportsFileCloning: { _ in true },
+            synchronizeFile: { _ in 0 },
+            cloneFile: { _, _, _ in
+                errno = EDQUOT
+                return -1
+            }
+        )
+        let reservation = try await access.reserveTemporaryOutput(fixture.plan)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        try FileHandle(
+            fileDescriptor: descriptor,
+            closeOnDealloc: false
+        ).write(contentsOf: Data("validated output".utf8))
+        let producedMetadata = try #require(
+            await access.metadata(for: reservation)
+        )
+
+        await expectError(.insufficientStorage) {
+            try await access.commitWithoutReplacing(
+                fixture.plan,
+                reservation: reservation,
+                expectedTemporaryMetadata: producedMetadata
+            )
+        }
+
+        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.finalURL.path
+        ))
+    }
+
     @Test("Descriptor cleanup preserves replacements and existing final output")
     func descriptorCleanupPreservesUnrelatedPaths() async throws {
         let fixture = try FilePlanFixture()
@@ -274,14 +349,16 @@ struct SecurityScopedFileAccessTests {
         #expect(try Data(contentsOf: fixture.plan.finalURL) == existingFinalData)
     }
 
-    @Test("Reservation rejects an output filesystem without clone support")
+    @Test("Reservation rejects missing clone support before creating staging")
     func reserveRejectsUnsupportedOutputFileSystem() async throws {
         let fixture = try FilePlanFixture()
         defer { fixture.remove() }
         let inputData = Data("original".utf8)
         try inputData.write(to: fixture.plan.inputURL)
+        let recorder = TemporaryFileCreationRecorder()
         let access = SecurityScopedFileAccess(
-            supportsFileCloning: { _ in false }
+            supportsFileCloning: { _ in false },
+            createTemporaryFile: recorder.create
         )
 
         await expectError(.unsupportedOutputFileSystem) {
@@ -295,6 +372,7 @@ struct SecurityScopedFileAccessTests {
         #expect(!FileManager.default.fileExists(
             atPath: fixture.plan.finalURL.path
         ))
+        #expect(recorder.callCount == 0)
     }
 
     @Test("Reservation maps a clone capability query failure")
@@ -312,6 +390,36 @@ struct SecurityScopedFileAccessTests {
 
         #expect(!FileManager.default.fileExists(
             atPath: fixture.plan.temporaryURL.path
+        ))
+    }
+
+    @Test(
+        "Reservation maps full-volume and quota errors",
+        arguments: [ENOSPC, EDQUOT]
+    )
+    func reserveMapsInsufficientStorage(_ code: Int32) async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        let inputData = Data("original".utf8)
+        try inputData.write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess(
+            supportsFileCloning: { _ in true },
+            createTemporaryFile: { _, _ in
+                errno = code
+                return -1
+            }
+        )
+
+        await expectError(.insufficientStorage) {
+            try await access.reserveTemporaryOutput(fixture.plan)
+        }
+
+        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.temporaryURL.path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.finalURL.path
         ))
     }
 
@@ -428,6 +536,25 @@ struct SecurityScopedFileAccessTests {
 
 private enum ExpectedFailure: Error {
     case operation
+}
+
+private final class TemporaryFileCreationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    func create(_ directoryDescriptor: Int32, _ name: String) -> Int32 {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        errno = EIO
+        return -1
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
 }
 
 private final class SecurityScopeRecorder: @unchecked Sendable {

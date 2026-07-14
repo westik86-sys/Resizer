@@ -355,10 +355,15 @@ struct CompressionFeatureModelTests {
             jobID: jobID,
             diagnostic: diagnostic
         )
-        #expect(await eventually { model.diagnosticText == diagnostic.text })
+        #expect(await eventually {
+            model.diagnosticText?.contains(diagnostic.text) == true
+        })
 
         model.copyDiagnostics(jobID: jobID)
-        #expect(copier.copiedTexts == [diagnostic.text])
+        let copiedReport = try #require(copier.copiedTexts.first)
+        #expect(copiedReport.contains(diagnostic.text))
+        #expect(copiedReport.contains("8.1.2"))
+        #expect(copiedReport.contains("process_failed"))
         model.selectOutputDirectory(
             URL(fileURLWithPath: "/tmp/retry", isDirectory: true)
         )
@@ -508,6 +513,17 @@ struct CompressionFeatureModelTests {
         #expect(model.selectedJobID == otherID)
     }
 
+    @Test("Application shutdown is forwarded to the queue coordinator")
+    func shutdownForwarding() async {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+
+        await model.shutdown()
+
+        #expect((await coordinator.recordedCalls()).shutdownCount == 1)
+    }
+
     private func eventually(
         _ condition: @MainActor () -> Bool
     ) async -> Bool {
@@ -629,6 +645,7 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         var retriedJobIDs: [CompressionJob.ID] = []
         var cancelledJobIDs: [CompressionJob.ID] = []
         var removedJobIDs: [CompressionJob.ID] = []
+        var shutdownCount = 0
     }
 
     private var calls = Calls()
@@ -831,6 +848,10 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         } catch {
             Issue.record("Fake cancellation failed: \(error)")
         }
+    }
+
+    func shutdown() async {
+        calls.shutdownCount += 1
     }
 
     func snapshot() -> CompressionSnapshot {

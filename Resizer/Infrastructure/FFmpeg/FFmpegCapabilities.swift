@@ -208,7 +208,7 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
     private func cancelWaiter(
         _ waiterID: UUID,
         discoveryID: UUID
-    ) {
+    ) async {
         guard var discovery = inFlightDiscovery,
               discovery.id == discoveryID else {
             return
@@ -223,6 +223,13 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
             // EOF so a new caller never joins a doomed discovery task.
             inFlightDiscovery = nil
             discovery.task.cancel()
+
+            // Keep the final caller suspended until every structured query
+            // task has completed its ProcessRunner cancellation and pipe
+            // drain. The coordinator's workflow/shutdown barrier can then
+            // rely on this call returning only after no discovery children
+            // remain.
+            _ = await discovery.task.result
         } else {
             inFlightDiscovery = discovery
         }

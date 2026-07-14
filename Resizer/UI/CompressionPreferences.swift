@@ -53,18 +53,22 @@ nonisolated enum OutputConflictPreference: String, CaseIterable, Identifiable, S
     var title: String {
         switch self {
         case .appendNumericSuffix:
-            "Add a number"
+            String(localized: "Add a number")
         case .fail:
-            "Stop and show an error"
+            String(localized: "Stop and show an error")
         }
     }
 
     var helpText: String {
         switch self {
         case .appendNumericSuffix:
-            "Creates Video-compressed-2.mp4, then advances the number as needed."
+            String(
+                localized: "Creates Video-compressed-2.mp4, then advances the number as needed."
+            )
         case .fail:
-            "Stops before encoding when the intended output name is already in use."
+            String(
+                localized: "Stops before encoding when the intended output name is already in use."
+            )
         }
     }
 }
@@ -83,13 +87,21 @@ nonisolated enum OutputFilenameSuffixValidationError: Sendable, Equatable {
     var message: String {
         switch self {
         case .empty:
-            "Enter a suffix so the output cannot reuse the original name."
+            String(
+                localized: "Enter a suffix so the output cannot reuse the original name."
+            )
         case .reservedName:
-            "A single or double period cannot be used as the filename suffix."
+            String(
+                localized: "A single or double period cannot be used as the filename suffix."
+            )
         case let .tooLong(maximumLength):
-            "Use no more than \(maximumLength) characters."
+            String(
+                localized: "Use no more than \(maximumLength) characters."
+            )
         case .unsupportedCharacter:
-            "The suffix cannot contain slashes, colons, line breaks, or control characters."
+            String(
+                localized: "The suffix cannot contain slashes, colons, line breaks, or control characters."
+            )
         }
     }
 }

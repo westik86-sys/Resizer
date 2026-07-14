@@ -15,6 +15,7 @@ nonisolated enum SecurityScopedFileAccessError: Error, Sendable, Equatable {
     case inputOutputAlias
     case metadataReadFailed
     case unsupportedOutputFileSystem
+    case insufficientStorage
     case reservationFailed
     case commitFailed
     case cleanupFailed
@@ -30,12 +31,18 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
     typealias StartAccessing = @Sendable (URL) -> Bool
     typealias StopAccessing = @Sendable (URL) -> Void
     typealias SupportsFileCloning = @Sendable (Int32) throws -> Bool
+    typealias CreateTemporaryFile = @Sendable (Int32, String) -> Int32
+    typealias SynchronizeFile = @Sendable (Int32) -> Int32
+    typealias CloneFile = @Sendable (Int32, Int32, String) -> Int32
     typealias BeforeTemporaryIdentityCheck =
         @Sendable (Int32, String) throws -> Void
 
     private let startAccessing: StartAccessing
     private let stopAccessing: StopAccessing
     private let supportsFileCloning: SupportsFileCloning
+    private let createTemporaryFile: CreateTemporaryFile
+    private let synchronizeFile: SynchronizeFile
+    private let cloneFile: CloneFile
     private let beforeTemporaryIdentityCheck: BeforeTemporaryIdentityCheck
 
     init(
@@ -48,6 +55,25 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         supportsFileCloning: @escaping SupportsFileCloning = { descriptor in
             try SecurityScopedFileAccess.volumeSupportsFileCloning(descriptor)
         },
+        createTemporaryFile:
+            @escaping CreateTemporaryFile = { descriptor, name in
+                name.withCString { pointer in
+                    Darwin.openat(
+                        descriptor,
+                        pointer,
+                        O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                        mode_t(S_IRUSR | S_IWUSR)
+                    )
+                }
+            },
+        synchronizeFile: @escaping SynchronizeFile = { descriptor in
+            Darwin.fsync(descriptor)
+        },
+        cloneFile: @escaping CloneFile = { source, directory, finalName in
+            finalName.withCString { pointer in
+                Darwin.fclonefileat(source, directory, pointer, 0)
+            }
+        },
         beforeTemporaryIdentityCheck:
             @escaping BeforeTemporaryIdentityCheck = { _, _ in
         }
@@ -55,6 +81,9 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         self.startAccessing = startAccessing
         self.stopAccessing = stopAccessing
         self.supportsFileCloning = supportsFileCloning
+        self.createTemporaryFile = createTemporaryFile
+        self.synchronizeFile = synchronizeFile
+        self.cloneFile = cloneFile
         self.beforeTemporaryIdentityCheck = beforeTemporaryIdentityCheck
     }
 
@@ -138,16 +167,20 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         let lease: TemporaryOutputLease
         do {
             (temporaryEntry, lease) = try Self
-                .createAnonymousTemporaryOutput(
+                .createReservedTemporaryOutput(
                     temporaryURL: validatedPlan.temporaryURL,
                     outputDirectoryURL: validatedPlan.outputDirectoryURL,
                     supportsFileCloning: supportsFileCloning,
+                    createTemporaryFile: createTemporaryFile,
                     beforeIdentityCheck: beforeTemporaryIdentityCheck
                 )
         } catch let failure as LocalFileSystemFailure {
             if failure.code == EEXIST {
                 throw SecurityScopedFileAccessError
                     .temporaryOutputAlreadyExists
+            }
+            if Self.isInsufficientStorage(failure.code) {
+                throw SecurityScopedFileAccessError.insufficientStorage
             }
             throw SecurityScopedFileAccessError.reservationFailed
         } catch let error as SecurityScopedFileAccessError {
@@ -214,7 +247,6 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         )
         guard !expectedTemporaryMetadata.isDirectory,
               expectedTemporaryMetadata.byteCount > 0,
-              temporaryEntry.linkCount == 0,
               currentMetadata == expectedTemporaryMetadata,
               inputEntry.identity != temporaryEntry.identity else {
             throw SecurityScopedFileAccessError.temporaryOutputChanged
@@ -227,27 +259,17 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
             throw SecurityScopedFileAccessError.outputDirectoryMissing
         }
 
-        guard Self.synchronize(fileDescriptor) else {
-            throw SecurityScopedFileAccessError.commitFailed
+        guard temporaryEntry.linkCount == 0 else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
-
-        let result = validatedPlan.finalURL.lastPathComponent.withCString {
-            finalName in
-            Darwin.fclonefileat(
-                fileDescriptor,
-                directoryDescriptor,
-                finalName,
-                0
-            )
-        }
-        guard result == 0 else {
-            switch errno {
-            case EEXIST:
-                throw SecurityScopedFileAccessError.finalOutputAlreadyExists
-            default:
-                throw SecurityScopedFileAccessError.commitFailed
-            }
-        }
+        try Task.checkCancellation()
+        try synchronizeForCommit(fileDescriptor)
+        try Task.checkCancellation()
+        try publishClone(
+            fileDescriptor: fileDescriptor,
+            directoryDescriptor: directoryDescriptor,
+            finalName: validatedPlan.finalURL.lastPathComponent
+        )
     }
 
     func cleanupTemporaryOutput(
@@ -263,7 +285,7 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         }
 
         guard let descriptor = reservation.lease.fileDescriptor,
-              reservation.lease.directoryDescriptor != nil else {
+              let directoryDescriptor = reservation.lease.directoryDescriptor else {
             throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
 
@@ -274,16 +296,48 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
             throw SecurityScopedFileAccessError.cleanupFailed
         }
         try Self.requireRegularFile(entry)
-        guard entry.linkCount == 0 else {
-            throw SecurityScopedFileAccessError.temporaryOutputChanged
-        }
         if let expectedIdentity = expectedTemporaryMetadata?.identity,
            entry.identity != expectedIdentity {
             throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
-        // The reservation was unlinked before it escaped this adapter. Closing
-        // the last lease reference is the only cleanup operation required and
-        // can never remove a replacement pathname.
+
+        guard entry.linkCount == 0 else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
+        }
+        _ = directoryDescriptor
+    }
+
+    private func publishClone(
+        fileDescriptor: Int32,
+        directoryDescriptor: Int32,
+        finalName: String
+    ) throws {
+        let result = cloneFile(
+            fileDescriptor,
+            directoryDescriptor,
+            finalName
+        )
+        guard result == 0 else {
+            let code = errno
+            switch code {
+            case EEXIST:
+                throw SecurityScopedFileAccessError.finalOutputAlreadyExists
+            default:
+                throw Self.commitError(forErrno: code)
+            }
+        }
+    }
+
+    private func synchronizeForCommit(_ descriptor: Int32) throws {
+        while true {
+            if synchronizeFile(descriptor) == 0 {
+                return
+            }
+            let code = errno
+            if code != EINTR {
+                throw Self.commitError(forErrno: code)
+            }
+        }
     }
 
     private static func uniqueValidatedURLs(_ urls: [URL]) throws -> [URL] {
@@ -503,10 +557,11 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         )
     }
 
-    private static func createAnonymousTemporaryOutput(
+    private static func createReservedTemporaryOutput(
         temporaryURL: URL,
         outputDirectoryURL: URL,
         supportsFileCloning: SupportsFileCloning,
+        createTemporaryFile: CreateTemporaryFile,
         beforeIdentityCheck: BeforeTemporaryIdentityCheck
     ) throws -> (LocalFileEntry, TemporaryOutputLease) {
         var invalidRepresentation = false
@@ -545,14 +600,10 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         }
 
         let temporaryName = temporaryURL.lastPathComponent
-        let fileDescriptor = temporaryName.withCString { name in
-            Darwin.openat(
-                directoryDescriptor,
-                name,
-                O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-                mode_t(S_IRUSR | S_IWUSR)
-            )
-        }
+        let fileDescriptor = createTemporaryFile(
+            directoryDescriptor,
+            temporaryName
+        )
         guard fileDescriptor >= 0 else {
             let code = errno
             Darwin.close(directoryDescriptor)
@@ -582,10 +633,10 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
                 throw SecurityScopedFileAccessError.temporaryOutputChanged
             }
 
-            // Darwin has no conditional unlink-by-inode primitive. This final
-            // descriptor-relative identity check narrows the normal race window;
-            // the post-unlink link-count check below detects a concurrent rename
-            // or hard link before the reservation is allowed to escape.
+            // Darwin has no conditional unlink-by-inode primitive. The unique
+            // job name, descriptor-relative identity check, and immediate
+            // post-unlink link-count seal keep the staging descriptor anonymous
+            // before it leaves this synchronous reservation boundary.
             let unlinkResult = temporaryName.withCString { name in
                 Darwin.unlinkat(directoryDescriptor, name, 0)
             }
@@ -593,9 +644,8 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
                 throw LocalFileSystemFailure(code: errno)
             }
 
-            // Removing the directory entry updates inode metadata (notably
-            // ctime). Seal the descriptor only after it has reached the
-            // anonymous state used by the rest of the workflow.
+            // Removing the entry updates inode metadata (notably ctime).
+            // Seal the descriptor only after it is anonymous.
             let temporaryEntry = try entry(forDescriptor: fileDescriptor)
             guard temporaryEntry.kind == .regular,
                   temporaryEntry.identity == createdEntry.identity,
@@ -610,6 +660,8 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
             )
             return (temporaryEntry, lease)
         } catch {
+            // If the name changed before anonymous sealing, fail closed and do
+            // not unlink by pathname: that entry may belong to another actor.
             Darwin.close(fileDescriptor)
             Darwin.close(directoryDescriptor)
             throw error
@@ -647,15 +699,14 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
                 == cloneCapability
     }
 
-    private static func synchronize(_ descriptor: Int32) -> Bool {
-        while true {
-            if Darwin.fsync(descriptor) == 0 {
-                return true
-            }
-            if errno != EINTR {
-                return false
-            }
-        }
+    private static func isInsufficientStorage(_ code: Int32) -> Bool {
+        code == ENOSPC || code == EDQUOT
+    }
+
+    private static func commitError(
+        forErrno code: Int32
+    ) -> SecurityScopedFileAccessError {
+        isInsufficientStorage(code) ? .insufficientStorage : .commitFailed
     }
 
     private static func isValidLocalAbsoluteURL(_ url: URL) -> Bool {
