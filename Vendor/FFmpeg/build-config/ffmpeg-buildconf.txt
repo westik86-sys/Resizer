@@ -1,6 +1,6 @@
 
   configuration:
-    --prefix=/Users/p.korostelev/Documents/Resizer-app/.build/ffmpeg/8.1.2-profile1/install-arm64
+    --prefix=/opt/resizer-toolchain/ffmpeg/8.1.2-profile7/arm64
     --target-os=darwin
     --arch=aarch64
     --cpu=generic
@@ -10,8 +10,8 @@
     --ar=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar
     --ranlib=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib
     --strip=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip
-    --pkg-config=/Users/p.korostelev/Documents/Resizer-app/Scripts/support/pkg-config-disabled
-    --extra-cflags='-arch arm64 -mmacosx-version-min=14.0'
+    --pkg-config=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7/pkg-config-disabled
+    --extra-cflags='-arch arm64 -mmacosx-version-min=14.0 -ffile-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7=/usr/src/resizer-ffmpeg/8.1.2-profile7 -fdebug-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7=/usr/src/resizer-ffmpeg/8.1.2-profile7 -fmacro-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7=/usr/src/resizer-ffmpeg/8.1.2-profile7'
     --extra-ldflags='-arch arm64 -mmacosx-version-min=14.0'
     --disable-autodetect
     --disable-everything
@@ -28,13 +28,16 @@
     --enable-videotoolbox
     --enable-ffmpeg
     --enable-ffprobe
+    --enable-protocol=fd
     --enable-protocol=file
     --enable-protocol=pipe
     --enable-demuxer=mov
     --enable-muxer=mp4
     --enable-decoder=h264
+    --enable-decoder=hevc
     --enable-decoder=aac
     --enable-parser=h264
+    --enable-parser=hevc
     --enable-parser=aac
     --enable-encoder=h264_videotoolbox
     --enable-encoder=aac

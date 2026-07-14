@@ -1,0 +1,195 @@
+diff --git a/doc/protocols.texi b/doc/protocols.texi
+--- a/doc/protocols.texi
++++ b/doc/protocols.texi
+@@ -279,15 +279,21 @@ ffmpeg -i "data:image/gif;base64,R0lGODdhCAAIAMIEAAAAAAAA//8AAP//AP////////
+ 
+ File descriptor access protocol.
+ 
+-The accepted syntax is:
++The accepted syntaxes are:
+ @example
+ fd: -fd @var{file_descriptor}
++fd:@var{file_descriptor}
+ @end example
+ 
+-If @option{fd} is not specified, by default the stdout file descriptor will be
+-used for writing, stdin for reading. Unlike the pipe protocol, fd protocol has
+-seek support if it corresponding to a regular file. fd protocol doesn't support
+-pass file descriptor via URL for security.
++A file descriptor in the URL takes precedence over the @option{fd} option and
++must be a nonnegative decimal integer. If neither form specifies a descriptor,
++the stdout file descriptor is used for writing and stdin for reading. Unlike
++the pipe protocol, the fd protocol has seek support when the descriptor
++corresponds to a regular file. On the Darwin build, seekable fd contexts use
++positional I/O and maintain independent logical positions, so reopening the
++same inherited descriptor does not share an offset. The descriptor must allow
++every requested operation; MP4 faststart output requires read and write access.
++Streamed descriptors retain sequential read and write behavior.
+ 
+ This protocol accepts the following options:
+ 
+diff --git a/libavformat/file.c b/libavformat/file.c
+--- a/libavformat/file.c
++++ b/libavformat/file.c
+@@ -44,0 +45,4 @@
++#if CONFIG_FD_PROTOCOL && (!defined(__APPLE__) || !HAVE_UNISTD_H)
++#error "Resizer's positional fd protocol patch requires a Darwin target"
++#endif
++
+@@ -92,6 +96,7 @@
+ typedef struct FileContext {
+     const AVClass *class;
+     int fd;
++    int64_t fd_pos;
+     int trunc;
+     int blocksize;
+     int pkt_size;
+@@ -488,24 +493,131 @@
++static int fd_read(URLContext *h, unsigned char *buf, int size)
++{
++    FileContext *c = h->priv_data;
++    int ret;
++
++    if (h->is_streamed)
++        return file_read(h, buf, size);
++
++    size = FFMIN(size, c->blocksize);
++    if (c->fd_pos > INT64_MAX - size)
++        return AVERROR(EOVERFLOW);
++
++    ret = pread(c->fd, buf, size, c->fd_pos);
++    if (ret == 0)
++        return AVERROR_EOF;
++    if (ret < 0)
++        return AVERROR(errno);
++
++    c->fd_pos += ret;
++    return ret;
++}
++
++static int fd_write(URLContext *h, const unsigned char *buf, int size)
++{
++    FileContext *c = h->priv_data;
++    int ret;
++
++    if (h->is_streamed)
++        return file_write(h, buf, size);
++
++    size = FFMIN(size, c->blocksize);
++    if (c->fd_pos > INT64_MAX - size)
++        return AVERROR(EOVERFLOW);
++
++    ret = pwrite(c->fd, buf, size, c->fd_pos);
++    if (ret < 0)
++        return AVERROR(errno);
++
++    c->fd_pos += ret;
++    return ret;
++}
++
++static int64_t fd_seek(URLContext *h, int64_t pos, int whence)
++{
++    FileContext *c = h->priv_data;
++    int64_t base;
++    int64_t target;
++    struct stat st;
++
++    if (h->is_streamed)
++        return file_seek(h, pos, whence);
++
++    if (whence == AVSEEK_SIZE)
++        return file_seek(h, pos, whence);
++
++    switch (whence) {
++    case SEEK_SET:
++        base = 0;
++        break;
++    case SEEK_CUR:
++        base = c->fd_pos;
++        break;
++    case SEEK_END:
++        if (fstat(c->fd, &st) < 0)
++            return AVERROR(errno);
++        base = st.st_size;
++        break;
++    default:
++        return AVERROR(EINVAL);
++    }
++
++    if ((pos > 0 && base > INT64_MAX - pos) ||
++        (pos < 0 && base < INT64_MIN - pos))
++        return AVERROR(EOVERFLOW);
++
++    target = base + pos;
++    if (target < 0)
++        return AVERROR(EINVAL);
++
++    c->fd_pos = target;
++    return target;
++}
++
+ static int fd_open(URLContext *h, const char *filename, int flags)
+ {
+     FileContext *c = h->priv_data;
++    const char *descriptor;
++    int parsed_fd = 0;
+     struct stat st;
+ 
+-    if (strcmp(filename, "fd:") != 0) {
+-        av_log(h, AV_LOG_ERROR, "Doesn't support pass file descriptor via URL,"
+-                                " please set it via -fd {num}\n");
++    if (!av_strstart(filename, "fd:", &descriptor)) {
++        av_log(h, AV_LOG_ERROR, "Invalid file descriptor URL\n");
+         return AVERROR(EINVAL);
+     }
+ 
+-    if (c->fd < 0) {
++    if (*descriptor) {
++        for (; *descriptor; descriptor++) {
++            int digit;
++
++            if (*descriptor < '0' || *descriptor > '9') {
++                av_log(h, AV_LOG_ERROR, "Invalid file descriptor URL\n");
++                return AVERROR(EINVAL);
++            }
++
++            digit = *descriptor - '0';
++            if (parsed_fd > (INT_MAX - digit) / 10) {
++                av_log(h, AV_LOG_ERROR, "File descriptor is out of range\n");
++                return AVERROR(ERANGE);
++            }
++            parsed_fd = parsed_fd * 10 + digit;
++        }
++        c->fd = parsed_fd;
++    } else if (c->fd < 0) {
+         if (flags & AVIO_FLAG_WRITE) {
+             c->fd = 1;
+         } else {
+             c->fd = 0;
+         }
+     }
++
+     if (fstat(c->fd, &st) < 0)
+         return AVERROR(errno);
+     h->is_streamed = !(S_ISREG(st.st_mode) || S_ISBLK(st.st_mode));
++    if (!h->is_streamed) {
++        c->fd_pos = lseek(c->fd, 0, SEEK_CUR);
++        if (c->fd_pos < 0)
++            return AVERROR(errno);
++    }
+     c->fd = fd_dup(h, c->fd);
+     if (c->fd == -1)
+         return AVERROR(errno);
+@@ -516,9 +628,9 @@ static int fd_open(URLContext *h, const char *filename, int flags)
+ const URLProtocol ff_fd_protocol = {
+     .name                = "fd",
+     .url_open            = fd_open,
+-    .url_read            = file_read,
+-    .url_write           = file_write,
+-    .url_seek            = file_seek,
++    .url_read            = fd_read,
++    .url_write           = fd_write,
++    .url_seek            = fd_seek,
+     .url_close           = file_close,
+     .url_get_file_handle = file_get_handle,
+     .url_check           = file_check,

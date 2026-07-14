@@ -1,6 +1,7 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
+Build profile revision: 7
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
 License target: LGPL 2.1-or-later
@@ -8,7 +9,37 @@ License target: LGPL 2.1-or-later
 The two slices use the same component profile. ARCH, SDKROOT, compiler paths,
 prefix, and -arch flags are supplied by Scripts/build-ffmpeg.sh.
 External package discovery is disabled with the repository's fail-closed
-Scripts/support/pkg-config-disabled shim.
+pkg-config shim copied into the stable build root.
+
+Reproducibility paths:
+
+- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7`
+- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile7/<arch>`
+- Compiler path mapping: the build/source root is mapped to
+  `/usr/src/resizer-ffmpeg/8.1.2-profile7`
+
+The fixed build root, virtual prefix, C locale, UTC timezone, deterministic
+archive timestamps, and Clang file/debug/macro prefix maps prevent a developer
+username or repository checkout path from being embedded in the distributed
+binaries. `Scripts/build-ffmpeg.sh` rejects outputs and saved reports that
+contain such paths.
+
+Pinned source patch:
+
+Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch
+SHA-256: 7f2095aae417027256fa76640aa1bfe44e37cc46bdffea269e8203353930cc5d
+
+The patch preserves the legacy `fd:` behavior and adds strict decimal
+`fd:<number>` URLs for nonnegative descriptors through INT_MAX. An explicit URL
+descriptor takes precedence over the `fd` protocol option. Signs, whitespace,
+trailing characters, and numeric overflow are rejected. On Darwin, every
+seekable `fd` context keeps an independent logical offset and uses `pread` /
+`pwrite`; streamed descriptors keep the legacy sequential behavior. This avoids
+shared-open-file-description offset interference when the MOV muxer reopens an
+explicit `fd:<number>` URL during `+faststart`. That descriptor must be opened
+for both reading and writing, and should point to an empty regular file. Because
+this profile relies on Darwin's positional-I/O semantics, enabling the patched
+`fd` protocol for a non-Darwin target fails at compile time.
 
 --target-os=darwin
 --enable-cross-compile
@@ -28,13 +59,16 @@ Scripts/support/pkg-config-disabled shim.
 --enable-videotoolbox
 --enable-ffmpeg
 --enable-ffprobe
+--enable-protocol=fd
 --enable-protocol=file
 --enable-protocol=pipe
 --enable-demuxer=mov
 --enable-muxer=mp4
 --enable-decoder=h264
+--enable-decoder=hevc
 --enable-decoder=aac
 --enable-parser=h264
+--enable-parser=hevc
 --enable-parser=aac
 --enable-encoder=h264_videotoolbox
 --enable-encoder=aac
@@ -51,5 +85,5 @@ Explicitly absent:
 --enable-libx265
 
 No external --enable-lib* option is used. Network support and all network
-protocols are disabled. The only bundled command-line programs are ffmpeg and
-ffprobe.
+protocols are disabled. Only the local fd, file, and pipe protocols are enabled.
+The only bundled command-line programs are ffmpeg and ffprobe.

@@ -1,0 +1,9 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video"
+    }
+  ],
+  "format": {
+    "duration": "12.345678"

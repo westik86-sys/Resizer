@@ -1,7 +1,9 @@
 Supported file protocols:
 Input:
+  fd
   file
   pipe
 Output:
+  fd
   file
   pipe

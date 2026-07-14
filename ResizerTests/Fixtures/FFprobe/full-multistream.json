@@ -1,0 +1,154 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "HEVC (High Efficiency Video Coding)",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "width": 3840,
+      "height": "2160",
+      "coded_width": 3840,
+      "coded_height": 2160,
+      "pix_fmt": "yuv420p10le",
+      "bits_per_raw_sample": "10",
+      "r_frame_rate": "60000/1001",
+      "avg_frame_rate": "30000/1001",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020",
+      "disposition": {
+        "default": 1,
+        "forced": 0,
+        "attached_pic": 0,
+        "future_flag": 1
+      },
+      "tags": {
+        "language": "und",
+        "handler_name": "VideoHandler"
+      },
+      "side_data_list": [
+        {
+          "side_data_type": "Display Matrix",
+          "displaymatrix": "00000000:            0      -65536           0\n00000001:        65536           0           0",
+          "rotation": -90
+        }
+      ],
+      "future_stream_object": {
+        "version": 2
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "bit_rate": "192000",
+      "disposition": {
+        "default": 1,
+        "forced": 0,
+        "attached_pic": 0
+      },
+      "tags": {
+        "language": "eng",
+        "handler_name": "English stereo"
+      }
+    },
+    {
+      "index": 2,
+      "codec_name": "ac3",
+      "codec_type": "audio",
+      "sample_rate": 48000,
+      "channels": "6",
+      "channel_layout": "5.1(side)",
+      "bit_rate": 384000,
+      "disposition": {
+        "default": 0,
+        "forced": 0,
+        "attached_pic": 0
+      },
+      "tags": {
+        "language": "spa"
+      }
+    },
+    {
+      "index": 3,
+      "codec_name": "mov_text",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 0,
+        "forced": 1,
+        "attached_pic": 0
+      },
+      "tags": {
+        "language": "fra",
+        "title": "Forced subtitles"
+      }
+    },
+    {
+      "index": 4,
+      "codec_name": "tmcd",
+      "codec_type": "data",
+      "disposition": {
+        "default": 0,
+        "forced": 0,
+        "attached_pic": 0
+      },
+      "tags": {
+        "handler_name": "TimeCodeHandler"
+      }
+    },
+    {
+      "index": 5,
+      "codec_name": "mjpeg",
+      "codec_type": "video",
+      "width": "600",
+      "height": 600,
+      "pix_fmt": "yuvj420p",
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "disposition": {
+        "default": 0,
+        "forced": 0,
+        "attached_pic": 1
+      },
+      "tags": {
+        "title": "Cover"
+      }
+    }
+  ],
+  "chapters": [
+    {
+      "id": 0,
+      "time_base": "1/1000",
+      "start": 0,
+      "start_time": "0.000000",
+      "end": 12346,
+      "end_time": "12.346000",
+      "tags": {
+        "title": "Opening"
+      }
+    }
+  ],
+  "format": {
+    "filename": "/private/input/Camera Sample.mov",
+    "nb_streams": 6,
+    "nb_programs": 0,
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "format_long_name": "QuickTime / MOV",
+    "duration": "12.345678",
+    "size": "24681357",
+    "bit_rate": "8000000",
+    "probe_score": 100,
+    "tags": {
+      "major_brand": "qt  ",
+      "com.apple.quicktime.make": "Fixture Camera"
+    }
+  },
+  "programs": [],
+  "future_root_field": {
+    "enabled": true
+  }
+}

@@ -1,6 +1,7 @@
 # ADR 0002: Bundled FFmpeg toolchain spike
 
-- Status: Accepted for implementation stage 2
+- Status: Accepted for implementation stage 2; component profile amended by
+  [`ADR 0009`](0009-hevc-input.md)
 - Date: 2026-07-13
 
 ## Context
@@ -19,10 +20,11 @@ official FFmpeg 8.1.2 source archive. Pin release tag `n8.1.2`, commit
 and locally calculated SHA-256 checksum.
 
 Use the minimal component profile recorded in
-`Vendor/FFmpeg/build-config/profile.txt`. It accepts H.264/AAC in MOV or MP4,
-encodes H.264 through VideoToolbox and audio through FFmpeg's native AAC
-encoder, writes MP4, and enables only local-file and pipe protocols. Network,
-external libraries, GPL, nonfree, libx264, and libx265 are excluded.
+`Vendor/FFmpeg/build-config/profile.txt`. The current profile accepts H.264 or
+HEVC video and AAC audio in MOV or MP4, encodes H.264 through VideoToolbox and
+audio through FFmpeg's native AAC encoder, writes MP4, and enables only
+local-file, descriptor, and pipe protocols. Network, external libraries, GPL,
+nonfree, libx264, and libx265 are excluded.
 
 Build independent `arm64` and `x86_64` slices with the same macOS 14 component
 profile. Disable standalone x86 assembly to avoid a NASM dependency, retain
@@ -50,6 +52,12 @@ test is mandatory because inherited static sandbox rights do not by themselves
 prove that PowerBox access selected after launch reaches an external CLI tool.
 If direct access is rejected, the resolution must not be broader helper
 entitlements; it requires a documented data-transfer or helper architecture.
+
+That rename records the historical stage-2 spike, not the production stage-7
+publication contract. The headless core now creates and immediately unlinks an
+`O_RDWR` temporary, passes that exact file as child fd 3, validates the same fd
+with FFprobe, and publishes it with no-replace `fclonefileat`. It does not
+rename a temporary pathname.
 
 ### Verification record
 

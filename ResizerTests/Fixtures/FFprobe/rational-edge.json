@@ -1,0 +1,46 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "r_frame_rate": "30000/1001",
+      "avg_frame_rate": "0/0"
+    },
+    {
+      "index": 1,
+      "codec_name": "mpeg4",
+      "codec_type": "video",
+      "width": 1280,
+      "height": 720,
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "N/A"
+    },
+    {
+      "index": 2,
+      "codec_name": "vp9",
+      "codec_type": "video",
+      "width": 640,
+      "height": 360,
+      "r_frame_rate": "48/1",
+      "avg_frame_rate": "24000/1001"
+    },
+    {
+      "index": 3,
+      "codec_name": "rawvideo",
+      "codec_type": "video",
+      "width": 320,
+      "height": 240,
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "not-a-rate"
+    }
+  ],
+  "format": {
+    "format_name": "matroska,webm",
+    "duration": "N/A",
+    "size": "0",
+    "bit_rate": "N/A"
+  }
+}

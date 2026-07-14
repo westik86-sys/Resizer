@@ -18,3 +18,7 @@ FCF986EA15E6E293A5644F10B4322F04D67658D8
 The local SHA-256 values are pinned in `../checksums/SHA256SUMS`. FFmpeg does
 not publish a SHA-256 sidecar for this archive. The detached signature should
 also be verified with the official key on a host with GnuPG before release.
+
+The archive remains unmodified. `../patches/0001-avformat-fd-accept-descriptor-in-url.patch`
+is verified separately and applied to the extracted tree by
+`Scripts/build-ffmpeg.sh`. Its checksum is pinned in the same manifest.

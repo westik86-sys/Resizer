@@ -1,0 +1,22 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "telemetry",
+      "future_stream_field": {
+        "payload": [1, 2, 3]
+      }
+    },
+    {
+      "index": "1",
+      "another_unknown_field": true
+    }
+  ],
+  "programs": [
+    {
+      "program_id": 99,
+      "program_name": "Ignored program"
+    }
+  ],
+  "future_root_field": "ignored"
+}

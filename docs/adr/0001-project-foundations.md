@@ -98,9 +98,18 @@ Not selected. Universal 2 is required for the public build; arm64-only remains a
 - The app must carry, sign, version, and expose the capabilities and licenses of its own `ffmpeg` and `ffprobe` executables.
 - Domain remains independent of SwiftUI, AppKit, and `Foundation.Process`; UI models run on `MainActor`, while the coordinator and long-lived process services use actor isolation.
 - `JobState` is the single workflow state source, and the Application coordinator serializes `probe -> preflight -> encode -> validate -> commit` plus cancellation races.
-- Process infrastructure must drain stdout and stderr concurrently, bound diagnostics, parse `-progress pipe:1`, and implement graceful cancellation with signal fallbacks and EOF synchronization.
+- Process infrastructure must pass the exact anonymous `O_RDWR` temporary as
+  child fd 3, parse progress only from stdout via `-progress pipe:1`, retain
+  stderr only as bounded diagnostics, and implement graceful cancellation with
+  signal fallbacks and EOF synchronization. Validation reuses the same fd, and
+  final publication is a no-replace `fclonefileat` operation.
 - Sandbox file access must remain active through transcode, validation, and final commit. No network entitlement is expected.
-- Output planning must prevent input aliasing and collisions. Failure or cancellation cleans only the known job's temporary output.
+- Output planning must prevent input aliasing and collisions. Failure or
+  cancellation releases only the known job's already-unlinked temporary
+  descriptor; the immutable input and any later pathname replacement remain
+  untouched. Reservation rejects before encode a filesystem that cannot clone
+  the source to the same-volume final directory; later publication errors still
+  fail closed.
 - Reproducible FFmpeg provenance, checksums, configure flags, patches, source/build instructions, capabilities, and notices become release artifacts rather than optional documentation.
 - The first implementation work must remain a narrow, testable stage; later codecs, target-size mode, editing, persistence, and advanced stream handling need separate decisions.
 
