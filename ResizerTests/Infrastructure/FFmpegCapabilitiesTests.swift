@@ -8,7 +8,7 @@ struct FFmpegCapabilitiesTests {
     func parsesCapabilityTables() throws {
         let value = try parseCapabilities()
 
-        #expect(value.decoders == ["h264", "aac"])
+        #expect(value.decoders == ["h264", "hevc", "aac"])
         #expect(value.encoders == ["h264_videotoolbox", "aac"])
         #expect(value.filters == ["scale", "aresample"])
         #expect(value.demuxers == ["mov", "mp4", "m4a"])
@@ -46,7 +46,7 @@ struct FFmpegCapabilitiesTests {
         }
     }
 
-    @Test("The audited H.264/AAC profile accepts the balanced request")
+    @Test("The audited H.264/HEVC/AAC profile accepts H.264 input")
     func acceptsSupportedRequest() throws {
         let request = try makeRequest(
             mediaInfo: TestFixtures.mediaInfo(),
@@ -57,6 +57,49 @@ struct FFmpegCapabilitiesTests {
             request,
             capabilities: parseCapabilities()
         )
+    }
+
+    @Test("The audited profile accepts SDR HEVC input")
+    func acceptsHEVCInput() throws {
+        let request = try makeRequest(
+            mediaInfo: videoOnlyMediaInfo(codecName: "hevc"),
+            recipe: CompressionRecipe(preset: .balanced)
+        )
+
+        try FFmpegPreflightValidator().validate(
+            request,
+            capabilities: parseCapabilities()
+        )
+    }
+
+    @Test("HEVC input fails closed when the bundled decoder is unavailable")
+    func rejectsHEVCWithoutBundledDecoder() throws {
+        let supported = try parseCapabilities()
+        let capabilities = FFmpegCapabilities(
+            decoders: supported.decoders.subtracting(["hevc"]),
+            encoders: supported.encoders,
+            filters: supported.filters,
+            demuxers: supported.demuxers,
+            muxers: supported.muxers,
+            inputProtocols: supported.inputProtocols,
+            outputProtocols: supported.outputProtocols
+        )
+        let request = try makeRequest(
+            mediaInfo: videoOnlyMediaInfo(codecName: "hevc"),
+            recipe: CompressionRecipe(preset: .balanced)
+        )
+
+        #expect(
+            throws: FFmpegPreflightError.unsupportedDecoder(
+                streamIndex: 3,
+                codecName: "hevc"
+            )
+        ) {
+            try FFmpegPreflightValidator().validate(
+                request,
+                capabilities: capabilities
+            )
+        }
     }
 
     @Test("The descriptor output profile requires both fd and pipe protocols")
@@ -96,36 +139,15 @@ struct FFmpegCapabilitiesTests {
 
     @Test("Unsupported selected video decoder is a typed preflight error")
     func rejectsUnsupportedVideoDecoder() throws {
-        let mediaInfo = try MediaInfo(
-            formatNames: ["mov", "mp4"],
-            durationMicroseconds: 1_000_000,
-            byteCount: 1_000,
-            bitRate: nil,
-            streams: [
-                .video(
-                    try VideoStreamInfo(
-                        index: 3,
-                        codecName: "hevc",
-                        encodedWidth: 1_920,
-                        encodedHeight: 1_080,
-                        frameRate: nil,
-                        rotationDegrees: nil,
-                        pixelFormat: "yuv420p10le",
-                        bitDepth: 10,
-                        dynamicRange: .sdr
-                    )
-                ),
-            ]
-        )
         let request = try makeRequest(
-            mediaInfo: mediaInfo,
+            mediaInfo: videoOnlyMediaInfo(codecName: "vp9"),
             recipe: CompressionRecipe(preset: .balanced)
         )
 
         #expect(
             throws: FFmpegPreflightError.unsupportedDecoder(
                 streamIndex: 3,
-                codecName: "hevc"
+                codecName: "vp9"
             )
         ) {
             try FFmpegPreflightValidator().validate(
@@ -489,6 +511,30 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
+    private func videoOnlyMediaInfo(codecName: String) throws -> MediaInfo {
+        try MediaInfo(
+            formatNames: ["mov", "mp4"],
+            durationMicroseconds: 1_000_000,
+            byteCount: 1_000,
+            bitRate: nil,
+            streams: [
+                .video(
+                    try VideoStreamInfo(
+                        index: 3,
+                        codecName: codecName,
+                        encodedWidth: 1_920,
+                        encodedHeight: 1_080,
+                        frameRate: nil,
+                        rotationDegrees: nil,
+                        pixelFormat: "yuv420p",
+                        bitDepth: 8,
+                        dynamicRange: .sdr
+                    )
+                ),
+            ]
+        )
+    }
+
     private func customRecipe(
         audioPolicy: AudioPolicy
     ) throws -> CompressionRecipe {
@@ -511,6 +557,7 @@ struct FFmpegCapabilitiesTests {
              V..... = Video
              ------
              VFS..D h264                 H.264
+             VFS..D hevc                 HEVC
              A....D aac                  AAC
             """.utf8
         )

@@ -13,7 +13,8 @@
 | Sandbox | Включить с начала разработки |
 | FFmpeg | Собственная воспроизводимая сборка, вложенные `ffmpeg` и `ffprobe` |
 | Лицензионный профиль | LGPL-only, без `--enable-gpl` и `--enable-nonfree` |
-| Видеокодек MVP | H.264 через `h264_videotoolbox` |
+| Видео-вход MVP | H.264 и HEVC в MOV/MP4 с действующей SDR-политикой |
+| Видеовыход MVP | H.264 через `h264_videotoolbox` |
 | Аудио | AAC |
 | Контейнер результата | MP4 + `faststart` |
 | Очередь | Последовательная, один FFmpeg-процесс одновременно |
@@ -68,7 +69,8 @@
 
 - Импорт через drag-and-drop и `Cmd+O`.
 - Один или несколько файлов.
-- Официально поддерживаемые входы сначала: MOV и MP4.
+- Официально поддерживаемые входы: MOV и MP4 с H.264 или HEVC-видео
+  в рамках действующей SDR-политики и с AAC-аудио либо без аудио.
 - Анализ через `ffprobe`:
   - размер;
   - длительность;
@@ -109,7 +111,7 @@
 - Гарантированный целевой размер.
 - Пользовательские произвольные FFmpeg-флаги.
 - Trim, crop, watermark и другие функции видеоредактора.
-- HEVC, AV1, VP9 и ручной выбор контейнера.
+- HEVC-выход, AV1/VP9-вход и выход, ручной выбор контейнера.
 - Постоянную историю между запусками.
 - Pause/resume.
 - Облачную обработку и аккаунты.
@@ -123,7 +125,7 @@
 
 - «Уложить в размер» через двухпроходное кодирование.
 - Пользовательские пресеты.
-- HEVC через VideoToolbox.
+- HEVC-выход через VideoToolbox.
 - Выбор аудиодорожек и сохранение субтитров.
 - Пробное кодирование короткого фрагмента для оценки результата.
 - Персистентная очередь и security-scoped bookmarks.
@@ -807,7 +809,7 @@ CommandBuilding, OutputPlanning, FileAccessing.
 - без --enable-gpl;
 - без --enable-nonfree;
 - без libx264/libx265;
-- с h264_videotoolbox и native AAC.
+- с native H.264/HEVC decoder/parser, h264_videotoolbox и native AAC.
 
 Добавь ffmpeg/ffprobe в app bundle как Executables с Code Sign On Copy.
 Настрой минимальные app/helper entitlements.
@@ -895,7 +897,7 @@ Builder:
 - пишет только во временный .partial.mp4;
 - добавляет machine-readable progress и faststart.
 
-Не добавляй arbitrary FFmpeg flags, HEVC или target-size mode.
+Не добавляй arbitrary FFmpeg flags, HEVC-выход или target-size mode.
 
 Добавь golden tests для всех пресетов, Unicode-путей,
 video без audio, resize и output collision.

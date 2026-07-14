@@ -46,6 +46,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             "-global_quality:v:0",
             qualityArgument(request.recipe.rateControl),
             "-pix_fmt:v:0", "yuv420p",
+            "-color_range:v:0", "tv",
             "-filter:v:0", scaleFilter(request.recipe.scalePolicy),
         ])
 
@@ -177,7 +178,8 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         switch policy {
         case .original:
             return "scale=w='max(2,trunc(iw/2)*2)':"
-                + "h='max(2,trunc(ih/2)*2)':flags=lanczos"
+                + "h='max(2,trunc(ih/2)*2)':"
+                + "flags=lanczos:out_range=tv"
         case .maximum(let limit):
             return "scale=w='if(gte(iw,ih),"
                 + "min(iw,\(limit.maximumLongEdge)),"
@@ -187,6 +189,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
                 + "min(ih,\(limit.maximumLongEdge)))':"
                 + "force_original_aspect_ratio=decrease:"
                 + "force_divisible_by=2:reset_sar=1:flags=lanczos"
+                + ":out_range=tv"
         }
     }
 

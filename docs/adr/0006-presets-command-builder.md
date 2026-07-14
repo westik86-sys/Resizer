@@ -1,6 +1,7 @@
 # ADR 0006: Preset recipes, FFmpeg command construction, and output planning
 
-- Status: Accepted for implementation stage 6
+- Status: Accepted for implementation stage 6; input capability profile
+  amended by [`ADR 0009`](0009-hevc-input.md)
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 
@@ -159,10 +160,16 @@ final name against a later filesystem race.
 
 Stage-6 golden tests prove deterministic construction, not that every probed
 input is decodable by the bundled binary. The current minimal toolchain profile
-contains H.264 and AAC decoders, while FFprobe can describe other MOV/MP4
-streams, including HEVC video or non-AAC audio. A valid recipe and command
-therefore do not by themselves prove that the selected input codecs are
-available.
+contains native H.264, HEVC, and AAC decoders, while FFprobe can describe other
+MOV/MP4 streams, including AV1/VP9 video or non-AAC audio. A valid recipe and
+command therefore do not by themselves prove that the selected input codecs
+are available.
+
+Every video recipe converts the filter output to limited (`tv`) range and also
+sets the encoder's output range explicitly. Full-range 8-bit SDR camera input
+such as `yuvj420p` therefore becomes the validator's deterministic limited-range
+H.264 `yuv420p` compatibility output instead of merely relabelling full-range
+samples.
 
 Before launching FFmpeg, the stage-7 preflight compares selected input and
 required output features with the cached capabilities of the actual bundled

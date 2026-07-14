@@ -25,7 +25,7 @@ struct FFmpegTranscodingServiceTests {
         #expect(await runner.recordedRequests().isEmpty)
 
         let unavailable = FFmpegCapabilities(
-            decoders: ["h264", "aac"],
+            decoders: ["h264", "hevc", "aac"],
             encoders: ["aac"],
             filters: ["scale", "aresample"],
             demuxers: ["mov", "mp4"],

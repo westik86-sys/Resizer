@@ -21,6 +21,11 @@ results, and Finder reveal. English and Russian localizations, keyboard access,
 VoiceOver-focused state changes, actionable typed errors, and redacted bounded
 diagnostics are included.
 
+Supported video inputs are H.264 and HEVC in MOV/MP4 under the existing SDR
+policy. The compatibility output remains H.264 VideoToolbox with optional AAC
+in MP4; HEVC output, HDR tone mapping, libx265, GPL, and nonfree components are
+not included.
+
 The application coordinator remains the sole workflow owner. It retains
 security-scoped input and output access through probe, capability preflight,
 encode, validation, and publication. FFmpeg writes to the exact per-job staging
@@ -44,7 +49,8 @@ filesystem publication paths, localization, accessibility-facing copy, and a
 real bundled `probe → transcode → probe` flow. See
 [`docs/architecture.md`](docs/architecture.md),
 [`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md),
-and [`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md).
+[`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md),
+and [`docs/adr/0009-hevc-input.md`](docs/adr/0009-hevc-input.md).
 
 Sandbox checkpoint A passed locally on 2026-07-13: an ad hoc-signed Universal 2
 Release app used PowerBox-selected input and output locations to run bundled

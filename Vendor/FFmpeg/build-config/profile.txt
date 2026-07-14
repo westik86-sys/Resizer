@@ -1,7 +1,7 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
-Build profile revision: 6
+Build profile revision: 7
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
 License target: LGPL 2.1-or-later
@@ -13,10 +13,10 @@ pkg-config shim copied into the stable build root.
 
 Reproducibility paths:
 
-- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile6`
-- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile6/<arch>`
+- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile7`
+- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile7/<arch>`
 - Compiler path mapping: the build/source root is mapped to
-  `/usr/src/resizer-ffmpeg/8.1.2-profile6`
+  `/usr/src/resizer-ffmpeg/8.1.2-profile7`
 
 The fixed build root, virtual prefix, C locale, UTC timezone, deterministic
 archive timestamps, and Clang file/debug/macro prefix maps prevent a developer
@@ -65,8 +65,10 @@ this profile relies on Darwin's positional-I/O semantics, enabling the patched
 --enable-demuxer=mov
 --enable-muxer=mp4
 --enable-decoder=h264
+--enable-decoder=hevc
 --enable-decoder=aac
 --enable-parser=h264
+--enable-parser=hevc
 --enable-parser=aac
 --enable-encoder=h264_videotoolbox
 --enable-encoder=aac

@@ -1,8 +1,8 @@
 # ADR 0007: Headless transcoding transaction and safe publication
 
 - Status: Accepted for implementation stage 7; cancellation and publication
-  sections amended by
-  [`ADR 0008`](0008-stage-10-hardening.md)
+  sections amended by [`ADR 0008`](0008-stage-10-hardening.md), and the input
+  codec profile amended by [`ADR 0009`](0009-hevc-input.md)
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 
@@ -207,8 +207,8 @@ the two deterministic race winners.
 - Output publication is currently limited to clone-capable filesystems. An
   unsupported output volume fails during reservation before encoding, without
   changing the original or claiming a final result.
-- The stage validates the H.264 SDR MVP only; HDR tone mapping, HEVC, arbitrary
-  flags, target-size encoding, queueing, and retry UI remain out of scope.
+- The stage produces only the H.264 SDR compatibility output. HDR tone mapping,
+  HEVC output, arbitrary flags, and target-size encoding remain out of scope.
 
 ## Verification
 
@@ -222,9 +222,16 @@ the two deterministic race winners.
 - `ResizerTests/Infrastructure/TranscodeOutputValidatorTests.swift`
 - `ResizerTests/Integration/HeadlessTranscodingIntegrationTests.swift`
 
-The integration fixture is
-`ResizerTests/Fixtures/Media/short-h264-aac.mp4`, with SHA-256
-`d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1`.
-It is a locally generated three-second H.264/yuv420p plus mono AAC artifact,
-not third-party media. Running the test requires neither network access nor a
-system/Homebrew FFmpeg installation.
+The integration fixtures are:
+
+- `ResizerTests/Fixtures/Media/short-h264-aac.mp4`, SHA-256
+  `d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1`;
+- `ResizerTests/Fixtures/Media/short-hevc-aac.mp4`, SHA-256
+  `414ec7fd160f23f6fb37b8947ca4f6f58c8fc46ef79dff00661f41f18abb58ac`.
+
+They are locally generated synthetic media, not third-party content. The HEVC
+fixture is a one-second portrait 180x320, 60 FPS, full-range
+HEVC Main/yuvj420p plus mono AAC derivative of the same source material. It was
+encoded with Apple's `hevc_videotoolbox` and contains no `libx265` component.
+Running the tests requires neither network access nor a system/Homebrew FFmpeg
+installation.

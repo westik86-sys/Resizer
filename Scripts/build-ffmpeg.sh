@@ -13,7 +13,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 VERSION=8.1.2
-PROFILE_REVISION=6
+PROFILE_REVISION=7
 DEPLOYMENT_TARGET=14.0
 ARCHIVE_NAME="ffmpeg-$VERSION.tar.xz"
 ARCHIVE="$ROOT_DIR/Vendor/FFmpeg/sources/$ARCHIVE_NAME"
@@ -23,7 +23,7 @@ PATCHED_FILE_TARGET="libavformat/file.c"
 PATCHED_FILE_SHA256=a70cd7c73aede2e8af12e8208fc6aa520307310c5b1766ce538042481628b56a
 PATCHED_DOC_TARGET="doc/protocols.texi"
 PATCHED_DOC_SHA256=3605ab85752fdd25b55a5803fc8dbe0974dbfa94923d904b97486f5df6ce650e
-PROFILE_SHA256=2a9f632820fe2971e572840f04a91e930e674c13cc583787da3cd9b4a812baa8
+PROFILE_SHA256=06cfc62b57013bc85fe6a43bffee56a9466faf8acf351f7481c1239917279d0a
 CHECKSUM_DIR="$ROOT_DIR/Vendor/FFmpeg/checksums"
 CHECKSUMS="$CHECKSUM_DIR/SHA256SUMS"
 BUILD_CHECKSUMS="$CHECKSUM_DIR/BUILD_SHA256SUMS"
@@ -310,8 +310,10 @@ build_architecture() {
             --enable-demuxer=mov \
             --enable-muxer=mp4 \
             --enable-decoder=h264 \
+            --enable-decoder=hevc \
             --enable-decoder=aac \
             --enable-parser=h264 \
+            --enable-parser=hevc \
             --enable-parser=aac \
             --enable-encoder=h264_videotoolbox \
             --enable-encoder=aac \
@@ -393,6 +395,14 @@ if ! grep -q ' aac ' "$STAGED_REPORT_DIR/encoders.txt"; then
     echo "Required native AAC encoder is missing" >&2
     exit 1
 fi
+for REQUIRED_DECODER in h264 hevc aac; do
+    if ! awk -v decoder="$REQUIRED_DECODER" '
+        $2 == decoder { found = 1 }
+        END { exit !found }
+    ' "$STAGED_REPORT_DIR/decoders.txt"; then
+        fail "Required native decoder is missing: $REQUIRED_DECODER"
+    fi
+done
 if grep -Eq 'enable-(gpl|version3|nonfree|libx264|libx265)' "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt"; then
     echo "Forbidden FFmpeg licensing option detected" >&2
     exit 1
@@ -403,6 +413,17 @@ for CONFIG_REPORT in \
     for DISABLED_LICENSE_MODE in GPL VERSION3 NONFREE; do
         if ! grep -q "^!CONFIG_$DISABLED_LICENSE_MODE=yes$" "$CONFIG_REPORT"; then
             fail "FFmpeg license mode is not fail-closed in $CONFIG_REPORT: $DISABLED_LICENSE_MODE"
+        fi
+    done
+    for REQUIRED_COMPONENT in \
+        H264_DECODER \
+        HEVC_DECODER \
+        AAC_DECODER \
+        H264_PARSER \
+        HEVC_PARSER \
+        AAC_PARSER; do
+        if ! grep -q "^CONFIG_$REQUIRED_COMPONENT=yes$" "$CONFIG_REPORT"; then
+            fail "Required FFmpeg component is missing from $CONFIG_REPORT: $REQUIRED_COMPONENT"
         fi
     done
 done

@@ -42,9 +42,11 @@ struct FFmpegCommandBuilderTests {
                 "-c:v:0", "h264_videotoolbox",
                 "-global_quality:v:0", "85",
                 "-pix_fmt:v:0", "yuv420p",
+                "-color_range:v:0", "tv",
                 "-filter:v:0",
                 "scale=w='max(2,trunc(iw/2)*2)':"
-                    + "h='max(2,trunc(ih/2)*2)':flags=lanczos",
+                    + "h='max(2,trunc(ih/2)*2)':"
+                    + "flags=lanczos:out_range=tv",
                 "-c:a:0", "aac",
                 "-b:a:0", "192000",
                 "-map_metadata:g", "0:g",
@@ -82,11 +84,13 @@ struct FFmpegCommandBuilderTests {
                 "-c:v:0", "h264_videotoolbox",
                 "-global_quality:v:0", "65",
                 "-pix_fmt:v:0", "yuv420p",
+                "-color_range:v:0", "tv",
                 "-filter:v:0",
                 "scale=w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
                     + "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
                     + "force_original_aspect_ratio=decrease:"
-                    + "force_divisible_by=2:reset_sar=1:flags=lanczos",
+                    + "force_divisible_by=2:reset_sar=1:flags=lanczos:"
+                    + "out_range=tv",
                 "-fpsmax:v:0", "30",
                 "-c:a:0", "aac",
                 "-b:a:0", "128000",
@@ -125,11 +129,13 @@ struct FFmpegCommandBuilderTests {
                 "-c:v:0", "h264_videotoolbox",
                 "-global_quality:v:0", "45",
                 "-pix_fmt:v:0", "yuv420p",
+                "-color_range:v:0", "tv",
                 "-filter:v:0",
                 "scale=w='if(gte(iw,ih),min(iw,1280),min(iw,720))':"
                     + "h='if(gte(iw,ih),min(ih,720),min(ih,1280))':"
                     + "force_original_aspect_ratio=decrease:"
-                    + "force_divisible_by=2:reset_sar=1:flags=lanczos",
+                    + "force_divisible_by=2:reset_sar=1:flags=lanczos:"
+                    + "out_range=tv",
                 "-fpsmax:v:0", "24",
                 "-c:a:0", "aac",
                 "-b:a:0", "96000",
@@ -162,6 +168,39 @@ struct FFmpegCommandBuilderTests {
         #expect(!arguments.contains("-c:a:0"))
         #expect(!arguments.contains("-b:a:0"))
         #expect(!arguments.contains("-map_metadata:s:a:0"))
+    }
+
+    @Test("Full-range SDR HEVC input becomes limited-range H.264 output")
+    func fullRangeHEVCInputUsesH264CompatibilityOutput() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        codecName: "hevc",
+                        pixelFormat: "yuvj420p"
+                    )
+                ),
+                .audio(try makeAudio(index: 5)),
+            ]
+        )
+        let request = try makeRequest(
+            recipe: CompressionRecipe(preset: .balanced),
+            mediaInfo: mediaInfo
+        )
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(
+            optionValues("-c:v:0", in: arguments) == ["h264_videotoolbox"]
+        )
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv420p"])
+        #expect(optionValues("-color_range:v:0", in: arguments) == ["tv"])
+        #expect(
+            try #require(optionValues("-filter:v:0", in: arguments).first)
+                .contains("out_range=tv")
+        )
+        #expect(optionValues("-map", in: arguments) == ["0:2", "0:5"])
     }
 
     @Test("Mute omits the input audio map and audio encoder")
@@ -528,6 +567,8 @@ struct FFmpegCommandBuilderTests {
 
     private func makeVideo(
         index: Int,
+        codecName: String = "h264",
+        pixelFormat: String? = "yuv420p",
         bitDepth: Int? = 8,
         dynamicRange: DynamicRange = .sdr,
         sampleAspectRatio: RationalAspectRatio? = nil,
@@ -535,13 +576,13 @@ struct FFmpegCommandBuilderTests {
     ) throws -> VideoStreamInfo {
         try VideoStreamInfo(
             index: index,
-            codecName: "h264",
+            codecName: codecName,
             encodedWidth: 1_920,
             encodedHeight: 1_080,
             frameRate: try RationalFrameRate(numerator: 30_000, denominator: 1_001),
             sampleAspectRatio: sampleAspectRatio,
             rotationDegrees: 0,
-            pixelFormat: "yuv420p",
+            pixelFormat: pixelFormat,
             bitDepth: bitDepth,
             dynamicRange: dynamicRange,
             disposition: disposition

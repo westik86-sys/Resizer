@@ -4,11 +4,67 @@ import Testing
 
 private final class HeadlessIntegrationBundleToken: NSObject {}
 
+private struct HeadlessIntegrationDependencies: Sendable {
+    let runner: ProcessRunner
+    let fileAccess: SecurityScopedFileAccess
+    let prober: FFprobeClient
+    let transcoder: FFmpegTranscodingService
+}
+
+/// Mirrors the app composition root: one long-lived process runner and
+/// transcoder serve the sequential queue, so bundled capability discovery is
+/// cached once instead of being repeated between fixture cases.
+private actor HeadlessIntegrationEnvironment {
+    private let runner = ProcessRunner()
+    private let fileAccess = SecurityScopedFileAccess(
+        startAccessing: { _ in false },
+        stopAccessing: { _ in }
+    )
+    private var cachedDependencies: HeadlessIntegrationDependencies?
+
+    func dependencies() throws -> HeadlessIntegrationDependencies {
+        if let cachedDependencies {
+            return cachedDependencies
+        }
+        let dependencies = HeadlessIntegrationDependencies(
+            runner: runner,
+            fileAccess: fileAccess,
+            prober: try FFprobeClient.bundled(processRunner: runner),
+            transcoder: try FFmpegTranscodingService.bundled(
+                processRunner: runner,
+                fileAccess: fileAccess
+            )
+        )
+        cachedDependencies = dependencies
+        return dependencies
+    }
+}
+
 @Suite("Bundled headless transcode integration", .serialized)
 struct HeadlessTranscodingIntegrationTests {
-    @Test("Bundled probe → transcode → probe commits a validated MP4")
+    private static let environment = HeadlessIntegrationEnvironment()
+
+    @Test("Bundled H.264 probe → transcode → probe commits a validated MP4")
     func bundledProbeTranscodeProbe() async throws {
-        let fixtureURL = try #require(Self.fixtureURL)
+        try await runWorkflow(
+            fixtureName: "short-h264-aac",
+            expectedInputVideoCodec: "h264"
+        )
+    }
+
+    @Test("Bundled HEVC input becomes a validated H.264/AAC MP4")
+    func bundledHEVCProbeTranscodeProbe() async throws {
+        try await runWorkflow(
+            fixtureName: "short-hevc-aac",
+            expectedInputVideoCodec: "hevc"
+        )
+    }
+
+    private func runWorkflow(
+        fixtureName: String,
+        expectedInputVideoCodec: String
+    ) async throws {
+        let fixtureURL = try #require(Self.fixtureURL(named: fixtureName))
         let originalFixtureData = try Data(contentsOf: fixtureURL)
         let outputDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -23,16 +79,11 @@ struct HeadlessTranscodingIntegrationTests {
             try? FileManager.default.removeItem(at: outputDirectory)
         }
 
-        let runner = ProcessRunner()
-        let fileAccess = SecurityScopedFileAccess(
-            startAccessing: { _ in false },
-            stopAccessing: { _ in }
-        )
-        let prober = try FFprobeClient.bundled(processRunner: runner)
-        let transcoder = try FFmpegTranscodingService.bundled(
-            processRunner: runner,
-            fileAccess: fileAccess
-        )
+        let dependencies = try await Self.environment.dependencies()
+        let runner = dependencies.runner
+        let fileAccess = dependencies.fileAccess
+        let prober = dependencies.prober
+        let transcoder = dependencies.transcoder
         let coordinator = CompressionCoordinator(
             dependencies: CompressionCoordinatorDependencies(
                 mediaProber: prober,
@@ -62,6 +113,10 @@ struct HeadlessTranscodingIntegrationTests {
             Issue.record("Expected completed workflow, got \(completed.state)")
             return
         }
+        #expect(
+            completed.mediaInfo?.videoStreams.first?.codecName
+                == expectedInputVideoCodec
+        )
         #expect(result.outputURL.standardizedFileURL != fixtureURL.standardizedFileURL)
         #expect(result.outputByteCount > 0)
         #expect(FileManager.default.fileExists(atPath: result.outputURL.path))
@@ -88,14 +143,14 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
-    private static var fixtureURL: URL? {
+    private static func fixtureURL(named name: String) -> URL? {
         let bundle = Bundle(for: HeadlessIntegrationBundleToken.self)
         return bundle.url(
-            forResource: "short-h264-aac",
+            forResource: name,
             withExtension: "mp4",
             subdirectory: "Fixtures/Media"
         ) ?? bundle.url(
-            forResource: "short-h264-aac",
+            forResource: name,
             withExtension: "mp4"
         )
     }

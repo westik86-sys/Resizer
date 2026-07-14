@@ -207,12 +207,14 @@ the lowest absolute index. Those absolute indices are mapped explicitly;
 subtitles, data, and unselected audio are excluded. Missing audio is valid and
 becomes `-an`, as does the remove-audio policy.
 
-Video output is H.264 VideoToolbox in `yuv420p`. Normalized quality maps to
-VideoToolbox `global_quality` `1...100`; CRF and qscale are intentionally not
-used. A capped frame-rate policy emits `fpsmax`, while original FPS adds no
-rate override. Scaling is orientation-aware, preserves aspect ratio, never
-upscales, and produces even dimensions. Autorotation is applied to pixels and
-the stale output rotation tag is cleared. FFprobe recovers component depth from
+Video output is H.264 VideoToolbox in limited-range `yuv420p`. The scale filter
+performs the range conversion for full-range 8-bit SDR input, and matching
+encoder metadata is explicit. Normalized quality maps to VideoToolbox
+`global_quality` `1...100`; CRF and qscale are intentionally not used. A capped
+frame-rate policy emits `fpsmax`, while original FPS adds no rate override.
+Scaling is orientation-aware, preserves aspect ratio, never upscales, and
+produces even dimensions. Autorotation is applied to pixels and the stale output
+rotation tag is cleared. FFprobe recovers component depth from
 known planar, packed, and float pixel-format names when numeric fields are
 missing. Known HDR and unknown-range video whose depth is either above 8-bit or
 still unknown fail closed because this path does not implement tone mapping.
@@ -290,9 +292,10 @@ overall deadline, and is cached only after a complete successful result. A
 sole cancelled waiter tears down discovery; cancellation of one of several
 waiters does not poison their shared task. Each query has bounded stdout and
 diagnostics. `FFmpegPreflightValidator` then requires the selected input
-demuxer and decoder, `h264_videotoolbox`, MP4, scale, AAC/aresample when audio
-is selected, and the file/fd/pipe protocols used by the command. Missing
-capabilities fail before the job enters `running`.
+demuxer and decoder. The bundled profile provides native H.264, HEVC, and AAC
+decoders; output preflight still requires `h264_videotoolbox`, MP4, scale,
+AAC/aresample when audio is selected, and the file/fd/pipe protocols used by
+the command. Missing capabilities fail before the job enters `running`.
 
 `FFmpegTranscodingService` owns one active execution identity per job. It uses
 the command builder and process runner, retains an additional narrow input and
@@ -478,6 +481,8 @@ cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
 all preset argument vectors; stream, HDR, audio, scaling, metadata, and path
 behavior; output-name collisions; capability discovery; incremental progress;
 headless success/failure/cancellation races; output validation; and guarded
-publication and cleanup. A signed targeted integration test runs the bundled
-probe → transcode → probe transaction on a short deterministic MP4 fixture.
+publication and cleanup. Signed targeted integration tests run the bundled
+probe → transcode → probe transaction on deterministic H.264/AAC and HEVC/AAC
+MP4 fixtures and verify that both produce the same H.264/AAC compatibility
+output without modifying the input.
 `./Scripts/build.sh` remains the canonical build check.

@@ -7,7 +7,7 @@ The release tag is `n8.1.2` at commit
 The binaries are a deliberately small LGPL 2.1-or-later profile for the
 toolchain spike:
 
-- H.264 and AAC in MOV/MP4 input;
+- H.264 or HEVC video and AAC audio in MOV/MP4 input;
 - H.264 VideoToolbox and native AAC encoders;
 - MP4 output;
 - local files, inherited file descriptors, and pipes only;
