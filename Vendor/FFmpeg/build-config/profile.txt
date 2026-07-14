@@ -1,7 +1,7 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
-Build profile revision: 3
+Build profile revision: 4
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
 License target: LGPL 2.1-or-later
@@ -14,12 +14,19 @@ Scripts/support/pkg-config-disabled shim.
 Pinned source patch:
 
 Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch
-SHA-256: 01061179993a24248f61dbf7bb9b119a017a1edf961104d7a13373f78f54c2b1
+SHA-256: 7f2095aae417027256fa76640aa1bfe44e37cc46bdffea269e8203353930cc5d
 
 The patch preserves the legacy `fd:` behavior and adds strict decimal
 `fd:<number>` URLs for nonnegative descriptors through INT_MAX. An explicit URL
 descriptor takes precedence over the `fd` protocol option. Signs, whitespace,
-trailing characters, and numeric overflow are rejected.
+trailing characters, and numeric overflow are rejected. On Darwin, every
+seekable `fd` context keeps an independent logical offset and uses `pread` /
+`pwrite`; streamed descriptors keep the legacy sequential behavior. This avoids
+shared-open-file-description offset interference when the MOV muxer reopens an
+explicit `fd:<number>` URL during `+faststart`. That descriptor must be opened
+for both reading and writing, and should point to an empty regular file. Because
+this profile relies on Darwin's positional-I/O semantics, enabling the patched
+`fd` protocol for a non-Darwin target fails at compile time.
 
 --target-os=darwin
 --enable-cross-compile

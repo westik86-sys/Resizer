@@ -23,6 +23,11 @@ nonisolated enum ProcessRunnerError: Error, Sendable, Equatable {
 actor ProcessRunner: ProcessRunning {
     private static let outputChunkByteCount = 16 * 1_024
 
+    private enum ExecutionBackend {
+        case foundation
+        case descriptor
+    }
+
     private struct ExecutionToken: Sendable, Equatable {
         let rawValue = UUID()
     }
@@ -112,12 +117,37 @@ actor ProcessRunner: ProcessRunning {
     }
 
     private var executions: [ProcessExecutionID: ExecutionState] = [:]
+    /// Execution IDs are intentionally one-shot across both backends. Keeping
+    /// the route at the facade prevents an actor-reentrancy window where the
+    /// same ID could otherwise be active in Foundation.Process and posix_spawn
+    /// simultaneously.
+    private var usedExecutionIDs: Set<ProcessExecutionID> = []
+    private var activeExecutionBackends: [
+        ProcessExecutionID: ExecutionBackend
+    ] = [:]
+    private let descriptorRunner = DescriptorProcessRunner()
 
     func start(
         _ request: ProcessRequest
     ) async throws -> AsyncThrowingStream<ProcessEvent, any Error> {
-        guard executions[request.id] == nil else {
+        guard usedExecutionIDs.insert(request.id).inserted else {
             throw ProcessRunnerError.executionIDAlreadyUsed(request.id)
+        }
+        if request.inheritedFileDescriptor != nil {
+            activeExecutionBackends[request.id] = .descriptor
+            do {
+                return try await descriptorRunner.start(
+                    request,
+                    onCompletion: { [weak self] executionID in
+                        await self?.descriptorExecutionDidFinish(
+                            executionID
+                        )
+                    }
+                )
+            } catch {
+                activeExecutionBackends.removeValue(forKey: request.id)
+                throw error
+            }
         }
 
         let streamPair = AsyncThrowingStream<ProcessEvent, any Error>.makeStream(
@@ -204,6 +234,7 @@ actor ProcessRunner: ProcessRunning {
             continuation: continuation
         )
         state.standardInputWriter = standardInputPipe?.fileHandleForWriting
+        activeExecutionBackends[request.id] = .foundation
         executions[request.id] = state
 
         continuation.onTermination = { [weak self] termination in
@@ -236,6 +267,7 @@ actor ProcessRunner: ProcessRunning {
             process.terminationHandler = nil
             continuation.onTermination = nil
             executions.removeValue(forKey: request.id)
+            activeExecutionBackends.removeValue(forKey: request.id)
             Self.closeAllHandles(
                 standardOutputPipe,
                 standardErrorPipe,
@@ -286,6 +318,16 @@ actor ProcessRunner: ProcessRunning {
     }
 
     func cancel(executionID: ProcessExecutionID) async {
+        switch activeExecutionBackends[executionID] {
+        case .descriptor:
+            await descriptorRunner.cancel(executionID: executionID)
+            return
+        case .foundation:
+            break
+        case nil:
+            return
+        }
+
         guard let state = executions[executionID] else {
             return
         }
@@ -318,7 +360,16 @@ actor ProcessRunner: ProcessRunning {
     }
 
     func activeExecutionCount() -> Int {
-        executions.count
+        activeExecutionBackends.count
+    }
+
+    private func descriptorExecutionDidFinish(
+        _ executionID: ProcessExecutionID
+    ) {
+        guard activeExecutionBackends[executionID] == .descriptor else {
+            return
+        }
+        activeExecutionBackends.removeValue(forKey: executionID)
     }
 
     private func streamWasCancelled(
@@ -666,6 +717,7 @@ actor ProcessRunner: ProcessRunning {
         }
 
         executions.removeValue(forKey: executionID)
+        activeExecutionBackends.removeValue(forKey: executionID)
         let waiters = Array(state.completionWaiters.values)
         state.completionWaiters.removeAll()
         for waiter in waiters {

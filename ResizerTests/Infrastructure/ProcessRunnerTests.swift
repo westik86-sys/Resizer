@@ -27,6 +27,202 @@ struct ProcessRunnerTests {
         #expect(await runner.activeExecutionCount() == 0)
     }
 
+    @Test("Inherited fd keeps stdout progress and stderr diagnostics separate")
+    func inheritedFileDescriptor() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let outputURL = directoryURL.appendingPathComponent("output.mp4")
+        let lease = try makeLease(
+            outputURL: outputURL,
+            directoryURL: directoryURL
+        )
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["descriptor-output"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 3
+            )
+        )
+
+        let collected = try await ProcessHarnessFixture.collect(
+            try await runner.start(request)
+        )
+
+        #expect(collected.standardOutput == Data("progress=end\n".utf8))
+        #expect(collected.standardError == Data("stderr:descriptor\n".utf8))
+        #expect(try Data(contentsOf: outputURL) == Data("fd3:success\n".utf8))
+        #expect(collected.result.termination.status == 0)
+        #expect(collected.result.termination.reason == .exit)
+        #expect(collected.result.diagnosticTail.data == collected.standardError)
+        #expect(ProcessHarnessFixture.isReaped(collected.result.processIdentifier))
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Inherited fd path accepts graceful q cancellation")
+    func inheritedFileDescriptorGracefulCancellation() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let lease = try makeLease(
+            outputURL: directoryURL.appendingPathComponent("output.mp4"),
+            directoryURL: directoryURL
+        )
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["wait-for-q"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            cancellationPolicy: try cancellationPolicy(),
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 3
+            )
+        )
+
+        let collected = try await runAndCancel(
+            request: request,
+            runner: runner
+        )
+
+        #expect(collected.result.termination.status == 0)
+        #expect(collected.result.termination.reason == .exit)
+        #expect(collected.result.wasCancellationRequested)
+        #expect(collected.result.lastCancellationStep == .gracefulInput)
+        #expect(collected.terminalEventCount == 1)
+        #expect(ProcessHarnessFixture.isReaped(collected.result.processIdentifier))
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Inherited fd path escalates ignored signals to SIGKILL")
+    func inheritedFileDescriptorKillFallback() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let lease = try makeLease(
+            outputURL: directoryURL.appendingPathComponent("output.mp4"),
+            directoryURL: directoryURL
+        )
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["ignore-signals"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            cancellationPolicy: try cancellationPolicy(),
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 3
+            )
+        )
+
+        let collected = try await runAndCancel(
+            request: request,
+            runner: runner
+        )
+
+        #expect(collected.result.termination.reason == .uncaughtSignal)
+        #expect(collected.result.termination.status == SIGKILL)
+        #expect(collected.result.wasCancellationRequested)
+        #expect(collected.result.lastCancellationStep == .kill)
+        #expect(collected.terminalEventCount == 1)
+        #expect(ProcessHarnessFixture.isReaped(collected.result.processIdentifier))
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Child fd 10 does not collide with internal duplicated descriptors")
+    func inheritedFileDescriptorTen() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let outputURL = directoryURL.appendingPathComponent("output.mp4")
+        let lease = try makeLease(
+            outputURL: outputURL,
+            directoryURL: directoryURL
+        )
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["descriptor-output", "10"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 10
+            )
+        )
+
+        let collected = try await ProcessHarnessFixture.collect(
+            try await runner.start(request)
+        )
+
+        #expect(collected.standardOutput == Data("progress=end\n".utf8))
+        #expect(collected.standardError == Data("stderr:descriptor\n".utf8))
+        #expect(try Data(contentsOf: outputURL) == Data("fd10:success\n".utf8))
+        #expect(collected.result.termination.status == 0)
+        #expect(collected.result.termination.reason == .exit)
+        #expect(ProcessHarnessFixture.isReaped(collected.result.processIdentifier))
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Inherited fd path rejects a placeholder lease")
+    func inheritedFileDescriptorPlaceholderLease() async throws {
+        let runner = ProcessRunner()
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["descriptor-output"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: .placeholder(),
+                childDescriptor: 3
+            )
+        )
+
+        do {
+            _ = try await runner.start(request)
+            Issue.record("Expected a placeholder lease to be rejected")
+        } catch let error as ProcessRunnerError {
+            #expect(error == .standardOutputConfigurationFailed(request.id))
+        }
+
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Inherited fd path rejects a read-only output descriptor")
+    func inheritedFileDescriptorReadOnlyLease() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let outputURL = directoryURL.appendingPathComponent("output.mp4")
+        let lease = try makeLease(
+            outputURL: outputURL,
+            directoryURL: directoryURL,
+            fileAccessMode: O_RDONLY
+        )
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["descriptor-output"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 3
+            )
+        )
+
+        do {
+            _ = try await runner.start(request)
+            Issue.record("Expected a read-only output descriptor to be rejected")
+        } catch let error as ProcessRunnerError {
+            #expect(error == .standardOutputConfigurationFailed(request.id))
+        }
+
+        #expect(try Data(contentsOf: outputURL).isEmpty)
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
     @Test("Pre-reserved file receives stdout without stdout stream events")
     func existingFileStandardOutput() async throws {
         let runner = ProcessRunner()
@@ -483,6 +679,55 @@ struct ProcessRunnerTests {
         #expect(nextRun.result.lastCancellationStep == .gracefulInput)
     }
 
+    @Test("Execution IDs and cancellation routes are shared across backends")
+    func crossBackendExecutionIDLifecycle() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let lease = try makeLease(
+            outputURL: directoryURL.appendingPathComponent("output.mp4"),
+            directoryURL: directoryURL
+        )
+        let executionID = ProcessExecutionID()
+        let descriptorRequest = try ProcessRequest(
+            id: executionID,
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["wait-for-q"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            cancellationPolicy: try cancellationPolicy(),
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: lease,
+                childDescriptor: 3
+            )
+        )
+        let readiness = ProcessReadinessProbe()
+        let descriptorStream = try await runner.start(descriptorRequest)
+        let collector = Task {
+            try await ProcessHarnessFixture.collect(descriptorStream) { data in
+                await readiness.observe(data)
+            }
+        }
+
+        try await readiness.waitUntilReady()
+        let foundationRequest = try ProcessHarnessFixture.request(
+            mode: "success",
+            id: executionID
+        )
+        do {
+            _ = try await runner.start(foundationRequest)
+            Issue.record("Expected a cross-backend duplicate ID to fail")
+        } catch let error as ProcessRunnerError {
+            #expect(error == .executionIDAlreadyUsed(executionID))
+        }
+
+        try await cancel(runner, executionID: executionID)
+        let run = try await collector.value
+        #expect(run.result.termination.status == 0)
+        #expect(run.result.lastCancellationStep == .gracefulInput)
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
     @Test("Launch failure leaves no active execution")
     func launchFailure() async throws {
         let runner = ProcessRunner()
@@ -605,10 +850,45 @@ struct ProcessRunnerTests {
             inode: UInt64(status.st_ino)
         )
     }
+
+    private func makeLease(
+        outputURL: URL,
+        directoryURL: URL,
+        fileAccessMode: Int32 = O_RDWR
+    ) throws -> TemporaryOutputLease {
+        let fileDescriptor = Darwin.open(
+            outputURL.path,
+            fileAccessMode | O_CREAT | O_EXCL | O_CLOEXEC,
+            mode_t(S_IRUSR | S_IWUSR)
+        )
+        guard fileDescriptor >= 0 else {
+            throw ProcessRunnerTestFixtureError.descriptorOpenFailed(errno)
+        }
+        let directoryDescriptor = Darwin.open(
+            directoryURL.path,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC
+        )
+        guard directoryDescriptor >= 0 else {
+            let code = errno
+            Darwin.close(fileDescriptor)
+            throw ProcessRunnerTestFixtureError.descriptorOpenFailed(code)
+        }
+        do {
+            return try TemporaryOutputLease(
+                ownedFileDescriptor: fileDescriptor,
+                ownedDirectoryDescriptor: directoryDescriptor
+            )
+        } catch {
+            Darwin.close(fileDescriptor)
+            Darwin.close(directoryDescriptor)
+            throw error
+        }
+    }
 }
 
 private enum ProcessRunnerTestFixtureError: Error {
     case fileCreationFailed
     case metadataReadFailed(Int32)
     case identicalFileIdentity
+    case descriptorOpenFailed(Int32)
 }

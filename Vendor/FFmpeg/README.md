@@ -21,7 +21,10 @@ capability and linkage reports under `build-config/`.
 The archive and detached signature are retained under `sources/` as the exact
 corresponding source for the distributed binaries. License texts are under
 `licenses/`. The LGPL-compatible local patch extends the seekable `fd` protocol
-with strict `fd:<number>` URLs so a MOV `faststart` reopen keeps using the same
-inherited descriptor. See `build-config/profile.txt` for the fixed component
-profile and the generated reports for the exact configure commands and compiled
-features.
+with strict `fd:<number>` URLs and descriptor-local positional I/O on Darwin. A
+MOV `faststart` reopen therefore keeps using the same inherited descriptor
+without sharing its mutable offset with the writer. The descriptor must be
+read-write and should reference an empty regular file; streamed descriptors
+retain FFmpeg's sequential I/O behavior. See `build-config/profile.txt` for the
+fixed component profile and the generated reports for the exact configure
+commands and compiled features.

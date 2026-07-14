@@ -1164,9 +1164,13 @@ private actor WorkflowFileAccess: FileAccessing {
 
     func commitWithoutReplacing(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws {
-        guard expectedTemporaryMetadata.identity
+        guard reservation.jobID == plan.jobID,
+            reservation.temporaryURL
+                == plan.temporaryURL.standardizedFileURL,
+            expectedTemporaryMetadata.identity
             == Self.temporaryIdentity,
             expectedTemporaryMetadata.byteCount == outputByteCount,
             !expectedTemporaryMetadata.isDirectory else {
@@ -1181,8 +1185,14 @@ private actor WorkflowFileAccess: FileAccessing {
 
     func cleanupTemporaryOutput(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws {
+        guard reservation.jobID == plan.jobID,
+            reservation.temporaryURL
+                == plan.temporaryURL.standardizedFileURL else {
+            throw WorkflowFakeError.unexpectedRequest
+        }
         if let expectedTemporaryMetadata {
             guard expectedTemporaryMetadata.identity
                     == Self.temporaryIdentity,

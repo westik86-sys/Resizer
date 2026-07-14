@@ -51,6 +51,12 @@ prove that PowerBox access selected after launch reaches an external CLI tool.
 If direct access is rejected, the resolution must not be broader helper
 entitlements; it requires a documented data-transfer or helper architecture.
 
+That rename records the historical stage-2 spike, not the production stage-7
+publication contract. The headless core now creates and immediately unlinks an
+`O_RDWR` temporary, passes that exact file as child fd 3, validates the same fd
+with FFprobe, and publishes it with no-replace `fclonefileat`. It does not
+rename a temporary pathname.
+
 ### Verification record
 
 Checkpoint A passed on 2026-07-13 with a local ad hoc signature. The sandboxed

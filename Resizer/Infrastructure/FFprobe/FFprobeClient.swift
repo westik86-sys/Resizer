@@ -90,8 +90,7 @@ nonisolated struct FFprobeClient: MediaProbing, Sendable {
         }
         try Task.checkCancellation()
 
-        let request = try ProcessRequest(
-            executableURL: executableURL,
+        return try await probe(
             arguments: [
                 "-v", "error",
                 "-print_format", "json",
@@ -100,10 +99,48 @@ nonisolated struct FFprobeClient: MediaProbing, Sendable {
                 "-show_chapters",
                 sourceURL.path,
             ],
+            inheritedFileDescriptor: nil
+        )
+    }
+
+    func probe(
+        _ reservation: TemporaryOutputReservation
+    ) async throws -> MediaInfo {
+        guard reservation.temporaryURL.isFileURL,
+              let fileDescriptor = reservation.lease.fileDescriptor,
+              fileDescriptor >= 0 else {
+            throw FFprobeClientError.invalidSourceURL
+        }
+        try Task.checkCancellation()
+
+        return try await probe(
+            arguments: [
+                "-v", "error",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                "-show_chapters",
+                "fd:3",
+            ],
+            inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                lease: reservation.lease,
+                childDescriptor: 3
+            )
+        )
+    }
+
+    private func probe(
+        arguments: [String],
+        inheritedFileDescriptor: ProcessInheritedFileDescriptor?
+    ) async throws -> MediaInfo {
+        let request = try ProcessRequest(
+            executableURL: executableURL,
+            arguments: arguments,
             environment: [:],
             diagnosticByteLimit: Self.diagnosticByteLimit,
             eventBufferCapacity: ProcessRequest.maximumEventBufferCapacity,
-            cancellationPolicy: .signalsOnly
+            cancellationPolicy: .signalsOnly,
+            inheritedFileDescriptor: inheritedFileDescriptor
         )
         let stream = try await processRunner.start(request)
 

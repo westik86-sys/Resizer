@@ -30,7 +30,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             "-loglevel", "error",
             "-stats_period", "0.25",
             "-nostats",
-            "-progress", "pipe:2",
+            "-progress", "pipe:1",
             "-autorotate",
             "-i", inputURL.path,
             "-map", "0:\(video.index)",
@@ -85,7 +85,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             "-metadata:s:v:0", "rotate=0",
             "-movflags", "+faststart",
             "-f", containerArgument(request.recipe.container),
-            "fd:",
+            "fd:3",
         ])
         return arguments
     }

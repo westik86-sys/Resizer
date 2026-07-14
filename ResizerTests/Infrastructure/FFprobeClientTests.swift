@@ -4,6 +4,56 @@ import Testing
 
 @Suite("FFprobe client")
 struct FFprobeClientTests {
+    @Test("Reserved output is probed through the exact inherited descriptor")
+    func reservedOutputUsesInheritedDescriptor() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ResizerFFprobeDescriptorTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let outputDirectoryURL = rootURL.appendingPathComponent(
+            "output",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: outputDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let jobID = UUID()
+        let inputURL = rootURL.appendingPathComponent("input.mov")
+        try Data("input".utf8).write(to: inputURL)
+        let planningRequest = OutputPlanningRequest(
+            jobID: jobID,
+            inputURL: inputURL,
+            policy: try OutputPolicy(directoryURL: outputDirectoryURL)
+        )
+        let plan = try OutputPlan(
+            request: planningRequest,
+            temporaryURL: outputDirectoryURL.appendingPathComponent(
+                "output.\(jobID.uuidString.lowercased()).partial.mp4"
+            ),
+            finalURL: outputDirectoryURL.appendingPathComponent("output.mp4")
+        )
+        let reservation = try await SecurityScopedFileAccess()
+            .reserveTemporaryOutput(plan)
+        let runner = FFprobeProcessRunnerStub(
+            script: try .success(standardOutputChunks: [Self.validJSON])
+        )
+        let client = try makeClient(runner: runner)
+
+        _ = try await client.probe(reservation)
+
+        let request = try #require(await runner.recordedRequests().first)
+        let inheritedDescriptor = try #require(
+            request.inheritedFileDescriptor
+        )
+        #expect(request.arguments.last == "fd:3")
+        #expect(request.standardOutputDestination == .stream)
+        #expect(inheritedDescriptor.childDescriptor == 3)
+        #expect(inheritedDescriptor.lease === reservation.lease)
+    }
+
     @Test("Builds exact arguments and keeps a special-character path literal")
     func exactArgumentsAndLiteralSourcePath() async throws {
         let sourceURL = URL(

@@ -130,10 +130,12 @@ struct FFmpegTranscodingServiceTests {
         )
         #expect(
             processRequest.standardOutputDestination
-                == .existingFile(
-                    url: request.temporaryOutputURL,
-                    expectedIdentity: FileIdentity(device: 1, inode: 2)
-                )
+                == .stream
+        )
+        #expect(processRequest.inheritedFileDescriptor?.childDescriptor == 3)
+        #expect(
+            processRequest.inheritedFileDescriptor?.lease
+                === reservation.lease
         )
 
         #expect(
@@ -183,7 +185,7 @@ struct FFmpegTranscodingServiceTests {
         let request = try makeRequest()
         let runner = TranscodingProcessRunnerStub(
             instructions: [
-                .standardError(
+                .standardOutput(
                     Data(
                         "out_time_us=5000000\nprogress=continue\n".utf8
                     )
@@ -219,7 +221,7 @@ struct FFmpegTranscodingServiceTests {
         let diagnostic = Data("encoder unavailable\n".utf8)
         let runner = TranscodingProcessRunnerStub(
             instructions: [
-                .standardError(
+                .standardOutput(
                     Data(
                         "out_time_us=N/A\nout_time_ms=N/A\n"
                             .appending("out_time=N/A\nprogress=end\n")
@@ -456,7 +458,7 @@ struct FFmpegTranscodingServiceTests {
         let request = try makeRequest()
         let mismatchedRunner = TranscodingProcessRunnerStub(
             instructions: [
-                .standardError(
+                .standardOutput(
                     Data("out_time_us=1\nprogress=end\n".utf8)
                 ),
                 .terminated(
@@ -561,22 +563,22 @@ struct FFmpegTranscodingServiceTests {
 
     private func successfulInstructions() -> [TranscodingRunnerInstruction] {
         [
-            .standardError(
+            .standardOutput(
                 Data(
                     "frame=150\nout_time_us=5000000\nfps=30\n".utf8
                 )
             ),
-            .standardError(
+            .standardOutput(
                 Data("speed=1.5x\nprogress=continue\n".utf8)
             ),
-            .standardError(
+            .standardOutput(
                 Data(
                     "out_time_us=N/A\nout_time_ms=N/A\n"
                         .appending("out_time=N/A\nprogress=continue\n")
                         .utf8
                 )
             ),
-            .standardError(
+            .standardOutput(
                 Data(
                     "frame=300\nout_time_us=10000000\nfps=30\n"
                         .appending("speed=1.4x\nprogress=end\n")
@@ -658,17 +660,21 @@ private actor TranscodingFileAccessStub: FileAccessing {
 
     func commitWithoutReplacing(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws {
         _ = plan
+        _ = reservation
         _ = expectedTemporaryMetadata
     }
 
     func cleanupTemporaryOutput(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws {
         _ = plan
+        _ = reservation
         _ = expectedTemporaryMetadata
     }
 

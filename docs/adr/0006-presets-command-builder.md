@@ -99,15 +99,18 @@ Every command includes machine-readable progress with a 0.25-second update
 period:
 
 ```text
--stats_period 0.25 -nostats -progress pipe:2
+-stats_period 0.25 -nostats -progress pipe:1
 ```
 
 The builder does not add `-nostdin`, because the headless transcoder will use
 the process runner's graceful `q\n` cancellation before signal fallbacks. The
 output container is explicitly MP4, and `-movflags +faststart` prepares the
-validated result for ordinary playback and sharing. Stage 7 binds a pre-reserved
-seekable file to stdout, so the output target is the `fd:` protocol rather than
-a pathname.
+validated result for ordinary playback and sharing. Progress is emitted only on
+stdout; stderr is reserved for bounded diagnostics. Stage 7 binds the retained
+anonymous `O_RDWR` temporary to child fd 3, so the output target is `fd:3`
+rather than stdout or a pathname. The bundled `fd:` protocol keeps per-context
+logical offsets and uses positioned I/O for seekable descriptors, allowing the
+MP4 muxer's `+faststart` reopen to use that same file safely.
 
 Preserve-common metadata has a deliberately narrow stream-selection meaning:
 
@@ -145,9 +148,10 @@ builder invokes a shell.
 The final URL is retained in `OutputPlan` but excluded from
 `TranscodeCommandRequest`, so it cannot enter the FFmpeg argument vector. The
 builder accepts only the job-owned `.partial.mp4`, rejects an input/temp alias,
-and emits no output pathname. Stage 7 atomically reserves that path with
-`O_EXCL`, gives FFmpeg the exact inode as inherited stdout, validates the
-temporary result, and uses the no-replace commit contract described in
+and emits no output pathname. Stage 7 atomically creates that path with
+`O_EXCL | O_RDWR`, immediately unlinks it, retains its exact descriptor, and
+gives it to FFmpeg as child fd 3. FFprobe validates that same descriptor, and
+`fclonefileat` publishes it with no replacement under the contract described in
 [ADR 0007](0007-headless-transcoding-core.md); planning does not reserve the
 final name against a later filesystem race.
 
@@ -179,7 +183,7 @@ MVP deliberately selects one video and at most one audio stream.
 
 Rejected because successful process exit is not sufficient validation and
 because a collision race could replace user data. FFmpeg writes only the
-atomically reserved job inode through `fd:`; validation and no-replace commit
+anonymous job file through `fd:3`; validation and no-replace publication
 are separate stage-7 operations.
 
 ### Fixed landscape scale dimensions
@@ -192,8 +196,9 @@ orientation and input-bounded expressions.
 
 - Preset behavior and argument ordering are stable, reviewable golden-test
   contracts rather than UI conventions.
-- Originals and final outputs remain outside FFmpeg's writable target; only a
-  unique temporary path is exposed.
+- Originals and final outputs remain outside FFmpeg's writable target. FFmpeg
+  receives only child fd 3 for the anonymous temporary, never either output
+  pathname.
 - HDR and uncertain high-bit-depth inputs fail closed until a separately
   designed tone-mapping/HDR workflow exists.
 - Original resolution may lose one pixel on an odd edge to satisfy the even
@@ -201,7 +206,9 @@ orientation and input-bounded expressions.
 - Metadata preservation applies only to the chosen MVP streams and chapters,
   not every input stream or every source-specific key.
 - Final collision safety still depends on stage 7 performing validation and an
-  atomic no-replace commit after encoding.
+  exact no-replace publication after encoding. Publication requires a
+  clone-capable same-volume filesystem; preflight rejects an unsupported output
+  volume before encoding.
 - Capability-aware preflight remains mandatory even though recipes and command
   syntax are valid.
 

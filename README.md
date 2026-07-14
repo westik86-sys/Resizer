@@ -18,22 +18,33 @@ Implementation is currently at stage 7. The production headless workflow now
 retains security-scoped input and output access while it probes the source,
 performs capability-aware preflight, encodes into a unique job-owned
 `.partial.mp4`, parses bounded machine-readable progress, probes and validates
-the result, and atomically publishes it without replacing an existing file.
-Before launch, the workflow atomically reserves the temporary with `O_EXCL`
-and records its device/inode seal. FFmpeg writes MP4 through an inherited,
-seekable descriptor instead of reopening the pathname. Validation, cleanup,
-and commit all require that identity, so every collision or replacement inode
-is preserved and unsealed cleanup always fails closed.
+the result, and publishes it with a single no-replace filesystem call.
+Before launch, the workflow atomically creates the temporary with `O_EXCL` and
+`O_RDWR`, immediately unlinks its directory entry, and retains the exact file
+and output-directory descriptors. FFmpeg writes MP4 to child descriptor 3 as
+`fd:3`; stdout is reserved for `-progress pipe:1`, while stderr feeds only the
+bounded diagnostic tail. FFprobe then validates that same anonymous file via
+child descriptor 3. Only a successful validation may publish the result with a
+single no-replace `fclonefileat` call. Closing the retained descriptor cleans up
+a cancelled or failed job without deleting any later pathname replacement.
 Graceful cancellation sends `q` before the process runner escalates through
 signals, and a recorded cancellation takes precedence over a later nonzero
 exit. The bundled FFmpeg capabilities are queried in parallel with a bounded
 15-second discovery deadline, cached only after complete success, and checked
 against the selected input and recipe before launch.
 
+Descriptor publication currently requires a clone-capable filesystem and a
+source/destination on the same volume. The anonymous temporary is created in
+the selected output directory, which guarantees the same-volume part. Resizer
+checks the held output-directory descriptor before launching FFmpeg and rejects
+an unsupported filesystem during reservation. `fclonefileat` remains the final
+authority: a late collision or publication error still fails closed, without a
+path-based copy fallback, replacement, or change to the original input.
+
 The stage also includes a real bundled-tool integration test and deterministic
 tests for progress parsing, capability discovery, process failures,
 cancellation races, output validation, security-scoped lifetimes, symlink and
-hard-link guards, exact cleanup, and no-replace commit. See
+identity guards, exact cleanup, and no-replace commit. See
 [`docs/architecture.md`](docs/architecture.md) and
 [`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md)
 for the complete contracts.

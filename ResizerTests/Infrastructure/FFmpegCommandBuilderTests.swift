@@ -32,7 +32,7 @@ struct FFmpegCommandBuilderTests {
                 "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:2",
+                "-progress", "pipe:1",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -54,7 +54,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "fd:",
+                "fd:3",
             ]
         )
     }
@@ -72,7 +72,7 @@ struct FFmpegCommandBuilderTests {
                 "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:2",
+                "-progress", "pipe:1",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -97,7 +97,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "fd:",
+                "fd:3",
             ]
         )
     }
@@ -115,7 +115,7 @@ struct FFmpegCommandBuilderTests {
                 "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:2",
+                "-progress", "pipe:1",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -140,7 +140,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "fd:",
+                "fd:3",
             ]
         )
     }
@@ -398,8 +398,8 @@ struct FFmpegCommandBuilderTests {
         let request = try makeRequest(recipe: recipe)
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
-        #expect(arguments.suffix(3) == ["-f", "mp4", "fd:"])
-        #expect(arguments.last == "fd:")
+        #expect(arguments.suffix(3) == ["-f", "mp4", "fd:3"])
+        #expect(arguments.last == "fd:3")
         #expect(!arguments.contains("-n"))
         #expect(!arguments.contains(Self.temporaryURL.path))
         #expect(Self.temporaryURL.lastPathComponent.hasSuffix(".partial.mp4"))

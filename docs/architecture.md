@@ -26,11 +26,13 @@ FFmpegTranscodingService
         -> ProcessRunner actor
             -> direct child executable
             -> concurrent stdout/stderr drains
+            -> exact inherited output descriptor as child fd 3
 
 SecurityScopedFileAccess
     -> retained user-selected URL scopes
-    -> lstat identity and file-type checks
-    -> atomic RENAME_EXCL publication
+    -> anonymous O_RDWR temporary plus retained directory descriptor
+    -> exact descriptor metadata and file-type checks
+    -> no-replace fclonefileat publication
 
 OutputPlanning
     -> OutputPlanner actor
@@ -85,17 +87,20 @@ services for interactive use.
 `ProcessRunner` is an actor-owned, generic implementation of `ProcessRunning`.
 It launches an absolute executable URL directly with a `[String]` argument list
 and an exact controlled environment. It never constructs a shell command and
-does not depend on `PATH`.
+does not depend on `PATH`. Ordinary requests use `Foundation.Process`;
+requests that inherit an exact file descriptor are routed to the actor-owned
+`posix_spawn` path because `Foundation.Process` does not preserve arbitrary
+extra child descriptors.
 
 Every start uses a fresh, one-shot `ProcessExecutionID`; cancellation becomes
-valid after `start` returns its stream, and IDs are never reused. The actor owns
-the `Foundation.Process`, configured descriptors, stream continuation,
-diagnostic tail, and cancellation state. Every start also receives a private generation token,
-so a late internal callback cannot be confused with newer actor state.
-Independent workers receive only streamed stdout/stderr `FileHandle` values and return
-`Data` chunks, the public ID, and that token to the actor. The termination
-callback sends only the ID and token back into the actor, where project-owned
-status values are created.
+valid after `start` returns its stream, and IDs are never reused. The actors own
+the child-process handle or PID, configured descriptors, stream continuation,
+diagnostic tail, and cancellation state. Every start also receives a private
+generation token, so a late internal callback cannot be confused with newer
+actor state. Independent workers receive only streamed stdout/stderr handles
+and return `Data` chunks, the public ID, and that token to the actor. Framework
+process instances and raw mutable execution state never cross the isolation
+boundary.
 
 Completion is a three-way barrier:
 
@@ -107,11 +112,14 @@ process terminated
         -> continuation finishes once
 ```
 
-A request may instead bind stdout to a pre-existing regular file identified by
-device/inode. `ProcessRunner` opens it with `O_NOFOLLOW`, verifies the identity
-and zero size with `fstat`, and gives that exact descriptor to the child. No
-stdout data enters the event stream in this mode; process termination and
-stderr EOF form the completion barrier.
+A request may additionally inherit one already-open regular-file descriptor.
+The descriptor runner verifies it with `fstat`, duplicates that exact open file
+description to the declared child descriptor, and closes unrelated descriptors
+in the spawned child. Stage 7 uses child fd 3 for the anonymous `O_RDWR` MP4
+temporary. stdin remains available for graceful cancellation, stdout remains a
+pipe for machine-readable progress or FFprobe JSON, and stderr remains a
+separate diagnostic pipe. The same three-way completion barrier therefore
+applies to both launch paths.
 
 The event stream has finite capacity. Dropping a stdout or stderr chunk would
 make machine-readable output unsafe, so overflow becomes a typed stream failure
@@ -143,7 +151,7 @@ out-of-bundle candidate. Tests inject an absolute executable URL and a
 `ProcessRunning` implementation; neither path search nor a Homebrew fallback
 exists.
 
-Each probe starts a fresh process with one literal argument array:
+An input probe starts a fresh process with one literal argument array:
 
 ```text
 -v error -print_format json -show_format -show_streams -show_chapters INPUT
@@ -156,6 +164,13 @@ already retains its bounded diagnostic tail, and requires one matching terminal
 result. A nonzero exit or signal becomes a typed error with termination status
 and diagnostics. Overflow, malformed process event order, and invalid source or
 configuration are also typed failures.
+
+Validation does not reopen the planned temporary pathname. The coordinator
+passes the retained anonymous reservation to `FFprobeClient`, which maps that
+exact open file to child fd 3 and uses `fd:3` as the input argument. FFprobe JSON
+still arrives on stdout and diagnostics stay on stderr. This proves the media
+contract for the same file description that FFmpeg filled, even if another
+entry later appears at the old `.partial.mp4` name.
 
 Task cancellation requests runner teardown and then awaits cancellation again
 from an uncancelled cleanup task before returning. This preserves the runner's
@@ -205,12 +220,15 @@ still unknown fail closed because this path does not implement tone mapping.
 FFprobe also retains sample aspect ratio; non-square (anamorphic) source pixels
 fail preflight until display-geometry-aware scaling is implemented.
 
-Every command enables bounded machine-readable progress on stderr and writes
-seekable MP4 to `fd:` on inherited stdout. This keeps MP4 faststart available
-without reopening a pathname. It deliberately leaves stdin available for
-stage-7 graceful `q\n` cancellation. Preserve metadata maps only global data,
-selected stream data, and chapters; remove metadata disables those input
-mappings. The full argument and preset decision is recorded in
+Every command sends bounded machine-readable progress to stdout with
+`-progress pipe:1` and writes seekable MP4 to `fd:3` on a separately inherited
+`O_RDWR` descriptor. stderr contains diagnostics only. The bundled FFmpeg `fd:`
+protocol keeps an independent logical offset per protocol context and uses
+positioned I/O for a seekable descriptor, so MP4 `+faststart` can reopen the
+output internally without sharing or corrupting offsets. stdin remains
+available for stage-7 graceful `q\n` cancellation. Preserve metadata maps only
+global data, selected stream data, and chapters; remove metadata disables those
+input mappings. The full argument and preset decision is recorded in
 [`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md).
 
 ## Safe output planning contract
@@ -227,8 +245,10 @@ metacharacters remain literal path characters. The final URL stays in
 `OutputPlan` and is structurally absent from `TranscodeCommandRequest`; FFmpeg
 receives neither the final nor temporary pathname as an output argument. The
 workflow atomically reserves the planned temporary and binds its descriptor to
-FFmpeg. Planning cannot reserve a final path, so validation and atomic
-no-replace publication remain distinct steps.
+FFmpeg. The directory entry is unlinked immediately after successful
+reservation, while the open file and directory descriptors remain held through
+encode, validation, and publication. Planning cannot reserve a final path, so
+validation and no-replace publication remain distinct steps.
 
 ## Headless transcoding workflow
 
@@ -241,21 +261,26 @@ probe input
     -> record MediaInfo and configuration
     -> plan unique temporary and final paths
     -> file and bundled-capability preflight
-    -> atomically reserve and identity-seal the temporary
-    -> run FFmpeg with the reserved inode as seekable stdout
+    -> verify clone-capable publication on the held output-directory fd
+    -> atomically create, unlink, and retain the O_RDWR temporary
+    -> run FFmpeg with the anonymous file as child fd 3
     -> claim finishing(validating)
-    -> inspect temporary metadata and re-probe it
+    -> inspect and re-probe that same child-fd-3 file
     -> validate the encoded media contract
-    -> atomic no-replace rename to final
+    -> no-replace fclonefileat publication to final
     -> completed result
 ```
 
 The workflow never gives FFmpeg the final URL. Before launch it verifies a
-regular, non-empty input, a real output directory, and absent temporary and
-final entries, then creates the temporary atomically with `O_EXCL`. A collision
-cannot be mistaken for ownership. Failures before commit and cancellations
-clean only that reservation when its device/inode still matches; cleanup never
-accepts an arbitrary URL, wildcard, or missing identity seal. A second
+regular, non-empty input, a real output directory, absent temporary and final
+entries, and clone support reported for the opened output-directory descriptor,
+then creates the temporary with
+`O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW`. It immediately unlinks the temporary
+name and retains both descriptors as a job lease. A collision cannot be
+mistaken for ownership, and any later file created at the old temporary name is
+unrelated and remains untouched. Failures before commit and cancellations
+validate and release only that lease; cleanup never accepts an arbitrary URL or
+uses a wildcard or directory scan. A second
 concurrent workflow for the same job is rejected, and the coordinator continues
 to enforce one running/finishing/cancelling job.
 
@@ -274,7 +299,7 @@ capabilities fail before the job enters `running`.
 the command builder and process runner, retains an additional narrow input and
 output-directory scope, drains the runner stream through EOF, and reports a
 typed nonzero exit with the runner's bounded stderr tail. Its progress parser
-accepts arbitrary byte chunks from `-progress pipe:2`, caps an incomplete line,
+accepts arbitrary stdout chunks from `-progress pipe:1`, caps an incomplete line,
 requires record terminators and `progress=end` on success, and publishes
 processed time, fraction, frame rate, speed, and output byte count in order.
 Unknown progress keys are ignored so additions by FFmpeg do not break the
@@ -302,23 +327,32 @@ result: one non-attached H.264 `yuv420p` video stream, no subtitles,
 attachments, or other streams, normalized rotation, SDR-compatible depth and
 range, the recipe's AAC-or-no-audio policy, expected no-upscale dimensions and
 aspect ratio, and duration within a bounded tolerance. Validation uses a fresh
-probe of the temporary file after the process and pipe completion barrier.
+probe of the same retained anonymous descriptor after the process and both-pipe
+completion barrier. The output probe receives that exact file as child fd 3;
+it does not resolve or reopen the planned temporary pathname.
 
-`SecurityScopedFileAccess` uses `lstat` so terminal symlinks and unsupported
-file types are rejected rather than followed. It compares device/inode
-identity to reject an input/temp hard-link alias. Validation carries an inode,
-size, modification-time, and status-change-time seal; metadata is reread after
-FFprobe and again at commit, then the published inode is verified. Publication
-uses macOS
-`renameatx_np(..., RENAME_EXCL)`, making the final existence check atomic with
-the rename and preventing a collision race from replacing user data. Cleanup
-uses `unlink` only when the job temporary is still a regular file and its
-identity matches either the initial reservation seal during encode failure or
-the transcoder's final result seal after encode. A same-inode mutation that
-failed validation is still job-owned and can be removed; a replacement inode
-is preserved and cleanup fails closed. The reservation uses `O_EXCL`, and the
-runner verifies and writes the same inode through a descriptor, so there is no
-pathname reopen race. Unsealed cleanup never unlinks an existing entry.
+`SecurityScopedFileAccess` rejects terminal symlinks and unsupported file types
+during input and directory checks, then uses `fstat` for all temporary metadata.
+Immediately before unlink it compares `fstatat(..., AT_SYMLINK_NOFOLLOW)` with
+the held descriptor and requires one link; after unlink it requires the same
+inode with zero links before returning the lease.
+It compares device/inode identity to reject an input/temp hard-link alias and
+checks size and timestamps before and after FFprobe. Publication passes the
+exact anonymous source fd, the retained output-directory fd, and only the final
+basename to macOS `fclonefileat`. The syscall is no-replace: a late destination
+collision is a typed commit failure and existing user data is preserved. There
+is no temporary pathname to swap between validation and commit. On failure or
+cancellation, closing the lease removes the already-unlinked temporary; a file
+created later at the former planned name is never unlinked.
+
+This publication strategy deliberately supports only clone-capable filesystems
+with source and destination on the same volume. Creating the anonymous source
+inside the selected output directory guarantees the same-volume requirement.
+An unsupported volume returns a typed reservation error before FFmpeg starts.
+`fclonefileat` is still authoritative at publication, so a later filesystem
+error fails closed without a path-based copy or rename fallback. No final output
+is claimed, no existing destination is replaced, and the immutable input is
+never opened for writing.
 
 ## Job state contract
 
@@ -375,20 +409,21 @@ through `probing`; later cancellation can reuse `ready`.
 
 - `TranscodeRequest` can be created only from a validated `OutputPlan`, and
   `TranscodeCommandRequest` can be created only from that transcode request.
-  The final URL never enters either request. A `TranscodeResult` must include a
-  positive byte count and the regular-file identity seal captured by the
-  transcoder; it cannot substitute another URL.
+  The final URL never enters the FFmpeg argument vector. A reservation carries
+  the retained exact file and directory descriptor lease; a `TranscodeResult`
+  must include a positive byte count for that reservation and cannot substitute
+  another URL or descriptor.
 - `OutputPlan` binds the job, input, temporary, and final URLs and rejects direct
   path aliases. Both outputs must be MP4 files in the selected directory, and
   the `.partial.mp4` name must contain the job UUID. `OutputPlanner` supplies
-  conflict-free names from read-only filesystem checks. File cleanup accepts
-  the plan rather than an arbitrary URL, and commit is explicitly no-replace.
-  `SecurityScopedFileAccess` implements the file-identity, symlink, exact
-  cleanup, and atomic final-publication checks.
+  conflict-free names from read-only filesystem checks. File cleanup and commit
+  accept the exact reservation rather than an arbitrary URL; commit is
+  explicitly no-replace. `SecurityScopedFileAccess` implements the descriptor
+  identity, symlink, anonymous cleanup, and final-publication checks.
 - `ProcessRequest` represents the executable, controlled environment, argument
-  array, bounded event capacity, diagnostic limit, and generic cancellation
-  policy as typed values. Arguments remain `[String]`; no shell command exists
-  in the interface.
+  array, bounded event capacity, diagnostic limit, generic cancellation policy,
+  and optional exact inherited descriptor as typed values. Arguments remain
+  `[String]`; no shell command exists in the interface.
 - `ProcessEvent` carries output chunks and a project-owned `ProcessResult` with
   a bounded diagnostic tail, never a framework process instance across
   isolation domains.

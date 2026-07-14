@@ -18,18 +18,19 @@ may remain in either pipe after the child exits.
 
 ## Decision
 
-Use one `ProcessRunner` actor to own every `Process`, pipe, continuation,
-cancellation task, and per-execution state. Launch only through
-`Process.executableURL` and `Process.arguments`; do not invoke a shell or inherit
+Use actor-owned process runners to own every child handle or PID, pipe,
+continuation, cancellation task, and per-execution state. Ordinary requests
+launch directly with `Process.executableURL` and `Process.arguments`. A narrow
+descriptor path uses `posix_spawn` because `Foundation.Process` cannot preserve
+an arbitrary extra child descriptor. Neither path invokes a shell or inherits
 the parent environment. `ProcessRequest` normalizes a controlled environment
 with `LC_ALL=C` and `LANG=C`, and rejects NUL-containing arguments and
 environment entries. An execution ID is a one-shot capability: callers create a
 fresh ID for every start, never reuse it, and request cancellation only after
-`start` has returned its stream. This avoids ambiguous late external cancels
-without retaining an unbounded history of completed IDs in the runner. Every
-start also creates a private generation token. All delayed internal callbacks
-and cancellation steps must match both the public ID and this token. Cancelling
-an escalation task stops it instead of advancing to the next signal.
+`start` has returned its stream. Every start also creates private internal
+identity so delayed callbacks and cancellation steps cannot attach to newer
+state. Cancelling an escalation task stops it instead of advancing to the next
+signal.
 
 Drain stdout and stderr independently with blocking POSIX `read(2)` calls on
 detached workers. Each read returns currently available pipe data rather than
@@ -38,12 +39,14 @@ observable while the child is still running. Workers pass only `Data`, channel,
 execution ID, and generation token back to the actor; a `Process` instance never
 enters a worker.
 
-Stage 7 extends `ProcessRequest` with a narrow alternative for stdout: an
-already-created empty regular file plus its expected device/inode. The runner
-opens it with `O_NOFOLLOW`, verifies identity and zero size with `fstat`, and
-binds that exact descriptor to the child. No stdout bytes enter the event stream
-in this mode; this is how FFmpeg writes to an atomically reserved inode without
-reopening a pathname.
+Stage 7 extends `ProcessRequest` with one optional exact inherited descriptor.
+The request retains the already-open anonymous regular file; the descriptor
+runner verifies it with `fstat`, duplicates that open file description to the
+declared child fd, and closes unrelated descriptors in the child. The
+transcoding request binds the `O_RDWR` temporary to child fd 3. FFmpeg writes
+media to `fd:3`, while stdout remains a machine-readable progress pipe and
+stderr remains the bounded diagnostics pipe. The output pathname is never
+reopened or inherited.
 
 Publish chunks through a finite `.bufferingOldest` stream. A dropped event is a
 typed failure that starts child cancellation while both workers continue to
@@ -54,8 +57,7 @@ bytes were truncated.
 Finalize through one actor-owned gate only after all three facts are true:
 
 1. the direct child has terminated;
-2. streamed stdout reached EOF or a terminal read failure, or direct-file
-   stdout was successfully bound;
+2. streamed stdout reached EOF or a terminal read failure;
 3. stderr reached EOF or a terminal read failure.
 
 On a normal or nonzero exit, yield exactly one terminal `ProcessResult` and then
@@ -94,7 +96,9 @@ and awaited cancellation.
 ## Consequences
 
 - Later FFprobe and FFmpeg adapters share the same launch, streaming,
-  diagnostics, and cancellation safety rules.
+  diagnostics, exact-descriptor, and cancellation safety rules. FFprobe output
+  and FFmpeg progress use stdout; diagnostics use stderr; encoded media uses
+  only the separately inherited child fd 3.
 - A consumer that cannot keep up receives an explicit overflow failure instead
   of incomplete output.
 - Completion can be delayed beyond process exit until inherited pipe writers

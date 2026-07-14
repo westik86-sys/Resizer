@@ -229,9 +229,7 @@ actor FFmpegTranscodingService: Transcoding {
             )
         }
 
-        let metadata = try await fileAccess.metadata(
-            at: request.temporaryOutputURL
-        )
+        let metadata = try await fileAccess.metadata(for: reservation)
         try requireNotCancelled(jobID: request.jobID, token: activeToken)
         guard let metadata else {
             throw FFmpegTranscodingServiceError.temporaryOutputMissing
@@ -292,7 +290,7 @@ actor FFmpegTranscodingService: Transcoding {
             }
 
             switch event {
-            case .standardError(let data):
+            case .standardOutput(let data):
                 guard progressError == nil else { continue }
                 let snapshots: [TranscodeProgress]
                 do {
@@ -307,11 +305,10 @@ actor FFmpegTranscodingService: Transcoding {
                 for snapshot in snapshots {
                     await onProgress(snapshot)
                 }
-            case .standardOutput:
-                // Media stdout is bound directly to the pre-reserved inode;
-                // no byte event may be emitted for this execution.
-                throw FFmpegTranscodingServiceError
-                    .invalidProcessEventSequence
+            case .standardError:
+                // Human-readable diagnostics are retained by ProcessRunner's
+                // bounded tail and are never interpreted as progress.
+                break
             case .terminated(let result):
                 guard result.executionID == executionID else {
                     throw FFmpegTranscodingServiceError
@@ -354,7 +351,7 @@ actor FFmpegTranscodingService: Transcoding {
         arguments: [String],
         reservation: TemporaryOutputReservation
     ) throws -> ProcessRequest {
-        guard let identity = reservation.metadata.identity else {
+        guard reservation.metadata.identity != nil else {
             throw FFmpegTranscodingServiceError.invalidTemporaryReservation
         }
         do {
@@ -371,9 +368,9 @@ actor FFmpegTranscodingService: Transcoding {
                     interruptWait: Self.interruptCancellationWait,
                     terminateWait: Self.terminateCancellationWait
                 ),
-                standardOutputDestination: .existingFile(
-                    url: reservation.temporaryURL,
-                    expectedIdentity: identity
+                inheritedFileDescriptor: try ProcessInheritedFileDescriptor(
+                    lease: reservation.lease,
+                    childDescriptor: 3
                 )
             )
         } catch {

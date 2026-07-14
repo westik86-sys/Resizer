@@ -3,12 +3,12 @@ Identifier=com.example.Resizer.ffprobe
 Format=Mach-O universal (x86_64 arm64)
 CodeDirectory v=20500 size=9628 flags=0x10002(adhoc,runtime) hashes=290+7 location=embedded
 Hash type=sha256 size=32
-CandidateCDHash sha256=b31c45d9f35de100ebfaf741424d072faf325c98
-CandidateCDHashFull sha256=b31c45d9f35de100ebfaf741424d072faf325c9825e041319c4ebc2ccac6584f
+CandidateCDHash sha256=357440d44523c4883639bae803e5adbc3fe44594
+CandidateCDHashFull sha256=357440d44523c4883639bae803e5adbc3fe4459441a437efb1bdfd05a1574f32
 Hash choices=sha256
-CMSDigest=b31c45d9f35de100ebfaf741424d072faf325c9825e041319c4ebc2ccac6584f
+CMSDigest=357440d44523c4883639bae803e5adbc3fe4459441a437efb1bdfd05a1574f32
 CMSDigestType=2
-CDHash=b31c45d9f35de100ebfaf741424d072faf325c98
+CDHash=357440d44523c4883639bae803e5adbc3fe44594
 Signature=adhoc
 Info.plist=not bound
 TeamIdentifier=not set

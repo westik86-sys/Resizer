@@ -16,7 +16,7 @@ nonisolated enum FFmpegProgressParsingError: Error, Sendable, Equatable {
     case parserFinished
 }
 
-/// Incrementally parses the records emitted by `ffmpeg -progress pipe:2`.
+/// Incrementally parses the records emitted by `ffmpeg -progress pipe:1`.
 ///
 /// A snapshot is emitted only after a `progress=continue` or `progress=end`
 /// marker. The parser deliberately owns no process or pipe state, so callers

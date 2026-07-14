@@ -30,11 +30,13 @@ whole operation and performs, in order:
 2. record the typed configuration and plan unique output paths;
 3. verify input, directory, and output-path preconditions;
 4. validate the command and actual bundled FFmpeg capabilities;
-5. atomically reserve and identity-seal the job `.partial.mp4`;
-6. encode through a seekable descriptor for that exact inode;
-7. claim `finishing(.validating)`, inspect and re-probe the temporary;
+5. open the output directory, verify clone-publication support, atomically
+   create the job `.partial.mp4` as `O_RDWR`, unlink its name, and retain the
+   exact file and output-directory descriptors;
+6. encode through that anonymous seekable file as child fd 3;
+7. claim `finishing(.validating)`, inspect and re-probe the same descriptor;
 8. validate container, streams, codecs, dimensions, range, and duration;
-9. atomically rename the temporary to the final path without replacement;
+9. publish from the exact descriptor with no-replace `fclonefileat`;
 10. publish `completed` with the final URL, byte count, and elapsed time.
 
 One job cannot have two workflow calls in flight. The existing coordinator
@@ -69,14 +71,22 @@ validation contracts model anamorphic display geometry.
 `FFmpegCommandBuilder` for the exact argument vector. It configures a 1 MiB
 diagnostic tail and the runner's maximum bounded event capacity. The service
 does not accept the final URL. `SecurityScopedFileAccess` first creates the
-temporary atomically with `O_EXCL`; the runner verifies its device/inode and
-zero size, then binds that seekable file to stdout. FFmpeg writes MP4 to `fd:`
-without reopening a pathname. The service returns the positive byte count plus
-the final device/inode and timestamp seal.
+temporary atomically with `O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW`, immediately
+unlinks the directory entry, and retains the exact file and output-directory
+descriptors in a job lease. The descriptor runner verifies the regular file and
+binds that open file description to child fd 3. FFmpeg writes MP4 to `fd:3`
+without reopening a pathname. stdout carries only progress, while stderr feeds
+only the bounded diagnostic tail. The service reads the positive final byte
+count from the retained descriptor.
 
-`FFmpegProgressParser` incrementally parses arbitrary chunks from
-`-progress pipe:2`. An incomplete line is limited to 16 KiB. Known numeric
-fields are strict and nonnegative; unknown keys are ignored. Snapshots are
+The bundled FFmpeg `fd:` protocol gives each reopened protocol context an
+independent logical position and uses `pread`/`pwrite` on seekable descriptors.
+That is required for the MP4 muxer's `+faststart` second pass: multiple contexts
+can read and rewrite the same fd without corrupting a shared kernel offset.
+
+`FFmpegProgressParser` incrementally parses arbitrary chunks from stdout
+produced by `-progress pipe:1`. An incomplete line is limited to 16 KiB. Known
+numeric fields are strict and nonnegative; unknown keys are ignored. Snapshots are
 published only at `progress=continue` or `progress=end`, in stream order. A
 complete all-`N/A` time heartbeat is skipped without failing because FFmpeg can
 emit it while reconciling audio and video clocks. A successful process requires
@@ -106,32 +116,49 @@ ambiguous half-published result.
 
 ### Validation, cleanup, and commit
 
-The temporary must be a positive-size regular file and agree with the byte
-count returned by the service. A fresh FFprobe result must contain MP4, exactly
+The anonymous temporary must be a positive-size regular file and agree with the
+byte count returned by the service. A fresh FFprobe process receives that exact
+same open file as child fd 3 and probes `fd:3`; it never resolves the old
+temporary pathname. Its result must contain MP4, exactly
 one H.264 `yuv420p` video, normalized rotation, SDR-compatible range/depth,
 only the expected optional AAC stream, no subtitle/attachment/other streams,
 the recipe's no-upscale dimensions and aspect ratio, and a duration within the
 bounded tolerance.
 
-`SecurityScopedFileAccess` performs terminal-entry checks with `lstat`, rejects
-symlinks and unsupported types, and compares device/inode identity so a hard
-link cannot alias the original. The validator carries an inode, size,
-modification-time, and status-change-time seal; metadata must match after the
-probe and again immediately before commit, and the published inode is checked.
-It commits with
-`renameatx_np(..., RENAME_EXCL)`. This closes the final-name collision race and
-never replaces an existing entry. Failure and cancellation call `unlink` only
-when the regular file still has the initial reservation identity or the final
-transcoder seal. A replacement inode is preserved; a mutation of the same
-owned inode can still be removed after validation fails. Atomic reservation
-means a preflight race becomes a collision, while the inherited descriptor
-means FFmpeg cannot reopen and overwrite a replacement pathname. Cleanup never
-uses a directory scan, prefix, glob, caller-provided arbitrary URL, or a
-missing identity seal.
+`SecurityScopedFileAccess` performs input and directory entry checks without
+following terminal symlinks and compares device/inode identity so an output
+cannot alias the immutable original. Temporary metadata is obtained with
+`fstat` from the retained descriptor before and after FFprobe.
+
+Commit calls `fclonefileat` with the exact anonymous source fd, the retained
+output-directory fd, and the final basename. The operation refuses an existing
+destination, closing the final-name collision race without publishing the
+unvalidated source or reopening a temporary pathname. Failure and cancellation
+validate and release only the job lease. Because its name was already unlinked,
+closing the final descriptor removes the anonymous temporary; a later file at
+the former `.partial.mp4` path is unrelated and is never deleted. Cleanup never
+uses a directory scan, prefix, glob, or caller-provided arbitrary deletion URL.
+
+This safe publication path requires a clone-capable filesystem and source and
+destination on the same volume. Creating the anonymous source inside the held
+output directory guarantees the same-volume part. The held directory descriptor
+is queried before temporary creation and FFmpeg launch; an unsupported volume
+returns a typed reservation/preflight failure. `fclonefileat` remains the final
+authority, so a later publication error still fails closed: there is no
+path-based copy/rename fallback, no existing final entry is replaced, and the
+original input remains immutable.
+
+Immediately before unlink, `fstatat(..., AT_SYMLINK_NOFOLLOW)` must still match
+the just-created descriptor and report one link; immediately after unlink,
+`fstat` must report the same inode with zero links. Darwin has no conditional
+unlink-by-inode primitive, so a hostile process running as the same user could
+theoretically race the final check and `unlinkat`. The checks close accidental
+and ordinary concurrent replacement windows; defending against a malicious
+same-user writer requires a separately designed publication primitive.
 
 ## Alternatives considered
 
-### Trust a zero FFmpeg exit and rename immediately
+### Trust a zero FFmpeg exit and publish immediately
 
 Rejected. A process can exit zero while producing a stream layout, codec,
 duration, orientation, or file that violates the product contract.
@@ -141,10 +168,18 @@ duration, orientation, or file that violates the product contract.
 Rejected. It exposes incomplete data, cannot validate before publication, and
 cannot safely resolve a collision race without replacing user data.
 
-### Use `FileManager.moveItem` after a separate existence check
+### Use a pathname move after a separate existence check
 
-Rejected. The check and move are not one no-replace filesystem operation.
-`RENAME_EXCL` gives the required atomic publication rule on supported macOS.
+Rejected. The check and move are not one no-replace filesystem operation, and a
+pathname can be exchanged after validation. Descriptor-source `fclonefileat`
+publishes the exact validated file and fails if the final name already exists.
+
+### Fall back to copying on filesystems without clone support
+
+Rejected for this stage. A fallback needs a separately designed descriptor-
+source, no-replace, crash-consistent publication contract. Stage 7 rejects an
+unsupported volume before FFmpeg launch and releases any acquired resources
+instead of weakening the safety boundary.
 
 ### Treat every cancellation/process-exit race as an encode failure
 
@@ -160,8 +195,11 @@ the two deterministic race winners.
   cached; a failed discovery is retryable rather than cached.
 - The final filename is still optimistic during planning, but publication is
   collision-safe. A late collision becomes a typed commit failure.
-- Cleanup is deliberately narrow. An unrelated stale file is never removed,
-  even if its name resembles a Resizer temporary.
+- Cleanup is deliberately narrow. Releasing an anonymous descriptor cannot
+  remove an unrelated stale or replacement pathname.
+- Output publication is currently limited to clone-capable filesystems. An
+  unsupported output volume fails during reservation before encoding, without
+  changing the original or claiming a final result.
 - The stage validates the H.264 SDR MVP only; HDR tone mapping, HEVC, arbitrary
   flags, target-size encoding, queueing, and retry UI remain out of scope.
 

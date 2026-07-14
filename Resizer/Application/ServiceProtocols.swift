@@ -1,7 +1,17 @@
+import Darwin
 import Foundation
 
 nonisolated protocol MediaProbing: Sendable {
     func probe(_ sourceURL: URL) async throws -> MediaInfo
+    func probe(_ reservation: TemporaryOutputReservation) async throws -> MediaInfo
+}
+
+extension MediaProbing {
+    func probe(
+        _ reservation: TemporaryOutputReservation
+    ) async throws -> MediaInfo {
+        try await probe(reservation.temporaryURL)
+    }
 }
 
 nonisolated protocol Transcoding: Sendable {
@@ -51,17 +61,31 @@ nonisolated protocol FileAccessing: Sendable {
     ) async throws -> Result
 
     func metadata(at url: URL) async throws -> FileMetadata?
+    func metadata(
+        for reservation: TemporaryOutputReservation
+    ) async throws -> FileMetadata?
     func reserveTemporaryOutput(
         _ plan: OutputPlan
     ) async throws -> TemporaryOutputReservation
     func commitWithoutReplacing(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws
     func cleanupTemporaryOutput(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws
+}
+
+extension FileAccessing {
+    func metadata(
+        for reservation: TemporaryOutputReservation
+    ) async throws -> FileMetadata? {
+        try await metadata(at: reservation.temporaryURL)
+    }
+
 }
 
 nonisolated struct TranscodeRequest: Sendable, Equatable {
@@ -174,15 +198,77 @@ nonisolated struct OutputPlan: Sendable, Equatable {
     }
 }
 
-/// An empty regular file created atomically for exactly one output plan.
-/// FFmpeg receives this inode through an inherited descriptor rather than
-/// reopening a pathname, so later cleanup can always require an identity seal.
+/// Owns the anonymous temporary file and the directory selected for its final
+/// publication. Production reservations keep both descriptors open until the
+/// workflow has validated and committed or abandoned the job.
+nonisolated final class TemporaryOutputLease: @unchecked Sendable, Equatable {
+    let fileDescriptor: Int32?
+    let directoryDescriptor: Int32?
+
+    init(
+        ownedFileDescriptor: Int32,
+        ownedDirectoryDescriptor: Int32
+    ) throws {
+        guard ownedFileDescriptor >= 0,
+              ownedDirectoryDescriptor >= 0,
+              Darwin.fcntl(ownedFileDescriptor, F_GETFD) != -1,
+              Darwin.fcntl(ownedDirectoryDescriptor, F_GETFD) != -1 else {
+            throw TemporaryOutputLeaseValidationError.invalidDescriptor
+        }
+        fileDescriptor = ownedFileDescriptor
+        directoryDescriptor = ownedDirectoryDescriptor
+    }
+
+    private init() {
+        fileDescriptor = nil
+        directoryDescriptor = nil
+    }
+
+    /// Protocol fakes can model the reservation contract without owning a real
+    /// descriptor. The production process runner rejects this placeholder.
+    static func placeholder() -> TemporaryOutputLease {
+        TemporaryOutputLease()
+    }
+
+    deinit {
+        if let fileDescriptor {
+            Darwin.close(fileDescriptor)
+        }
+        if let directoryDescriptor {
+            Darwin.close(directoryDescriptor)
+        }
+    }
+
+    static func == (
+        lhs: TemporaryOutputLease,
+        rhs: TemporaryOutputLease
+    ) -> Bool {
+        lhs === rhs
+    }
+}
+
+nonisolated enum TemporaryOutputLeaseValidationError:
+    Error,
+    Sendable,
+    Equatable
+{
+    case invalidDescriptor
+}
+
+/// An empty regular file created atomically for exactly one output plan. Its
+/// directory entry is removed immediately; the held descriptor is the sole
+/// authority used by FFmpeg, FFprobe, cleanup, and final publication.
 nonisolated struct TemporaryOutputReservation: Sendable, Equatable {
     let jobID: CompressionJob.ID
     let temporaryURL: URL
     let metadata: FileMetadata
+    let lease: TemporaryOutputLease
 
-    init(plan: OutputPlan, metadata: FileMetadata) throws {
+    init(
+        plan: OutputPlan,
+        metadata: FileMetadata,
+        lease: TemporaryOutputLease = .placeholder()
+    ) throws {
         guard metadata.byteCount == 0,
               !metadata.isDirectory,
               metadata.identity != nil else {
@@ -192,6 +278,7 @@ nonisolated struct TemporaryOutputReservation: Sendable, Equatable {
         jobID = plan.jobID
         temporaryURL = plan.temporaryURL.standardizedFileURL
         self.metadata = metadata
+        self.lease = lease
     }
 }
 
@@ -249,6 +336,25 @@ nonisolated struct ProcessExecutionID: RawRepresentable, Sendable, Equatable, Ha
     }
 }
 
+/// One pre-opened reservation descriptor mapped to a fixed child descriptor by
+/// the descriptor-aware process path. Standard output remains independently
+/// available for machine-readable progress.
+nonisolated struct ProcessInheritedFileDescriptor: Sendable, Equatable {
+    let lease: TemporaryOutputLease
+    let childDescriptor: Int32
+
+    init(
+        lease: TemporaryOutputLease,
+        childDescriptor: Int32
+    ) throws {
+        guard (3...1_024).contains(childDescriptor) else {
+            throw ProcessContractValidationError.invalidRequest
+        }
+        self.lease = lease
+        self.childDescriptor = childDescriptor
+    }
+}
+
 nonisolated enum ProcessStandardOutputDestination: Sendable, Equatable {
     case stream
     case existingFile(url: URL, expectedIdentity: FileIdentity)
@@ -266,6 +372,7 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
     let eventBufferCapacity: Int
     let cancellationPolicy: ProcessCancellationPolicy
     let standardOutputDestination: ProcessStandardOutputDestination
+    let inheritedFileDescriptor: ProcessInheritedFileDescriptor?
 
     init(
         id: ProcessExecutionID = ProcessExecutionID(),
@@ -275,7 +382,8 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
         diagnosticByteLimit: Int,
         eventBufferCapacity: Int = 256,
         cancellationPolicy: ProcessCancellationPolicy = .signalsOnly,
-        standardOutputDestination: ProcessStandardOutputDestination = .stream
+        standardOutputDestination: ProcessStandardOutputDestination = .stream,
+        inheritedFileDescriptor: ProcessInheritedFileDescriptor? = nil
     ) throws {
         let validatedStandardOutputDestination:
             ProcessStandardOutputDestination
@@ -325,6 +433,7 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
         self.eventBufferCapacity = eventBufferCapacity
         self.cancellationPolicy = cancellationPolicy
         self.standardOutputDestination = validatedStandardOutputDestination
+        self.inheritedFileDescriptor = inheritedFileDescriptor
     }
 }
 

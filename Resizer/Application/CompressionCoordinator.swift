@@ -238,6 +238,7 @@ actor CompressionCoordinator {
         clock: ContinuousClock
     ) async throws -> CompressionJob {
         var outputPlan: OutputPlan?
+        var outputReservation: TemporaryOutputReservation?
         var expectedTemporaryMetadata: FileMetadata?
         var didCommit = false
 
@@ -273,6 +274,7 @@ actor CompressionCoordinator {
                 plan,
                 jobID: jobID
             )
+            outputReservation = reservation
             expectedTemporaryMetadata = reservation.metadata
 
             _ = try transition(
@@ -299,7 +301,8 @@ actor CompressionCoordinator {
                 plan: plan,
                 source: sourceMedia,
                 recipe: configuration.recipe,
-                transcodeResult: transcodeResult
+                transcodeResult: transcodeResult,
+                reservation: reservation
             )
 
             _ = try transition(
@@ -308,6 +311,7 @@ actor CompressionCoordinator {
             )
             try await commitWithoutCallerCancellation(
                 plan,
+                reservation: reservation,
                 expectedTemporaryMetadata: validatedOutput
             )
             didCommit = true
@@ -323,11 +327,13 @@ actor CompressionCoordinator {
             )
         } catch {
             if let outputPlan,
+               let outputReservation,
                expectedTemporaryMetadata != nil,
                !didCommit {
                 do {
                     try await cleanupWithoutCallerCancellation(
                         outputPlan,
+                        reservation: outputReservation,
                         expectedTemporaryMetadata: expectedTemporaryMetadata
                     )
                 } catch {
@@ -379,7 +385,8 @@ actor CompressionCoordinator {
         plan: OutputPlan,
         source: MediaInfo,
         recipe: CompressionRecipe,
-        transcodeResult: TranscodeResult
+        transcodeResult: TranscodeResult,
+        reservation: TemporaryOutputReservation
     ) async throws -> FileMetadata {
         let prober = dependencies.mediaProber
         let validator = dependencies.outputValidator
@@ -387,7 +394,7 @@ actor CompressionCoordinator {
         let task = Task.detached {
             let expectedMetadata = transcodeResult.temporaryMetadata
             guard let metadata = try await fileAccess.metadata(
-                      at: plan.temporaryURL
+                      for: reservation
                   ), metadata == expectedMetadata,
                   !metadata.isDirectory,
                   metadata.byteCount > 0,
@@ -395,9 +402,9 @@ actor CompressionCoordinator {
                   metadata.identity != nil else {
                 throw CompressionWorkflowError.temporaryOutputInvalid
             }
-            let output = try await prober.probe(plan.temporaryURL)
+            let output = try await prober.probe(reservation)
             guard let metadataAfterProbe = try await fileAccess.metadata(
-                at: plan.temporaryURL
+                for: reservation
             ), metadataAfterProbe == metadata else {
                 throw CompressionWorkflowError.temporaryOutputInvalid
             }
@@ -805,12 +812,14 @@ actor CompressionCoordinator {
 
     private func commitWithoutCallerCancellation(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws {
         let fileAccess = dependencies.fileAccess
         try await Task.detached {
             try await fileAccess.commitWithoutReplacing(
                 plan,
+                reservation: reservation,
                 expectedTemporaryMetadata: expectedTemporaryMetadata
             )
         }.value
@@ -818,12 +827,14 @@ actor CompressionCoordinator {
 
     private func cleanupWithoutCallerCancellation(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws {
         let fileAccess = dependencies.fileAccess
         let task = Task.detached {
             try await fileAccess.cleanupTemporaryOutput(
                 plan,
+                reservation: reservation,
                 expectedTemporaryMetadata: expectedTemporaryMetadata
             )
         }

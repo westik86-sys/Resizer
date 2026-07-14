@@ -81,16 +81,20 @@ nonisolated struct PassthroughFileAccess: FileAccessing {
 
     func commitWithoutReplacing(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws {
+        _ = reservation
         _ = expectedTemporaryMetadata
         try await commitHandler(plan)
     }
 
     func cleanupTemporaryOutput(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws {
+        _ = reservation
         _ = expectedTemporaryMetadata
         try await cleanupHandler(plan.temporaryURL)
     }

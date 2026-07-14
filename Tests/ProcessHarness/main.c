@@ -286,6 +286,42 @@ int main(int argument_count, char *arguments[]) {
         write_text(STDERR_FILENO, "stderr:success\n");
         return 0;
     }
+    if (strcmp(mode, "descriptor-output") == 0
+        && (argument_count == 2 || argument_count == 3)) {
+        int output_descriptor = 3;
+        if (argument_count == 3) {
+            char *end = NULL;
+            long parsed = strtol(arguments[2], &end, 10);
+            if (end == arguments[2]
+                || *end != '\0'
+                || parsed < 3
+                || parsed > 1024) {
+                return 64;
+            }
+            output_descriptor = (int)parsed;
+        }
+        char descriptor_output[64];
+        int descriptor_output_length = snprintf(
+            descriptor_output,
+            sizeof(descriptor_output),
+            "fd%d:success\n",
+            output_descriptor
+        );
+        if (descriptor_output_length <= 0
+            || (size_t)descriptor_output_length >= sizeof(descriptor_output)) {
+            return 74;
+        }
+        if (write_text(STDOUT_FILENO, "progress=end\n") != 0
+            || write_text(STDERR_FILENO, "stderr:descriptor\n") != 0
+            || write_all(
+                output_descriptor,
+                descriptor_output,
+                (size_t)descriptor_output_length
+            ) != 0) {
+            return 74;
+        }
+        return 0;
+    }
     if (strcmp(mode, "exit") == 0 && argument_count == 3) {
         char *end = NULL;
         long status = strtol(arguments[2], &end, 10);

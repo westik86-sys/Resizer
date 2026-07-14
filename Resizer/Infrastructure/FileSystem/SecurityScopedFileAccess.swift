@@ -14,6 +14,7 @@ nonisolated enum SecurityScopedFileAccessError: Error, Sendable, Equatable {
     case unsupportedFileType
     case inputOutputAlias
     case metadataReadFailed
+    case unsupportedOutputFileSystem
     case reservationFailed
     case commitFailed
     case cleanupFailed
@@ -28,9 +29,14 @@ nonisolated enum SecurityScopedFileAccessError: Error, Sendable, Equatable {
 nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
     typealias StartAccessing = @Sendable (URL) -> Bool
     typealias StopAccessing = @Sendable (URL) -> Void
+    typealias SupportsFileCloning = @Sendable (Int32) throws -> Bool
+    typealias BeforeTemporaryIdentityCheck =
+        @Sendable (Int32, String) throws -> Void
 
     private let startAccessing: StartAccessing
     private let stopAccessing: StopAccessing
+    private let supportsFileCloning: SupportsFileCloning
+    private let beforeTemporaryIdentityCheck: BeforeTemporaryIdentityCheck
 
     init(
         startAccessing: @escaping StartAccessing = { url in
@@ -38,10 +44,18 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         },
         stopAccessing: @escaping StopAccessing = { url in
             url.stopAccessingSecurityScopedResource()
+        },
+        supportsFileCloning: @escaping SupportsFileCloning = { descriptor in
+            try SecurityScopedFileAccess.volumeSupportsFileCloning(descriptor)
+        },
+        beforeTemporaryIdentityCheck:
+            @escaping BeforeTemporaryIdentityCheck = { _, _ in
         }
     ) {
         self.startAccessing = startAccessing
         self.stopAccessing = stopAccessing
+        self.supportsFileCloning = supportsFileCloning
+        self.beforeTemporaryIdentityCheck = beforeTemporaryIdentityCheck
     }
 
     func withSecurityScopedAccess<Result: Sendable>(
@@ -92,6 +106,24 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         }
     }
 
+    func metadata(
+        for reservation: TemporaryOutputReservation
+    ) async throws -> FileMetadata? {
+        guard let descriptor = reservation.lease.fileDescriptor else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
+        }
+
+        do {
+            let entry = try Self.entry(forDescriptor: descriptor)
+            try Self.requireRegularFile(entry)
+            return Self.metadata(for: entry, isDirectory: false)
+        } catch let error as SecurityScopedFileAccessError {
+            throw error
+        } catch {
+            throw SecurityScopedFileAccessError.metadataReadFailed
+        }
+    }
+
     func reserveTemporaryOutput(
         _ plan: OutputPlan
     ) async throws -> TemporaryOutputReservation {
@@ -103,10 +135,15 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         try Self.requireOutputDirectory(validatedPlan.outputDirectoryURL)
 
         let temporaryEntry: LocalFileEntry
+        let lease: TemporaryOutputLease
         do {
-            temporaryEntry = try Self.createExclusiveRegularFile(
-                at: validatedPlan.temporaryURL
-            )
+            (temporaryEntry, lease) = try Self
+                .createAnonymousTemporaryOutput(
+                    temporaryURL: validatedPlan.temporaryURL,
+                    outputDirectoryURL: validatedPlan.outputDirectoryURL,
+                    supportsFileCloning: supportsFileCloning,
+                    beforeIdentityCheck: beforeTemporaryIdentityCheck
+                )
         } catch let failure as LocalFileSystemFailure {
             if failure.code == EEXIST {
                 throw SecurityScopedFileAccessError
@@ -129,153 +166,124 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         do {
             return try TemporaryOutputReservation(
                 plan: plan,
-                metadata: metadata
+                metadata: metadata,
+                lease: lease
             )
         } catch {
             throw SecurityScopedFileAccessError.reservationFailed
         }
     }
 
-    /// Convenience entry point for direct adapter callers. The application
-    /// workflow uses the identity-carrying overload so validation and commit
-    /// are bound to the same temporary inode.
-    func commitWithoutReplacing(_ plan: OutputPlan) async throws {
-        let validatedPlan = try Self.validate(plan)
-        let temporaryEntry = try Self.requiredRegularEntry(
-            at: validatedPlan.temporaryURL,
-            missingError: .temporaryOutputMissing
-        )
-        try await commitWithoutReplacing(
-            plan,
-            expectedTemporaryMetadata: Self.metadata(
-                for: temporaryEntry,
-                isDirectory: false
-            )
-        )
-    }
-
     func commitWithoutReplacing(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata
     ) async throws {
         let validatedPlan = try Self.validate(plan)
+        guard reservation.jobID == plan.jobID,
+              reservation.temporaryURL
+                == validatedPlan.temporaryURL.standardizedFileURL,
+              let fileDescriptor = reservation.lease.fileDescriptor,
+              let directoryDescriptor = reservation.lease
+                .directoryDescriptor else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
+        }
+
         let inputEntry = try Self.requiredRegularEntry(
             at: validatedPlan.inputURL,
             missingError: .inputMissing
         )
-        let temporaryEntry = try Self.requiredRegularEntry(
-            at: validatedPlan.temporaryURL,
-            missingError: .temporaryOutputMissing
+        let temporaryEntry: LocalFileEntry
+        let heldDirectoryEntry: LocalFileEntry
+        do {
+            temporaryEntry = try Self.entry(forDescriptor: fileDescriptor)
+            heldDirectoryEntry = try Self.entry(
+                forDescriptor: directoryDescriptor
+            )
+        } catch {
+            throw SecurityScopedFileAccessError.metadataReadFailed
+        }
+        try Self.requireRegularFile(temporaryEntry)
+        guard heldDirectoryEntry.kind == .directory else {
+            throw SecurityScopedFileAccessError.outputDirectoryMissing
+        }
+
+        let currentMetadata = Self.metadata(
+            for: temporaryEntry,
+            isDirectory: false
         )
         guard !expectedTemporaryMetadata.isDirectory,
-              expectedTemporaryMetadata.identity != nil,
-              Self.metadata(for: temporaryEntry, isDirectory: false)
-                == expectedTemporaryMetadata else {
+              expectedTemporaryMetadata.byteCount > 0,
+              temporaryEntry.linkCount == 0,
+              currentMetadata == expectedTemporaryMetadata,
+              inputEntry.identity != temporaryEntry.identity else {
             throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
-        try Self.requireOutputDirectory(validatedPlan.outputDirectoryURL)
 
-        do {
-            if try Self.entry(at: validatedPlan.finalURL) != nil {
-                throw SecurityScopedFileAccessError.finalOutputAlreadyExists
-            }
-        } catch let error as SecurityScopedFileAccessError {
-            throw error
-        } catch {
+        let pathDirectory = try Self.requiredDirectoryEntry(
+            at: validatedPlan.outputDirectoryURL
+        )
+        guard pathDirectory.identity == heldDirectoryEntry.identity else {
+            throw SecurityScopedFileAccessError.outputDirectoryMissing
+        }
+
+        guard Self.synchronize(fileDescriptor) else {
             throw SecurityScopedFileAccessError.commitFailed
         }
-        guard inputEntry.identity != temporaryEntry.identity else {
-            throw SecurityScopedFileAccessError.inputOutputAlias
-        }
 
-        do {
-            try Self.renameExclusively(
-                from: validatedPlan.temporaryURL,
-                to: validatedPlan.finalURL
+        let result = validatedPlan.finalURL.lastPathComponent.withCString {
+            finalName in
+            Darwin.fclonefileat(
+                fileDescriptor,
+                directoryDescriptor,
+                finalName,
+                0
             )
-            let publishedEntry = try Self.requiredRegularEntry(
-                at: validatedPlan.finalURL,
-                missingError: .temporaryOutputChanged
-            )
-            guard Self.matchesPublishedEntry(
-                publishedEntry,
-                expected: expectedTemporaryMetadata
-            ) else {
-                throw SecurityScopedFileAccessError.temporaryOutputChanged
-            }
-        } catch let failure as LocalFileSystemFailure {
-            switch failure.code {
+        }
+        guard result == 0 else {
+            switch errno {
             case EEXIST:
                 throw SecurityScopedFileAccessError.finalOutputAlreadyExists
-            case ENOENT, ENOTDIR:
-                throw SecurityScopedFileAccessError.temporaryOutputMissing
             default:
                 throw SecurityScopedFileAccessError.commitFailed
             }
-        } catch let error as SecurityScopedFileAccessError {
-            throw error
-        } catch {
-            throw SecurityScopedFileAccessError.commitFailed
         }
-    }
-
-    /// Convenience entry point retained for direct adapter callers. It is
-    /// deliberately fail-closed for an existing path because unsealed cleanup
-    /// cannot prove that the inode belongs to this job.
-    func cleanupTemporaryOutput(_ plan: OutputPlan) async throws {
-        try await cleanupTemporaryOutput(
-            plan,
-            expectedTemporaryMetadata: nil
-        )
     }
 
     func cleanupTemporaryOutput(
         _ plan: OutputPlan,
+        reservation: TemporaryOutputReservation,
         expectedTemporaryMetadata: FileMetadata?
     ) async throws {
         let validatedPlan = try Self.validate(plan)
-
-        let temporaryEntry: LocalFileEntry?
-        do {
-            temporaryEntry = try Self.entry(at: validatedPlan.temporaryURL)
-        } catch {
-            throw SecurityScopedFileAccessError.cleanupFailed
-        }
-        guard let temporaryEntry else {
-            return
-        }
-        try Self.requireRegularFile(temporaryEntry)
-        guard let expectedTemporaryMetadata,
-              !expectedTemporaryMetadata.isDirectory,
-              let expectedIdentity = expectedTemporaryMetadata.identity,
-              temporaryEntry.identity == expectedIdentity else {
+        guard reservation.jobID == plan.jobID,
+              reservation.temporaryURL
+                == validatedPlan.temporaryURL.standardizedFileURL else {
             throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
-        try Self.requireOutputDirectory(validatedPlan.outputDirectoryURL)
 
+        guard let descriptor = reservation.lease.fileDescriptor,
+              reservation.lease.directoryDescriptor != nil else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
+        }
+
+        let entry: LocalFileEntry
         do {
-            if let inputEntry = try Self.entry(at: validatedPlan.inputURL) {
-                try Self.requireRegularFile(inputEntry)
-                guard inputEntry.identity != temporaryEntry.identity else {
-                    throw SecurityScopedFileAccessError.inputOutputAlias
-                }
-            }
-        } catch let error as SecurityScopedFileAccessError {
-            throw error
+            entry = try Self.entry(forDescriptor: descriptor)
         } catch {
             throw SecurityScopedFileAccessError.cleanupFailed
         }
-
-        do {
-            try Self.unlink(validatedPlan.temporaryURL)
-        } catch let failure as LocalFileSystemFailure
-            where failure.code == ENOENT || failure.code == ENOTDIR {
-            return
-        } catch let error as SecurityScopedFileAccessError {
-            throw error
-        } catch {
-            throw SecurityScopedFileAccessError.cleanupFailed
+        try Self.requireRegularFile(entry)
+        guard entry.linkCount == 0 else {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
         }
+        if let expectedIdentity = expectedTemporaryMetadata?.identity,
+           entry.identity != expectedIdentity {
+            throw SecurityScopedFileAccessError.temporaryOutputChanged
+        }
+        // The reservation was unlinked before it escaped this adapter. Closing
+        // the last lease reference is the only cleanup operation required and
+        // can never remove a replacement pathname.
     }
 
     private static func uniqueValidatedURLs(_ urls: [URL]) throws -> [URL] {
@@ -380,6 +388,27 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         }
     }
 
+    private static func requiredDirectoryEntry(
+        at url: URL
+    ) throws -> LocalFileEntry {
+        let value: LocalFileEntry?
+        do {
+            value = try entry(at: url)
+        } catch {
+            throw SecurityScopedFileAccessError.metadataReadFailed
+        }
+        guard let value else {
+            throw SecurityScopedFileAccessError.outputDirectoryMissing
+        }
+        guard value.kind == .directory else {
+            if value.kind == .symbolicLink {
+                throw SecurityScopedFileAccessError.symbolicLinkNotAllowed
+            }
+            throw SecurityScopedFileAccessError.unsupportedFileType
+        }
+        return value
+    }
+
     private static func requireRegularFile(_ entry: LocalFileEntry) throws {
         switch entry.kind {
         case .regular:
@@ -400,32 +429,7 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
             return Darwin.lstat(path, &status)
         }
         guard result != 0 else {
-            let mode = mode_t(status.st_mode) & mode_t(S_IFMT)
-            let kind: LocalFileEntry.Kind
-            switch mode {
-            case mode_t(S_IFREG):
-                kind = .regular
-            case mode_t(S_IFDIR):
-                kind = .directory
-            case mode_t(S_IFLNK):
-                kind = .symbolicLink
-            default:
-                kind = .other
-            }
-            return LocalFileEntry(
-                kind: kind,
-                byteCount: Int64(status.st_size),
-                identity: FileIdentity(
-                    device: UInt64(status.st_dev),
-                    inode: UInt64(status.st_ino)
-                ),
-                modificationTimeNanoseconds: timeNanoseconds(
-                    status.st_mtimespec
-                ),
-                statusChangeTimeNanoseconds: timeNanoseconds(
-                    status.st_ctimespec
-                )
-            )
+            return entry(from: status)
         }
 
         let code = errno
@@ -435,41 +439,57 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         throw LocalFileSystemFailure(code: code)
     }
 
-    private static func createExclusiveRegularFile(
-        at url: URL
+    private static func entry(
+        forDescriptor descriptor: Int32
     ) throws -> LocalFileEntry {
-        var invalidRepresentation = false
-        let descriptor = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else {
-                invalidRepresentation = true
-                return Int32(-1)
-            }
-            return Darwin.open(
-                path,
-                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-                mode_t(S_IRUSR | S_IWUSR)
-            )
-        }
-        guard !invalidRepresentation else {
-            throw SecurityScopedFileAccessError.invalidURL
-        }
-        guard descriptor >= 0 else {
-            throw LocalFileSystemFailure(code: errno)
-        }
-        defer { Darwin.close(descriptor) }
-
         var status = stat()
         guard Darwin.fstat(descriptor, &status) == 0 else {
             throw LocalFileSystemFailure(code: errno)
         }
-        guard mode_t(status.st_mode) & mode_t(S_IFMT)
-                == mode_t(S_IFREG),
-              status.st_size == 0 else {
-            throw SecurityScopedFileAccessError.unsupportedFileType
+        return entry(from: status)
+    }
+
+    private static func entry(
+        named name: String,
+        relativeTo directoryDescriptor: Int32
+    ) throws -> LocalFileEntry? {
+        var status = stat()
+        let result = name.withCString { namePointer in
+            Darwin.fstatat(
+                directoryDescriptor,
+                namePointer,
+                &status,
+                AT_SYMLINK_NOFOLLOW
+            )
+        }
+        guard result != 0 else {
+            return entry(from: status)
+        }
+
+        let code = errno
+        if code == ENOENT || code == ENOTDIR {
+            return nil
+        }
+        throw LocalFileSystemFailure(code: code)
+    }
+
+    private static func entry(from status: stat) -> LocalFileEntry {
+        let mode = mode_t(status.st_mode) & mode_t(S_IFMT)
+        let kind: LocalFileEntry.Kind
+        switch mode {
+        case mode_t(S_IFREG):
+            kind = .regular
+        case mode_t(S_IFDIR):
+            kind = .directory
+        case mode_t(S_IFLNK):
+            kind = .symbolicLink
+        default:
+            kind = .other
         }
         return LocalFileEntry(
-            kind: .regular,
-            byteCount: 0,
+            kind: kind,
+            byteCount: Int64(status.st_size),
+            linkCount: UInt64(status.st_nlink),
             identity: FileIdentity(
                 device: UInt64(status.st_dev),
                 inode: UInt64(status.st_ino)
@@ -483,53 +503,158 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         )
     }
 
-    private static func renameExclusively(
-        from sourceURL: URL,
-        to destinationURL: URL
-    ) throws {
+    private static func createAnonymousTemporaryOutput(
+        temporaryURL: URL,
+        outputDirectoryURL: URL,
+        supportsFileCloning: SupportsFileCloning,
+        beforeIdentityCheck: BeforeTemporaryIdentityCheck
+    ) throws -> (LocalFileEntry, TemporaryOutputLease) {
         var invalidRepresentation = false
-        let result = sourceURL.withUnsafeFileSystemRepresentation { source in
-            guard let source else {
-                invalidRepresentation = true
-                return Int32(-1)
-            }
-            return destinationURL.withUnsafeFileSystemRepresentation {
-                destination in
-                guard let destination else {
+        let directoryDescriptor = outputDirectoryURL
+            .withUnsafeFileSystemRepresentation { path in
+                guard let path else {
                     invalidRepresentation = true
                     return Int32(-1)
                 }
-                return Darwin.renameatx_np(
-                    AT_FDCWD,
-                    source,
-                    AT_FDCWD,
-                    destination,
-                    UInt32(RENAME_EXCL)
+                return Darwin.open(
+                    path,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
                 )
             }
-        }
         guard !invalidRepresentation else {
             throw SecurityScopedFileAccessError.invalidURL
         }
-        guard result == 0 else {
+        guard directoryDescriptor >= 0 else {
             throw LocalFileSystemFailure(code: errno)
+        }
+
+        do {
+            let directoryEntry = try entry(
+                forDescriptor: directoryDescriptor
+            )
+            guard directoryEntry.kind == .directory else {
+                throw SecurityScopedFileAccessError.unsupportedFileType
+            }
+            guard try supportsFileCloning(directoryDescriptor) else {
+                throw SecurityScopedFileAccessError
+                    .unsupportedOutputFileSystem
+            }
+        } catch {
+            Darwin.close(directoryDescriptor)
+            throw error
+        }
+
+        let temporaryName = temporaryURL.lastPathComponent
+        let fileDescriptor = temporaryName.withCString { name in
+            Darwin.openat(
+                directoryDescriptor,
+                name,
+                O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                mode_t(S_IRUSR | S_IWUSR)
+            )
+        }
+        guard fileDescriptor >= 0 else {
+            let code = errno
+            Darwin.close(directoryDescriptor)
+            throw LocalFileSystemFailure(code: code)
+        }
+
+        do {
+            let createdEntry = try entry(forDescriptor: fileDescriptor)
+            guard createdEntry.kind == .regular,
+                  createdEntry.byteCount == 0,
+                  createdEntry.linkCount == 1 else {
+                throw SecurityScopedFileAccessError.unsupportedFileType
+            }
+            // A no-op in production. Tests use this narrow seam to prove that
+            // the following descriptor-relative identity guard rejects a name
+            // replaced after openat without deleting the replacement.
+            try beforeIdentityCheck(directoryDescriptor, temporaryName)
+            let namedEntry = try entry(
+                named: temporaryName,
+                relativeTo: directoryDescriptor
+            )
+            guard let namedEntry,
+                  namedEntry.kind == .regular,
+                  namedEntry.identity == createdEntry.identity,
+                  namedEntry.byteCount == 0,
+                  namedEntry.linkCount == 1 else {
+                throw SecurityScopedFileAccessError.temporaryOutputChanged
+            }
+
+            // Darwin has no conditional unlink-by-inode primitive. This final
+            // descriptor-relative identity check narrows the normal race window;
+            // the post-unlink link-count check below detects a concurrent rename
+            // or hard link before the reservation is allowed to escape.
+            let unlinkResult = temporaryName.withCString { name in
+                Darwin.unlinkat(directoryDescriptor, name, 0)
+            }
+            guard unlinkResult == 0 else {
+                throw LocalFileSystemFailure(code: errno)
+            }
+
+            // Removing the directory entry updates inode metadata (notably
+            // ctime). Seal the descriptor only after it has reached the
+            // anonymous state used by the rest of the workflow.
+            let temporaryEntry = try entry(forDescriptor: fileDescriptor)
+            guard temporaryEntry.kind == .regular,
+                  temporaryEntry.identity == createdEntry.identity,
+                  temporaryEntry.byteCount == 0,
+                  temporaryEntry.linkCount == 0 else {
+                throw SecurityScopedFileAccessError.temporaryOutputChanged
+            }
+
+            let lease = try TemporaryOutputLease(
+                ownedFileDescriptor: fileDescriptor,
+                ownedDirectoryDescriptor: directoryDescriptor
+            )
+            return (temporaryEntry, lease)
+        } catch {
+            Darwin.close(fileDescriptor)
+            Darwin.close(directoryDescriptor)
+            throw error
         }
     }
 
-    private static func unlink(_ url: URL) throws {
-        var invalidRepresentation = false
-        let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else {
-                invalidRepresentation = true
-                return Int32(-1)
-            }
-            return Darwin.unlink(path)
-        }
-        guard !invalidRepresentation else {
-            throw SecurityScopedFileAccessError.invalidURL
-        }
+    private static func volumeSupportsFileCloning(
+        _ descriptor: Int32
+    ) throws -> Bool {
+        var attributes = attrlist()
+        attributes.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+        attributes.volattr =
+            attrgroup_t(ATTR_VOL_INFO)
+            | attrgroup_t(ATTR_VOL_CAPABILITIES)
+
+        var buffer = VolumeCapabilitiesBuffer()
+        let result = Darwin.fgetattrlist(
+            descriptor,
+            &attributes,
+            &buffer,
+            MemoryLayout<VolumeCapabilitiesBuffer>.size,
+            0
+        )
         guard result == 0 else {
             throw LocalFileSystemFailure(code: errno)
+        }
+        guard buffer.length
+            >= UInt32(MemoryLayout<VolumeCapabilitiesBuffer>.size) else {
+            throw LocalFileSystemFailure(code: EIO)
+        }
+
+        let cloneCapability = UInt32(VOL_CAP_INT_CLONE)
+        return buffer.capabilities.valid.1 & cloneCapability == cloneCapability
+            && buffer.capabilities.capabilities.1 & cloneCapability
+                == cloneCapability
+    }
+
+    private static func synchronize(_ descriptor: Int32) -> Bool {
+        while true {
+            if Darwin.fsync(descriptor) == 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
         }
     }
 
@@ -564,16 +689,6 @@ nonisolated struct SecurityScopedFileAccess: FileAccessing, Sendable {
         }
         return result
     }
-
-    private static func matchesPublishedEntry(
-        _ entry: LocalFileEntry,
-        expected: FileMetadata
-    ) -> Bool {
-        entry.identity == expected.identity
-            && max(0, entry.byteCount) == expected.byteCount
-            && entry.modificationTimeNanoseconds
-                == expected.modificationTimeNanoseconds
-    }
 }
 
 private nonisolated struct ValidatedPlan: Sendable {
@@ -584,7 +699,7 @@ private nonisolated struct ValidatedPlan: Sendable {
 }
 
 private nonisolated struct LocalFileEntry: Sendable {
-    enum Kind: Sendable {
+    enum Kind: Sendable, Equatable {
         case regular
         case directory
         case symbolicLink
@@ -593,9 +708,15 @@ private nonisolated struct LocalFileEntry: Sendable {
 
     let kind: Kind
     let byteCount: Int64
+    let linkCount: UInt64
     let identity: FileIdentity
     let modificationTimeNanoseconds: Int64?
     let statusChangeTimeNanoseconds: Int64?
+}
+
+private nonisolated struct VolumeCapabilitiesBuffer {
+    var length: UInt32 = 0
+    var capabilities = vol_capabilities_attr_t()
 }
 
 private nonisolated struct LocalFileSystemFailure: Error, Sendable {

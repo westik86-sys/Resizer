@@ -31,6 +31,11 @@ Launch through `ProcessRequest` with the exact logical arguments:
 -v error -print_format json -show_format -show_streams -show_chapters INPUT
 ```
 
+For the initial source probe, `INPUT` is the literal selected path. For stage-7
+output validation, `INPUT` is `fd:3`, and the request maps the exact retained
+anonymous temporary to child fd 3. This second form never reopens the planned
+`.partial.mp4` pathname and therefore cannot validate a replacement file.
+
 Collect stdout chunks up to an 8 MiB default limit. Keep stderr ownership in
 `ProcessRunner`, which already returns a bounded diagnostic tail. Require one
 matching terminal result, distinguish normal zero exit from nonzero exit or
@@ -67,9 +72,10 @@ parser errors.
   identity such as a missing stream index fails explicitly.
 - Production behavior is reproducible with the bundled FFmpeg toolchain and
   cannot change because of a user's local package installation.
-- The adapter does not acquire security-scoped access itself; the future
-  coordinator owns an access lifetime spanning probe, encode, validation, and
-  commit.
+- The adapter does not acquire security-scoped access itself; the coordinator
+  owns an access lifetime spanning probe, encode, validation, and commit.
+  Output validation also retains the exact temporary-descriptor lease for the
+  whole FFprobe process.
 - Fixture tests exercise metadata variation without real media or external
   tools; the existing signed sandbox spike remains the real bundled-tool proof.
 

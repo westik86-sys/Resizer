@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import Resizer
@@ -147,7 +148,7 @@ struct SecurityScopedFileAccessTests {
         }
     }
 
-    @Test("Reservation atomically creates one empty identity-sealed file")
+    @Test("Reservation keeps an identity-sealed anonymous file descriptor")
     func reserveTemporaryOutput() async throws {
         let fixture = try FilePlanFixture()
         defer { fixture.remove() }
@@ -162,249 +163,226 @@ struct SecurityScopedFileAccessTests {
         #expect(reservation.temporaryURL == fixture.plan.temporaryURL)
         #expect(reservation.metadata.byteCount == 0)
         #expect(reservation.metadata.identity != nil)
-        #expect(
-            try Data(contentsOf: fixture.plan.temporaryURL).isEmpty
-        )
-        await expectError(.temporaryOutputAlreadyExists) {
-            try await access.reserveTemporaryOutput(fixture.plan)
-        }
+        #expect(reservation.lease.fileDescriptor != nil)
+        #expect(reservation.lease.directoryDescriptor != nil)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        var status = stat()
+        #expect(Darwin.fstat(descriptor, &status) == 0)
+        #expect(status.st_nlink == 0)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.temporaryURL.path
+        ))
+        #expect(try await access.metadata(for: reservation) == reservation.metadata)
     }
 
-    @Test("Commit atomically publishes the temporary file without changing input")
-    func commitPublishesTemporaryFile() async throws {
+    @Test("Descriptor commit publishes the exact anonymous file without replacement")
+    func descriptorCommitPublishesReservedFile() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        try Data("original".utf8).write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess()
+        let reservation = try await access.reserveTemporaryOutput(fixture.plan)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        let outputData = Data("descriptor output".utf8)
+        try FileHandle(
+            fileDescriptor: descriptor,
+            closeOnDealloc: false
+        ).write(contentsOf: outputData)
+        let producedMetadata = try #require(
+            await access.metadata(for: reservation)
+        )
+
+        try await access.commitWithoutReplacing(
+            fixture.plan,
+            reservation: reservation,
+            expectedTemporaryMetadata: producedMetadata
+        )
+
+        #expect(try Data(contentsOf: fixture.plan.finalURL) == outputData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.temporaryURL.path
+        ))
+    }
+
+    @Test("Descriptor commit never trusts a replacement temporary pathname")
+    func descriptorCommitPreservesTemporaryPathReplacement() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        try Data("original".utf8).write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess()
+        let reservation = try await access.reserveTemporaryOutput(fixture.plan)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        let outputData = Data("sealed descriptor output".utf8)
+        try FileHandle(
+            fileDescriptor: descriptor,
+            closeOnDealloc: false
+        ).write(contentsOf: outputData)
+        let producedMetadata = try #require(
+            await access.metadata(for: reservation)
+        )
+        let replacementData = Data("unrelated replacement".utf8)
+        try replacementData.write(to: fixture.plan.temporaryURL)
+
+        try await access.commitWithoutReplacing(
+            fixture.plan,
+            reservation: reservation,
+            expectedTemporaryMetadata: producedMetadata
+        )
+
+        #expect(try Data(contentsOf: fixture.plan.finalURL) == outputData)
+        #expect(
+            try Data(contentsOf: fixture.plan.temporaryURL) == replacementData
+        )
+    }
+
+    @Test("Descriptor cleanup preserves replacements and existing final output")
+    func descriptorCleanupPreservesUnrelatedPaths() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        try Data("original".utf8).write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess()
+        let reservation = try await access.reserveTemporaryOutput(fixture.plan)
+        let descriptor = try #require(reservation.lease.fileDescriptor)
+        try FileHandle(
+            fileDescriptor: descriptor,
+            closeOnDealloc: false
+        ).write(contentsOf: Data("sealed output".utf8))
+        let producedMetadata = try #require(
+            await access.metadata(for: reservation)
+        )
+        let replacementData = Data("unrelated replacement".utf8)
+        let existingFinalData = Data("existing final".utf8)
+        try replacementData.write(to: fixture.plan.temporaryURL)
+        try existingFinalData.write(to: fixture.plan.finalURL)
+
+        await expectError(.finalOutputAlreadyExists) {
+            try await access.commitWithoutReplacing(
+                fixture.plan,
+                reservation: reservation,
+                expectedTemporaryMetadata: producedMetadata
+            )
+        }
+        try await access.cleanupTemporaryOutput(
+            fixture.plan,
+            reservation: reservation,
+            expectedTemporaryMetadata: producedMetadata
+        )
+
+        #expect(
+            try Data(contentsOf: fixture.plan.temporaryURL) == replacementData
+        )
+        #expect(try Data(contentsOf: fixture.plan.finalURL) == existingFinalData)
+    }
+
+    @Test("Reservation rejects an output filesystem without clone support")
+    func reserveRejectsUnsupportedOutputFileSystem() async throws {
         let fixture = try FilePlanFixture()
         defer { fixture.remove() }
         let inputData = Data("original".utf8)
-        let outputData = Data("encoded output".utf8)
         try inputData.write(to: fixture.plan.inputURL)
-        try outputData.write(to: fixture.plan.temporaryURL)
-
-        try await SecurityScopedFileAccess().commitWithoutReplacing(
-            fixture.plan
+        let access = SecurityScopedFileAccess(
+            supportsFileCloning: { _ in false }
         )
+
+        await expectError(.unsupportedOutputFileSystem) {
+            try await access.reserveTemporaryOutput(fixture.plan)
+        }
+
+        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.temporaryURL.path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.finalURL.path
+        ))
+    }
+
+    @Test("Reservation maps a clone capability query failure")
+    func reserveMapsCloneCapabilityQueryFailure() async throws {
+        let fixture = try FilePlanFixture()
+        defer { fixture.remove() }
+        try Data("original".utf8).write(to: fixture.plan.inputURL)
+        let access = SecurityScopedFileAccess(
+            supportsFileCloning: { _ in throw ExpectedFailure.operation }
+        )
+
+        await expectError(.reservationFailed) {
+            try await access.reserveTemporaryOutput(fixture.plan)
+        }
 
         #expect(!FileManager.default.fileExists(
             atPath: fixture.plan.temporaryURL.path
         ))
-        #expect(try Data(contentsOf: fixture.plan.finalURL) == outputData)
-        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
     }
 
-    @Test("Commit never replaces an existing final output")
-    func commitRejectsExistingFinalOutput() async throws {
+    @Test("Reservation preserves a temp-name replacement before unlink")
+    func reserveRejectsAndPreservesPreUnlinkReplacement() async throws {
         let fixture = try FilePlanFixture()
         defer { fixture.remove() }
         let inputData = Data("original".utf8)
-        let temporaryData = Data("new output".utf8)
-        let existingData = Data("existing output".utf8)
+        let replacementData = Data("unrelated replacement".utf8)
+        let temporaryURL = fixture.plan.temporaryURL
         try inputData.write(to: fixture.plan.inputURL)
-        try temporaryData.write(to: fixture.plan.temporaryURL)
-        try existingData.write(to: fixture.plan.finalURL)
-        let access = SecurityScopedFileAccess()
+        let access = SecurityScopedFileAccess(
+            beforeTemporaryIdentityCheck: { _, _ in
+                try FileManager.default.removeItem(at: temporaryURL)
+                try replacementData.write(
+                    to: temporaryURL,
+                    options: .withoutOverwriting
+                )
+            }
+        )
 
-        await expectError(.finalOutputAlreadyExists) {
-            try await access.commitWithoutReplacing(fixture.plan)
+        await expectError(.temporaryOutputChanged) {
+            try await access.reserveTemporaryOutput(fixture.plan)
         }
 
-        #expect(try Data(contentsOf: fixture.plan.finalURL) == existingData)
-        #expect(try Data(contentsOf: fixture.plan.temporaryURL) == temporaryData)
         #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
+        #expect(try Data(contentsOf: temporaryURL) == replacementData)
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.plan.finalURL.path
+        ))
     }
 
-    @Test("Commit rejects a temporary replaced after validation")
-    func commitRejectsChangedTemporaryIdentity() async throws {
+    @Test("Descriptor mutation APIs reject a reservation without a lease")
+    func descriptorMutationsRejectPlaceholderReservation() async throws {
         let fixture = try FilePlanFixture()
         defer { fixture.remove() }
         try Data("original".utf8).write(to: fixture.plan.inputURL)
-        try Data("validated".utf8).write(to: fixture.plan.temporaryURL)
-        let access = SecurityScopedFileAccess()
-        let validatedMetadata = try #require(
-            await access.metadata(at: fixture.plan.temporaryURL)
+        let identity = FileIdentity(device: 1, inode: 2)
+        let placeholder = try TemporaryOutputReservation(
+            plan: fixture.plan,
+            metadata: FileMetadata(
+                byteCount: 0,
+                isDirectory: false,
+                identity: identity
+            )
         )
-
-        try FileManager.default.removeItem(at: fixture.plan.temporaryURL)
-        let replacement = Data("replacement".utf8)
-        try replacement.write(to: fixture.plan.temporaryURL)
+        let producedMetadata = FileMetadata(
+            byteCount: 1,
+            isDirectory: false,
+            identity: identity
+        )
+        let access = SecurityScopedFileAccess()
 
         await expectError(.temporaryOutputChanged) {
             try await access.commitWithoutReplacing(
                 fixture.plan,
-                expectedTemporaryMetadata: validatedMetadata
-            )
-        }
-
-        #expect(!FileManager.default.fileExists(
-            atPath: fixture.plan.finalURL.path
-        ))
-        #expect(try Data(contentsOf: fixture.plan.temporaryURL) == replacement)
-    }
-
-    @Test("Cleanup is idempotent and removes only the exact job temporary path")
-    func cleanupIsExactAndIdempotent() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        let neighboringURL = fixture.outputDirectoryURL.appendingPathComponent(
-            "neighbor.partial.mp4"
-        )
-        let finalData = Data("existing final".utf8)
-        let neighboringData = Data("neighbor".utf8)
-        try Data("original".utf8).write(to: fixture.plan.inputURL)
-        try Data("temporary".utf8).write(to: fixture.plan.temporaryURL)
-        try finalData.write(to: fixture.plan.finalURL)
-        try neighboringData.write(to: neighboringURL)
-        let access = SecurityScopedFileAccess()
-        let ownedMetadata = try #require(
-            await access.metadata(at: fixture.plan.temporaryURL)
-        )
-
-        try await access.cleanupTemporaryOutput(
-            fixture.plan,
-            expectedTemporaryMetadata: ownedMetadata
-        )
-        try await access.cleanupTemporaryOutput(
-            fixture.plan,
-            expectedTemporaryMetadata: ownedMetadata
-        )
-
-        #expect(!FileManager.default.fileExists(
-            atPath: fixture.plan.temporaryURL.path
-        ))
-        #expect(try Data(contentsOf: neighboringURL) == neighboringData)
-        #expect(try Data(contentsOf: fixture.plan.finalURL) == finalData)
-        #expect(
-            FileManager.default.fileExists(atPath: fixture.plan.inputURL.path)
-        )
-    }
-
-    @Test("Cleanup never unlinks an existing file without an identity seal")
-    func cleanupRejectsMissingSeal() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        try Data("original".utf8).write(to: fixture.plan.inputURL)
-        let unrelated = Data("unrelated".utf8)
-        try unrelated.write(to: fixture.plan.temporaryURL)
-        let access = SecurityScopedFileAccess()
-
-        await expectError(.temporaryOutputChanged) {
-            try await access.cleanupTemporaryOutput(fixture.plan)
-        }
-
-        #expect(
-            try Data(contentsOf: fixture.plan.temporaryURL) == unrelated
-        )
-    }
-
-    @Test("Cleanup preserves a replacement whose metadata no longer matches")
-    func cleanupRejectsReplacedTemporaryOutput() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        try Data("original".utf8).write(to: fixture.plan.inputURL)
-        try Data("workflow-owned".utf8).write(
-            to: fixture.plan.temporaryURL
-        )
-        let access = SecurityScopedFileAccess()
-        let producedMetadata = try #require(
-            try await access.metadata(at: fixture.plan.temporaryURL)
-        )
-
-        try FileManager.default.removeItem(at: fixture.plan.temporaryURL)
-        let replacement = Data("replacement".utf8)
-        try replacement.write(to: fixture.plan.temporaryURL)
-
-        await expectError(.temporaryOutputChanged) {
-            try await access.cleanupTemporaryOutput(
-                fixture.plan,
+                reservation: placeholder,
                 expectedTemporaryMetadata: producedMetadata
             )
         }
-
-        #expect(try Data(contentsOf: fixture.plan.temporaryURL) == replacement)
-    }
-
-    @Test("Cleanup removes the same owned inode after a failed validation")
-    func cleanupAcceptsMutatedOwnedTemporaryOutput() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        try Data("original".utf8).write(to: fixture.plan.inputURL)
-        try Data("workflow-owned".utf8).write(
-            to: fixture.plan.temporaryURL
-        )
-        let access = SecurityScopedFileAccess()
-        let producedMetadata = try #require(
-            try await access.metadata(at: fixture.plan.temporaryURL)
-        )
-
-        let handle = try FileHandle(forWritingTo: fixture.plan.temporaryURL)
-        try handle.seekToEnd()
-        try handle.write(contentsOf: Data("-mutated".utf8))
-        try handle.close()
-
-        try await access.cleanupTemporaryOutput(
-            fixture.plan,
-            expectedTemporaryMetadata: producedMetadata
-        )
-
-        #expect(!FileManager.default.fileExists(
-            atPath: fixture.plan.temporaryURL.path
-        ))
-    }
-
-    @Test("Cleanup refuses a symbolic-link temporary output")
-    func cleanupRejectsSymbolicLink() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        let targetURL = fixture.outputDirectoryURL.appendingPathComponent(
-            "unrelated.mp4"
-        )
-        let targetData = Data("unrelated".utf8)
-        try Data("original".utf8).write(to: fixture.plan.inputURL)
-        try targetData.write(to: targetURL)
-        try FileManager.default.createSymbolicLink(
-            at: fixture.plan.temporaryURL,
-            withDestinationURL: targetURL
-        )
-        let access = SecurityScopedFileAccess()
-
-        await expectError(.symbolicLinkNotAllowed) {
-            try await access.cleanupTemporaryOutput(fixture.plan)
-        }
-
-        #expect(try Data(contentsOf: targetURL) == targetData)
-        #expect(FileManager.default.fileExists(
-            atPath: fixture.plan.temporaryURL.path
-        ))
-    }
-
-    @Test("Cleanup refuses a hard-link alias of the immutable input")
-    func cleanupRejectsInputIdentityAlias() async throws {
-        let fixture = try FilePlanFixture()
-        defer { fixture.remove() }
-        let inputData = Data("original".utf8)
-        try inputData.write(to: fixture.plan.inputURL)
-        try FileManager.default.linkItem(
-            at: fixture.plan.inputURL,
-            to: fixture.plan.temporaryURL
-        )
-        let access = SecurityScopedFileAccess()
-        let aliasMetadata = try #require(
-            await access.metadata(at: fixture.plan.temporaryURL)
-        )
-
-        await expectError(.inputOutputAlias) {
+        await expectError(.temporaryOutputChanged) {
             try await access.cleanupTemporaryOutput(
                 fixture.plan,
-                expectedTemporaryMetadata: aliasMetadata
+                reservation: placeholder,
+                expectedTemporaryMetadata: producedMetadata
             )
         }
-
-        #expect(try Data(contentsOf: fixture.plan.inputURL) == inputData)
-        #expect(FileManager.default.fileExists(
-            atPath: fixture.plan.temporaryURL.path
-        ))
     }
 
-    @Test("Commit rejects a symbolic-link input or output directory")
-    func commitRejectsSymbolicLinkIdentities() async throws {
+    @Test("Reservation rejects a symbolic-link input or output directory")
+    func reserveRejectsSymbolicLinkIdentities() async throws {
         let inputLinkFixture = try FilePlanFixture()
         defer { inputLinkFixture.remove() }
         let actualInputURL = inputLinkFixture.rootURL.appendingPathComponent(
@@ -415,13 +393,10 @@ struct SecurityScopedFileAccessTests {
             at: inputLinkFixture.plan.inputURL,
             withDestinationURL: actualInputURL
         )
-        try Data("temporary".utf8).write(
-            to: inputLinkFixture.plan.temporaryURL
-        )
         let access = SecurityScopedFileAccess()
 
         await expectError(.symbolicLinkNotAllowed) {
-            try await access.commitWithoutReplacing(inputLinkFixture.plan)
+            try await access.reserveTemporaryOutput(inputLinkFixture.plan)
         }
 
         let linkedDirectoryFixture = try LinkedOutputDirectoryFixture()
@@ -429,12 +404,8 @@ struct SecurityScopedFileAccessTests {
         try Data("original".utf8).write(
             to: linkedDirectoryFixture.plan.inputURL
         )
-        try Data("temporary".utf8).write(
-            to: linkedDirectoryFixture.plan.temporaryURL
-        )
-
         await expectError(.symbolicLinkNotAllowed) {
-            try await access.commitWithoutReplacing(
+            try await access.reserveTemporaryOutput(
                 linkedDirectoryFixture.plan
             )
         }

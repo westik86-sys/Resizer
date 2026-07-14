@@ -1,3 +1,3 @@
 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c  ffmpeg-8.1.2.tar.xz
 0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8  ffmpeg-8.1.2.tar.xz.asc
-01061179993a24248f61dbf7bb9b119a017a1edf961104d7a13373f78f54c2b1  0001-avformat-fd-accept-descriptor-in-url.patch
+7f2095aae417027256fa76640aa1bfe44e37cc46bdffea269e8203353930cc5d  0001-avformat-fd-accept-descriptor-in-url.patch
