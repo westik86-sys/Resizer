@@ -29,10 +29,10 @@ struct FFmpegCommandBuilderTests {
         #expect(
             arguments == [
                 "-hide_banner",
-                "-loglevel", "warning",
+                "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:1",
+                "-progress", "pipe:2",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -54,8 +54,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "-n",
-                Self.temporaryURL.path,
+                "fd:",
             ]
         )
     }
@@ -70,10 +69,10 @@ struct FFmpegCommandBuilderTests {
         #expect(
             arguments == [
                 "-hide_banner",
-                "-loglevel", "warning",
+                "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:1",
+                "-progress", "pipe:2",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -98,8 +97,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "-n",
-                Self.temporaryURL.path,
+                "fd:",
             ]
         )
     }
@@ -114,10 +112,10 @@ struct FFmpegCommandBuilderTests {
         #expect(
             arguments == [
                 "-hide_banner",
-                "-loglevel", "warning",
+                "-loglevel", "error",
                 "-stats_period", "0.25",
                 "-nostats",
-                "-progress", "pipe:1",
+                "-progress", "pipe:2",
                 "-autorotate",
                 "-i", Self.inputURL.path,
                 "-map", "0:2",
@@ -142,8 +140,7 @@ struct FFmpegCommandBuilderTests {
                 "-metadata:s:v:0", "rotate=0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
-                "-n",
-                Self.temporaryURL.path,
+                "fd:",
             ]
         )
     }
@@ -298,6 +295,54 @@ struct FFmpegCommandBuilderTests {
         }
     }
 
+    @Test("Unknown range with unknown bit depth is rejected fail-closed")
+    func rejectsUnknownUnclassifiedDepth() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 8,
+                        bitDepth: nil,
+                        dynamicRange: .unknown
+                    )
+                ),
+            ]
+        )
+        let request = try makeRequest(
+            recipe: CompressionRecipe(preset: .highQuality),
+            mediaInfo: mediaInfo
+        )
+
+        await expectBuilderError(.unsupportedVideoFormat(streamIndex: 8)) {
+            try await FFmpegCommandBuilder().arguments(for: request)
+        }
+    }
+
+    @Test("Anamorphic source pixels are rejected before encode")
+    func rejectsNonSquareSampleAspectRatio() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 4,
+                        sampleAspectRatio: RationalAspectRatio(
+                            numerator: 32,
+                            denominator: 27
+                        )
+                    )
+                ),
+            ]
+        )
+        let request = try makeRequest(
+            recipe: CompressionRecipe(preset: .highQuality),
+            mediaInfo: mediaInfo
+        )
+
+        await expectBuilderError(.unsupportedVideoFormat(streamIndex: 4)) {
+            try await FFmpegCommandBuilder().arguments(for: request)
+        }
+    }
+
     @Test("Only attached pictures do not satisfy the video requirement")
     func rejectsAttachedPictureOnlyInput() async throws {
         let mediaInfo = try makeMediaInfo(
@@ -347,14 +392,16 @@ struct FFmpegCommandBuilderTests {
         #expect(!fullArguments.contains("-fpsmax:v:0"))
     }
 
-    @Test("Validated requests expose only a job temporary output to FFmpeg")
+    @Test("Validated requests route media through the reserved stdout descriptor")
     func outputSafetyArguments() async throws {
         let recipe = try CompressionRecipe(preset: .balanced)
         let request = try makeRequest(recipe: recipe)
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
-        #expect(arguments.suffix(2) == ["-n", Self.temporaryURL.path])
-        #expect(arguments.last == Self.temporaryURL.path)
+        #expect(arguments.suffix(3) == ["-f", "mp4", "fd:"])
+        #expect(arguments.last == "fd:")
+        #expect(!arguments.contains("-n"))
+        #expect(!arguments.contains(Self.temporaryURL.path))
         #expect(Self.temporaryURL.lastPathComponent.hasSuffix(".partial.mp4"))
         #expect(
             Self.temporaryURL.lastPathComponent.lowercased()
@@ -483,6 +530,7 @@ struct FFmpegCommandBuilderTests {
         index: Int,
         bitDepth: Int? = 8,
         dynamicRange: DynamicRange = .sdr,
+        sampleAspectRatio: RationalAspectRatio? = nil,
         disposition: StreamDisposition = .none
     ) throws -> VideoStreamInfo {
         try VideoStreamInfo(
@@ -491,6 +539,7 @@ struct FFmpegCommandBuilderTests {
             encodedWidth: 1_920,
             encodedHeight: 1_080,
             frameRate: try RationalFrameRate(numerator: 30_000, denominator: 1_001),
+            sampleAspectRatio: sampleAspectRatio,
             rotationDegrees: 0,
             pixelFormat: "yuv420p",
             bitDepth: bitDepth,

@@ -5,12 +5,24 @@ nonisolated protocol MediaProbing: Sendable {
 }
 
 nonisolated protocol Transcoding: Sendable {
+    /// Validates the complete command and the bundled encoder capabilities
+    /// before the job enters its running state.
+    func preflight(_ request: TranscodeRequest) async throws
+
     func transcode(
         _ request: TranscodeRequest,
+        reservation: TemporaryOutputReservation,
         onProgress: @escaping @Sendable (TranscodeProgress) async -> Void
     ) async throws -> TranscodeResult
 
     func cancel(jobID: CompressionJob.ID) async
+}
+
+extension Transcoding {
+    func preflight(_ request: TranscodeRequest) async throws {
+        _ = request
+    }
+
 }
 
 nonisolated protocol ProcessRunning: Sendable {
@@ -39,8 +51,17 @@ nonisolated protocol FileAccessing: Sendable {
     ) async throws -> Result
 
     func metadata(at url: URL) async throws -> FileMetadata?
-    func commitWithoutReplacing(_ plan: OutputPlan) async throws
-    func cleanupTemporaryOutput(_ plan: OutputPlan) async throws
+    func reserveTemporaryOutput(
+        _ plan: OutputPlan
+    ) async throws -> TemporaryOutputReservation
+    func commitWithoutReplacing(
+        _ plan: OutputPlan,
+        expectedTemporaryMetadata: FileMetadata
+    ) async throws
+    func cleanupTemporaryOutput(
+        _ plan: OutputPlan,
+        expectedTemporaryMetadata: FileMetadata?
+    ) async throws
 }
 
 nonisolated struct TranscodeRequest: Sendable, Equatable {
@@ -65,12 +86,22 @@ nonisolated struct TranscodeRequest: Sendable, Equatable {
 
 nonisolated struct TranscodeResult: Sendable, Equatable {
     let byteCount: Int64
+    /// The exact file produced by the transcoder. The workflow carries this
+    /// seal through validation, cleanup, and the no-replace commit.
+    let temporaryMetadata: FileMetadata
 
-    init(byteCount: Int64) throws {
-        guard byteCount > 0 else {
+    init(
+        byteCount: Int64,
+        temporaryMetadata: FileMetadata
+    ) throws {
+        guard byteCount > 0,
+              !temporaryMetadata.isDirectory,
+              temporaryMetadata.byteCount == byteCount,
+              temporaryMetadata.identity != nil else {
             throw TranscodeContractValidationError.invalidResult
         }
         self.byteCount = byteCount
+        self.temporaryMetadata = temporaryMetadata
     }
 }
 
@@ -143,6 +174,35 @@ nonisolated struct OutputPlan: Sendable, Equatable {
     }
 }
 
+/// An empty regular file created atomically for exactly one output plan.
+/// FFmpeg receives this inode through an inherited descriptor rather than
+/// reopening a pathname, so later cleanup can always require an identity seal.
+nonisolated struct TemporaryOutputReservation: Sendable, Equatable {
+    let jobID: CompressionJob.ID
+    let temporaryURL: URL
+    let metadata: FileMetadata
+
+    init(plan: OutputPlan, metadata: FileMetadata) throws {
+        guard metadata.byteCount == 0,
+              !metadata.isDirectory,
+              metadata.identity != nil else {
+            throw TemporaryOutputReservationValidationError
+                .invalidReservation
+        }
+        jobID = plan.jobID
+        temporaryURL = plan.temporaryURL.standardizedFileURL
+        self.metadata = metadata
+    }
+}
+
+nonisolated enum TemporaryOutputReservationValidationError:
+    Error,
+    Sendable,
+    Equatable
+{
+    case invalidReservation
+}
+
 nonisolated enum OutputPlanValidationError: Error, Sendable, Equatable {
     case invalidPlan
 }
@@ -150,6 +210,30 @@ nonisolated enum OutputPlanValidationError: Error, Sendable, Equatable {
 nonisolated struct FileMetadata: Sendable, Equatable {
     let byteCount: Int64
     let isDirectory: Bool
+    let identity: FileIdentity?
+    let modificationTimeNanoseconds: Int64?
+    let statusChangeTimeNanoseconds: Int64?
+
+    init(
+        byteCount: Int64,
+        isDirectory: Bool,
+        identity: FileIdentity? = nil,
+        modificationTimeNanoseconds: Int64? = nil,
+        statusChangeTimeNanoseconds: Int64? = nil
+    ) {
+        self.byteCount = byteCount
+        self.isDirectory = isDirectory
+        self.identity = identity
+        self.modificationTimeNanoseconds = modificationTimeNanoseconds
+        self.statusChangeTimeNanoseconds = statusChangeTimeNanoseconds
+    }
+}
+
+/// Stable local-file identity captured with `lstat` and carried from output
+/// validation into the no-replace commit.
+nonisolated struct FileIdentity: Sendable, Equatable, Hashable {
+    let device: UInt64
+    let inode: UInt64
 }
 
 /// A one-shot identity; create a fresh value for every process start.
@@ -165,6 +249,11 @@ nonisolated struct ProcessExecutionID: RawRepresentable, Sendable, Equatable, Ha
     }
 }
 
+nonisolated enum ProcessStandardOutputDestination: Sendable, Equatable {
+    case stream
+    case existingFile(url: URL, expectedIdentity: FileIdentity)
+}
+
 nonisolated struct ProcessRequest: Sendable, Equatable {
     static let maximumDiagnosticByteLimit = 16 * 1_024 * 1_024
     static let maximumEventBufferCapacity = 4_096
@@ -176,6 +265,7 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
     let diagnosticByteLimit: Int
     let eventBufferCapacity: Int
     let cancellationPolicy: ProcessCancellationPolicy
+    let standardOutputDestination: ProcessStandardOutputDestination
 
     init(
         id: ProcessExecutionID = ProcessExecutionID(),
@@ -184,8 +274,26 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
         environment: [String: String],
         diagnosticByteLimit: Int,
         eventBufferCapacity: Int = 256,
-        cancellationPolicy: ProcessCancellationPolicy = .signalsOnly
+        cancellationPolicy: ProcessCancellationPolicy = .signalsOnly,
+        standardOutputDestination: ProcessStandardOutputDestination = .stream
     ) throws {
+        let validatedStandardOutputDestination:
+            ProcessStandardOutputDestination
+        switch standardOutputDestination {
+        case .stream:
+            validatedStandardOutputDestination = .stream
+        case .existingFile(let url, let expectedIdentity):
+            guard url.isFileURL,
+                  url.path.hasPrefix("/"),
+                  !url.path.contains("\0") else {
+                throw ProcessContractValidationError.invalidRequest
+            }
+            validatedStandardOutputDestination = .existingFile(
+                url: url.standardizedFileURL,
+                expectedIdentity: expectedIdentity
+            )
+        }
+
         guard executableURL.isFileURL,
               executableURL.path.hasPrefix("/"),
               !executableURL.path.contains("\0"),
@@ -216,6 +324,7 @@ nonisolated struct ProcessRequest: Sendable, Equatable {
         self.diagnosticByteLimit = diagnosticByteLimit
         self.eventBufferCapacity = eventBufferCapacity
         self.cancellationPolicy = cancellationPolicy
+        self.standardOutputDestination = validatedStandardOutputDestination
     }
 }
 

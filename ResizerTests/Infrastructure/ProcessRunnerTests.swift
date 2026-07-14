@@ -27,6 +27,93 @@ struct ProcessRunnerTests {
         #expect(await runner.activeExecutionCount() == 0)
     }
 
+    @Test("Pre-reserved file receives stdout without stdout stream events")
+    func existingFileStandardOutput() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let outputURL = directoryURL.appendingPathComponent("output.mp4")
+        try createEmptyFile(at: outputURL)
+        let expectedIdentity = try fileIdentity(at: outputURL)
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["success"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            standardOutputDestination: .existingFile(
+                url: outputURL,
+                expectedIdentity: expectedIdentity
+            )
+        )
+
+        let collected = try await ProcessHarnessFixture.collect(
+            try await runner.start(request)
+        )
+
+        #expect(collected.standardOutput.isEmpty)
+        #expect(
+            try Data(contentsOf: outputURL) == Data("stdout:success\n".utf8)
+        )
+        #expect(
+            String(decoding: collected.standardError, as: UTF8.self)
+                == "stderr:success\n"
+        )
+        #expect(collected.terminalEventCount == 1)
+        #expect(collected.result.executionID == request.id)
+        #expect(collected.result.termination.status == 0)
+        #expect(collected.result.termination.reason == .exit)
+        #expect(collected.result.diagnosticTail.data == collected.standardError)
+        #expect(ProcessHarnessFixture.isReaped(collected.result.processIdentifier))
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
+    @Test("Replaced pre-reserved stdout identity fails before process launch")
+    func replacedExistingFileStandardOutput() async throws {
+        let runner = ProcessRunner()
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let outputURL = directoryURL.appendingPathComponent("output.mp4")
+        let replacementURL = directoryURL
+            .appendingPathComponent("replacement.mp4")
+        try createEmptyFile(at: outputURL)
+        let originalIdentity = try fileIdentity(at: outputURL)
+        try createEmptyFile(at: replacementURL)
+        let replacementIdentity = try fileIdentity(at: replacementURL)
+        guard originalIdentity != replacementIdentity else {
+            throw ProcessRunnerTestFixtureError.identicalFileIdentity
+        }
+        try FileManager.default.removeItem(at: outputURL)
+        try FileManager.default.moveItem(at: replacementURL, to: outputURL)
+
+        let request = try ProcessRequest(
+            executableURL: ProcessHarnessFixture.executableURL,
+            arguments: ["success"],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024,
+            standardOutputDestination: .existingFile(
+                url: outputURL,
+                expectedIdentity: originalIdentity
+            )
+        )
+
+        do {
+            _ = try await ProcessHarnessFixture.collect(
+                try await runner.start(request)
+            )
+            Issue.record("Expected replaced stdout identity to be rejected")
+        } catch let error as ProcessRunnerError {
+            #expect(
+                error == .standardOutputConfigurationFailed(request.id)
+            )
+        }
+
+        #expect(try Data(contentsOf: outputURL).isEmpty)
+        #expect(try fileIdentity(at: outputURL) == replacementIdentity)
+        #expect(await runner.activeExecutionCount() == 0)
+    }
+
     @Test("Nonzero exit is a terminal result, not a stream failure")
     func nonzeroExit() async throws {
         let runner = ProcessRunner()
@@ -479,4 +566,49 @@ struct ProcessRunnerTests {
             try await Task.sleep(for: .milliseconds(5))
         }
     }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ResizerProcessRunnerTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: false
+        )
+        return url
+    }
+
+    private func createEmptyFile(at url: URL) throws {
+        guard FileManager.default.createFile(
+            atPath: url.path,
+            contents: Data()
+        ) else {
+            throw ProcessRunnerTestFixtureError.fileCreationFailed
+        }
+    }
+
+    private func fileIdentity(at url: URL) throws -> FileIdentity {
+        var status = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return Int32(-1)
+            }
+            return Darwin.lstat(path, &status)
+        }
+        guard result == 0 else {
+            throw ProcessRunnerTestFixtureError.metadataReadFailed(errno)
+        }
+        return FileIdentity(
+            device: UInt64(status.st_dev),
+            inode: UInt64(status.st_ino)
+        )
+    }
+}
+
+private enum ProcessRunnerTestFixtureError: Error {
+    case fileCreationFailed
+    case metadataReadFailed(Int32)
+    case identicalFileIdentity
 }

@@ -46,9 +46,12 @@ struct JobStateTests {
             "draft->probing",
             "probing->ready",
             "probing->failedProbe",
+            "probing->cancelled",
             "ready->queued",
+            "ready->cancelled",
             "queued->running",
             "queued->failedPreflight",
+            "queued->cancelled",
             "running->validating",
             "running->cancelling",
             "running->failedEncode",
@@ -58,6 +61,7 @@ struct JobStateTests {
             "committing->failedCommit",
             "cancelling->cancelled",
             "cancelled->ready",
+            "cancelled->probing",
             "failedProbe->probing",
             "failedPreflight->ready",
             "failedEncode->ready",
@@ -115,6 +119,15 @@ struct JobStateTests {
         ))
         #expect(!cancelling.canTransition(
             to: .failed(TestFixtures.failure(stage: .encode))
+        ))
+        #expect(cancelling.canTransition(
+            to: .failed(
+                TranscodeFailure(
+                    stage: .encode,
+                    reason: .fileSystem,
+                    diagnosticTail: nil
+                )
+            )
         ))
     }
 

@@ -95,6 +95,7 @@ nonisolated struct VideoStreamInfo: Sendable, Equatable {
     let encodedWidth: Int?
     let encodedHeight: Int?
     let frameRate: RationalFrameRate?
+    let sampleAspectRatio: RationalAspectRatio?
     let rotationDegrees: Int?
     let pixelFormat: String?
     let bitDepth: Int?
@@ -108,6 +109,7 @@ nonisolated struct VideoStreamInfo: Sendable, Equatable {
         encodedWidth: Int?,
         encodedHeight: Int?,
         frameRate: RationalFrameRate?,
+        sampleAspectRatio: RationalAspectRatio? = nil,
         rotationDegrees: Int?,
         pixelFormat: String?,
         bitDepth: Int?,
@@ -127,6 +129,7 @@ nonisolated struct VideoStreamInfo: Sendable, Equatable {
         self.encodedWidth = encodedWidth
         self.encodedHeight = encodedHeight
         self.frameRate = frameRate
+        self.sampleAspectRatio = sampleAspectRatio
         self.rotationDegrees = rotationDegrees
         self.pixelFormat = pixelFormat
         self.bitDepth = bitDepth
@@ -243,9 +246,27 @@ nonisolated struct RationalFrameRate: Sendable, Equatable {
     }
 }
 
+nonisolated struct RationalAspectRatio: Sendable, Equatable {
+    let numerator: Int64
+    let denominator: Int64
+
+    init(numerator: Int64, denominator: Int64) throws {
+        guard numerator > 0, denominator > 0 else {
+            throw MediaInfoValidationError.invalidAspectRatio
+        }
+        self.numerator = numerator
+        self.denominator = denominator
+    }
+
+    var isSquare: Bool {
+        numerator == denominator
+    }
+}
+
 nonisolated enum MediaInfoValidationError: Error, Sendable, Equatable {
     case invalidContainerMetric
     case duplicateStreamIndex
     case invalidStreamMetric
     case invalidFrameRate
+    case invalidAspectRatio
 }

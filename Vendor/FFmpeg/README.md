@@ -10,15 +10,18 @@ toolchain spike:
 - H.264 and AAC in MOV/MP4 input;
 - H.264 VideoToolbox and native AAC encoders;
 - MP4 output;
-- local files and pipes only;
+- local files, inherited file descriptors, and pipes only;
 - no network, external libraries, GPL, nonfree, libx264, or libx265 code.
 
 Run `./Scripts/build-ffmpeg.sh` from any directory to verify the source archive,
-build independent `arm64` and `x86_64` slices with the macOS SDK, merge them
-with `lipo`, and refresh the capability and linkage reports under
-`build-config/`.
+verify and apply the pinned patch under `patches/`, build independent `arm64`
+and `x86_64` slices with the macOS SDK, merge them with `lipo`, and refresh the
+capability and linkage reports under `build-config/`.
 
 The archive and detached signature are retained under `sources/` as the exact
 corresponding source for the distributed binaries. License texts are under
-`licenses/`. See `build-config/profile.txt` for the fixed component profile and
-the generated reports for the exact configure commands and compiled features.
+`licenses/`. The LGPL-compatible local patch extends the seekable `fd` protocol
+with strict `fd:<number>` URLs so a MOV `faststart` reopen keeps using the same
+inherited descriptor. See `build-config/profile.txt` for the fixed component
+profile and the generated reports for the exact configure commands and compiled
+features.

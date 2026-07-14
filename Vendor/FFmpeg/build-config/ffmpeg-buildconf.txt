@@ -1,6 +1,6 @@
 
   configuration:
-    --prefix=/Users/p.korostelev/Documents/Resizer-app/.build/ffmpeg/8.1.2-profile1/install-arm64
+    --prefix=/Users/p.korostelev/Documents/Resizer-app/.build/ffmpeg/8.1.2-profile2/install-arm64
     --target-os=darwin
     --arch=aarch64
     --cpu=generic
@@ -28,6 +28,7 @@
     --enable-videotoolbox
     --enable-ffmpeg
     --enable-ffprobe
+    --enable-protocol=fd
     --enable-protocol=file
     --enable-protocol=pipe
     --enable-demuxer=mov

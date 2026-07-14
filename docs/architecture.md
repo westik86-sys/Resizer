@@ -1,9 +1,9 @@
 # Resizer architecture
 
 This document describes the stage-3 contracts, stage-4 process boundary,
-stage-5 FFprobe adapter, and stage-6 preset, command, and output-planning
-boundaries. The product workflow and FFmpeg transcode runner are not
-implemented yet.
+stage-5 FFprobe adapter, stage-6 preset and output-planning boundaries, and the
+stage-7 headless transcoding workflow. The single-file product UI and queue are
+not implemented yet.
 
 ## Dependency direction
 
@@ -15,14 +15,22 @@ SwiftUI views
             -> Transcoding
             -> OutputPlanning
             -> FileAccessing
+            -> TranscodeOutputValidating
 
-Transcoding implementation (stage 7)
+FFmpegTranscodingService
     -> CommandBuilding
         -> FFmpegCommandBuilder
+    -> FFmpegCapabilityProviding
+        -> FFmpegCapabilityClient
     -> ProcessRunning
         -> ProcessRunner actor
             -> direct child executable
             -> concurrent stdout/stderr drains
+
+SecurityScopedFileAccess
+    -> retained user-selected URL scopes
+    -> lstat identity and file-type checks
+    -> atomic RENAME_EXCL publication
 
 OutputPlanning
     -> OutputPlanner actor
@@ -46,8 +54,9 @@ There are no global service instances or service locators. `AppComposition`
 accepts the complete coordinator dependency set and exposes only the feature
 model, not the mutable coordinator. Debug previews and tests use immutable
 closure-based fakes. Production implementations now exist for process
-execution, probing, command construction, and output planning; transcoding and
-file publication remain later PLAN stages.
+execution, probing, command construction, capability discovery, transcoding,
+validation, output planning, and file publication. The product UI remains a
+later PLAN stage.
 
 ## Source layout and module boundary
 
@@ -67,9 +76,9 @@ declarations are explicitly `nonisolated`. UI state remains explicitly
 `@MainActor`, and mutable coordinator state belongs to an actor.
 
 The visible stage-2 toolchain diagnostic predates this composition root and
-remains an isolated spike. It does not use the production runner yet. The app
-entry point will switch to the new composition only after real service adapters
-exist.
+remains an isolated spike. It does not use the production workflow. Stage 8
+will replace it with the single-file product UI and compose the stage-7
+services for interactive use.
 
 ## Process execution contract
 
@@ -80,10 +89,10 @@ does not depend on `PATH`.
 
 Every start uses a fresh, one-shot `ProcessExecutionID`; cancellation becomes
 valid after `start` returns its stream, and IDs are never reused. The actor owns
-the `Foundation.Process`, its three pipes, stream continuation, diagnostic tail,
-and cancellation state. Every start also receives a private generation token,
+the `Foundation.Process`, configured descriptors, stream continuation,
+diagnostic tail, and cancellation state. Every start also receives a private generation token,
 so a late internal callback cannot be confused with newer actor state.
-Independent workers receive only stdout/stderr `FileHandle` values and return
+Independent workers receive only streamed stdout/stderr `FileHandle` values and return
 `Data` chunks, the public ID, and that token to the actor. The termination
 callback sends only the ID and token back into the actor, where project-owned
 status values are created.
@@ -97,6 +106,12 @@ process terminated
         -> one terminal ProcessResult
         -> continuation finishes once
 ```
+
+A request may instead bind stdout to a pre-existing regular file identified by
+device/inode. `ProcessRunner` opens it with `O_NOFOLLOW`, verifies the identity
+and zero size with `fstat`, and gives that exact descriptor to the child. No
+stdout data enters the event stream in this mode; process termination and
+stderr EOF form the completion barrier.
 
 The event stream has finite capacity. Dropping a stdout or stderr chunk would
 make machine-readable output unsafe, so overflow becomes a typed stream failure
@@ -183,14 +198,19 @@ VideoToolbox `global_quality` `1...100`; CRF and qscale are intentionally not
 used. A capped frame-rate policy emits `fpsmax`, while original FPS adds no
 rate override. Scaling is orientation-aware, preserves aspect ratio, never
 upscales, and produces even dimensions. Autorotation is applied to pixels and
-the stale output rotation tag is cleared. Known HDR and unknown-range video
-above 8-bit fail closed because stage 6 does not implement tone mapping.
+the stale output rotation tag is cleared. FFprobe recovers component depth from
+known planar, packed, and float pixel-format names when numeric fields are
+missing. Known HDR and unknown-range video whose depth is either above 8-bit or
+still unknown fail closed because this path does not implement tone mapping.
+FFprobe also retains sample aspect ratio; non-square (anamorphic) source pixels
+fail preflight until display-geometry-aware scaling is implemented.
 
-Every command enables bounded machine-readable progress on stdout and MP4
-faststart. It deliberately leaves stdin available for stage-7 graceful `q\n`
-cancellation. Preserve metadata maps only global data, selected stream data,
-and chapters; remove metadata disables those input mappings. The full argument
-and preset decision is recorded in
+Every command enables bounded machine-readable progress on stderr and writes
+seekable MP4 to `fd:` on inherited stdout. This keeps MP4 faststart available
+without reopening a pathname. It deliberately leaves stdin available for
+stage-7 graceful `q\n` cancellation. Preserve metadata maps only global data,
+selected stream data, and chapters; remove metadata disables those input
+mappings. The full argument and preset decision is recorded in
 [`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md).
 
 ## Safe output planning contract
@@ -205,8 +225,100 @@ typed collision rather than an overwrite.
 Only local absolute URLs are accepted. Unicode, spaces, emoji, and shell
 metacharacters remain literal path characters. The final URL stays in
 `OutputPlan` and is structurally absent from `TranscodeCommandRequest`; FFmpeg
-receives only the job temporary and `-n`. Planning cannot reserve a final path,
-so validation and atomic no-replace publication remain stage-7 responsibilities.
+receives neither the final nor temporary pathname as an output argument. The
+workflow atomically reserves the planned temporary and binds its descriptor to
+FFmpeg. Planning cannot reserve a final path, so validation and atomic
+no-replace publication remain distinct steps.
+
+## Headless transcoding workflow
+
+`CompressionCoordinator.process(jobID:configuration:)` owns the complete
+non-UI transaction. It keeps security-scoped access to the selected input and
+output directory alive across this ordered sequence:
+
+```text
+probe input
+    -> record MediaInfo and configuration
+    -> plan unique temporary and final paths
+    -> file and bundled-capability preflight
+    -> atomically reserve and identity-seal the temporary
+    -> run FFmpeg with the reserved inode as seekable stdout
+    -> claim finishing(validating)
+    -> inspect temporary metadata and re-probe it
+    -> validate the encoded media contract
+    -> atomic no-replace rename to final
+    -> completed result
+```
+
+The workflow never gives FFmpeg the final URL. Before launch it verifies a
+regular, non-empty input, a real output directory, and absent temporary and
+final entries, then creates the temporary atomically with `O_EXCL`. A collision
+cannot be mistaken for ownership. Failures before commit and cancellations
+clean only that reservation when its device/inode still matches; cleanup never
+accepts an arbitrary URL, wildcard, or missing identity seal. A second
+concurrent workflow for the same job is rejected, and the coordinator continues
+to enforce one running/finishing/cancelling job.
+
+`FFmpegCapabilityClient` queries the actual bundled executable for decoders,
+encoders, filters, demuxers, muxers, and protocols. Discovery is single-flight
+for concurrent callers, runs all six queries in parallel, has a 15-second
+overall deadline, and is cached only after a complete successful result. A
+sole cancelled waiter tears down discovery; cancellation of one of several
+waiters does not poison their shared task. Each query has bounded stdout and
+diagnostics. `FFmpegPreflightValidator` then requires the selected input
+demuxer and decoder, `h264_videotoolbox`, MP4, scale, AAC/aresample when audio
+is selected, and the file/fd/pipe protocols used by the command. Missing
+capabilities fail before the job enters `running`.
+
+`FFmpegTranscodingService` owns one active execution identity per job. It uses
+the command builder and process runner, retains an additional narrow input and
+output-directory scope, drains the runner stream through EOF, and reports a
+typed nonzero exit with the runner's bounded stderr tail. Its progress parser
+accepts arbitrary byte chunks from `-progress pipe:2`, caps an incomplete line,
+requires record terminators and `progress=end` on success, and publishes
+processed time, fraction, frame rate, speed, and output byte count in order.
+Unknown progress keys are ignored so additions by FFmpeg do not break the
+contract. A complete heartbeat whose time fields are all `N/A` is accepted but
+does not publish a snapshot; real FFmpeg emits this while reconciling audio and
+video clocks.
+
+Cancellation is an explicit race policy. During probe or preflight the
+coordinator records intent while retaining the current non-active phase, lets
+the coordinator-owned in-flight task cancel and the security-scope lifetime
+settle, then publishes `cancelled`; FFmpeg is never launched.
+During encode it moves the job to `cancelling` before asking the service to
+stop. The coordinator also cancels its retained transcode task, so cancellation
+cannot be lost if the service has not registered the execution yet. The process policy
+sends bounded `q\n`, waits two seconds, then lets `ProcessRunner` escalate
+through SIGINT, SIGTERM, and SIGKILL while still awaiting process termination
+and configured stream completion. Once cancellation has won, a later nonzero exit cannot
+become an ordinary failure. Once validation has atomically claimed
+`finishing`, normal validation and commit win over a late cancellation.
+
+## Output validation and publication
+
+`TranscodeOutputValidator` accepts only the recipe's MP4/H.264 compatibility
+result: one non-attached H.264 `yuv420p` video stream, no subtitles,
+attachments, or other streams, normalized rotation, SDR-compatible depth and
+range, the recipe's AAC-or-no-audio policy, expected no-upscale dimensions and
+aspect ratio, and duration within a bounded tolerance. Validation uses a fresh
+probe of the temporary file after the process and pipe completion barrier.
+
+`SecurityScopedFileAccess` uses `lstat` so terminal symlinks and unsupported
+file types are rejected rather than followed. It compares device/inode
+identity to reject an input/temp hard-link alias. Validation carries an inode,
+size, modification-time, and status-change-time seal; metadata is reread after
+FFprobe and again at commit, then the published inode is verified. Publication
+uses macOS
+`renameatx_np(..., RENAME_EXCL)`, making the final existence check atomic with
+the rename and preventing a collision race from replacing user data. Cleanup
+uses `unlink` only when the job temporary is still a regular file and its
+identity matches either the initial reservation seal during encode failure or
+the transcoder's final result seal after encode. A same-inode mutation that
+failed validation is still job-owned and can be removed; a replacement inode
+is preserved and cleanup fails closed. The reservation uses `O_EXCL`, and the
+runner verifies and writes the same inode through a descriptor, so there is no
+pathname reopen race. Unsealed cleanup never unlinks an existing entry.
 
 ## Job state contract
 
@@ -217,14 +329,14 @@ self-transitions.
 | Current state | Allowed next state |
 | --- | --- |
 | `draft` | `probing` |
-| `probing` | `ready`, `failed(probe)` |
-| `ready` | `queued` |
-| `queued` | `running`, `failed(preflight)` |
+| `probing` | `ready`, `cancelled`, `failed(probe)` |
+| `ready` | `queued`, `cancelled` |
+| `queued` | `running`, `cancelled`, `failed(preflight)` |
 | `running` | `finishing(validating)`, `cancelling`, `failed(encode)` |
 | `finishing(validating)` | `finishing(committing)`, `failed(validate)` |
 | `finishing(committing)` | `completed`, `failed(commit)` |
-| `cancelling` | `cancelled` |
-| `cancelled` | `ready` |
+| `cancelling` | `cancelled`, `failed(encode, file-system only)` |
+| `cancelled` | `ready`, `probing` |
 | `failed(retry: probing)` | `probing` |
 | `failed(retry: ready)` | `ready` |
 | `completed` | none |
@@ -240,34 +352,39 @@ to `probing`. Post-probe failures return to `ready`.
 - jobs accept only local file input URLs;
 - the input URL, job ID, and creation date never change;
 - `ready` requires probed media information;
-- `queued` and every processing/final state require both media information and
-  a typed configuration;
+- `queued` and post-probe processing/final states require both media information
+  and a typed configuration; cancellation from `probing` or pre-configuration
+  `ready` is the explicit exception;
 - the coordinator permits at most one `running`, `finishing`, or `cancelling`
   job at a time;
-- once cancellation wins the `running -> cancelling` transition, normal
-  finishing, completion, and ordinary failure transitions are rejected;
+- once process cancellation wins the transition to `cancelling`, normal
+  finishing, completion, and ordinary failures are rejected; only an
+  exact-cleanup filesystem failure can replace cancellation;
 - retrying a failed probe clears stale media and configuration before probing
   again;
 - a completed result must be a non-empty local file and cannot directly resolve
   to the immutable input path.
 
-Stage 3 follows the current overview and does not allow `queued -> cancelled`.
-The queue stage must add that transition together with a queue cancellation
-intent; it is not silently treated as running-process cancellation here.
+Pre-run cancellation intent does not mutate the visible phase immediately.
+Only after an in-flight probe or preflight has been asked to cancel and the
+security-scope lifetime has settled does the coordinator take the direct
+transition to `cancelled`. A probe cancelled before metadata exists retries
+through `probing`; later cancellation can reuse `ready`.
 
 ## Safe service contracts
 
 - `TranscodeRequest` can be created only from a validated `OutputPlan`, and
   `TranscodeCommandRequest` can be created only from that transcode request.
-  The final URL never enters either request, and `TranscodeResult` cannot
-  substitute another URL.
+  The final URL never enters either request. A `TranscodeResult` must include a
+  positive byte count and the regular-file identity seal captured by the
+  transcoder; it cannot substitute another URL.
 - `OutputPlan` binds the job, input, temporary, and final URLs and rejects direct
   path aliases. Both outputs must be MP4 files in the selected directory, and
   the `.partial.mp4` name must contain the job UUID. `OutputPlanner` supplies
   conflict-free names from read-only filesystem checks. File cleanup accepts
   the plan rather than an arbitrary URL, and commit is explicitly no-replace.
-  File-identity, symlink, and final publication race checks remain the
-  responsibility of the stage-7 preflight and file-access adapter.
+  `SecurityScopedFileAccess` implements the file-identity, symlink, exact
+  cleanup, and atomic final-publication checks.
 - `ProcessRequest` represents the executable, controlled environment, argument
   array, bounded event capacity, diagnostic limit, and generic cancellation
   policy as typed values. Arguments remain `[String]`; no shell command exists
@@ -276,13 +393,13 @@ intent; it is not silently treated as running-process cancellation here.
   a bounded diagnostic tail, never a framework process instance across
   isolation domains.
 - Security-scoped access is expressed as one async operation so its lifetime can
-  eventually cover probe, encode, validation, and commit.
+  cover probe, encode, validation, and commit.
 
 The production runner implements pipe draining, bounded diagnostics, and direct
 child cancellation. The FFprobe adapter resolves and interprets bundled probe
-output. Presets, deterministic FFmpeg command construction, and safe output
-naming are implemented; process-level transcode progress interpretation,
-temporary validation, cleanup, and publication remain stage-7 responsibilities.
+output. Presets, deterministic FFmpeg command construction, safe output naming,
+capability-aware preflight, process-level progress, cancellation, temporary
+validation, exact cleanup, and no-replace publication are implemented.
 
 ## Verification
 
@@ -290,5 +407,8 @@ temporary validation, cleanup, and publication remain stage-7 responsibilities.
 success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
 cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
 all preset argument vectors; stream, HDR, audio, scaling, metadata, and path
-behavior; and output-name collisions. `./Scripts/build.sh` remains the
-canonical build check.
+behavior; output-name collisions; capability discovery; incremental progress;
+headless success/failure/cancellation races; output validation; and guarded
+publication and cleanup. A signed targeted integration test runs the bundled
+probe → transcode → probe transaction on a short deterministic MP4 fixture.
+`./Scripts/build.sh` remains the canonical build check.

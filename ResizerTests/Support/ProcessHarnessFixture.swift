@@ -104,7 +104,18 @@ nonisolated enum ProcessHarnessFixture {
         let result = await iterator.next()
         operationTask.cancel()
         timeoutTask.cancel()
-        await operationTask.value
+        let timeoutWon = result.map { result in
+            guard case .failure(let error) = result else { return false }
+            return (error as? ProcessHarnessFixtureError) == .timedOut
+        } ?? true
+        if timeoutWon {
+            await waitForTaskCompletion(
+                operationTask,
+                atMost: .seconds(2)
+            )
+        } else {
+            await operationTask.value
+        }
         await timeoutTask.value
         streamPair.continuation.finish()
 
@@ -112,6 +123,29 @@ nonisolated enum ProcessHarnessFixture {
             throw ProcessHarnessFixtureError.timedOut
         }
         return try result.get()
+    }
+
+    /// Gives cancellation-driven teardown a bounded grace period without
+    /// turning the test timeout into another unbounded wait when the code
+    /// under test ignores cancellation.
+    private static func waitForTaskCompletion(
+        _ task: Task<Void, Never>,
+        atMost duration: Duration
+    ) async {
+        let pair = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingOldest(1)
+        )
+        Task {
+            await task.value
+            _ = pair.continuation.yield(())
+        }
+        Task {
+            try? await Task.sleep(for: duration)
+            _ = pair.continuation.yield(())
+        }
+        var iterator = pair.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        pair.continuation.finish()
     }
 
     private static func collectWithoutTimeout(

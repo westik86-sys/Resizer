@@ -69,6 +69,37 @@ struct CompressionJobTests {
         #expect(job.state.phase == .ready)
     }
 
+    @Test("A probe can be cancelled before media or configuration exists")
+    func probeCancellationCanRetryProbe() throws {
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/source.mov")
+        )
+        try job.transition(to: .probing)
+
+        try job.transition(to: .cancelled)
+        #expect(job.mediaInfo == nil)
+        #expect(job.configuration == nil)
+
+        try job.transition(to: .probing)
+        #expect(job.state == .probing)
+    }
+
+    @Test("Ready can be cancelled before configuration exists")
+    func readyCancellationDoesNotRequireConfiguration() throws {
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/source.mov")
+        )
+        try job.transition(to: .probing)
+        try job.recordMediaInfo(try TestFixtures.mediaInfo())
+        try job.transition(to: .ready)
+
+        try job.transition(to: .cancelled)
+
+        #expect(job.state == .cancelled)
+        #expect(job.mediaInfo != nil)
+        #expect(job.configuration == nil)
+    }
+
     @Test("Progress updates do not create lifecycle self-transitions")
     func progressUpdatesOnlyRunningOrCancelling() throws {
         var draft = try CompressionJob(

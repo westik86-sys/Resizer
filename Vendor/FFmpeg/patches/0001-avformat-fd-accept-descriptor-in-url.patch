@@ -1,0 +1,74 @@
+diff --git a/doc/protocols.texi b/doc/protocols.texi
+--- a/doc/protocols.texi
++++ b/doc/protocols.texi
+@@ -279,15 +279,17 @@ ffmpeg -i "data:image/gif;base64,R0lGODdhCAAIAMIEAAAAAAAA//8AAP//AP////////
+ 
+ File descriptor access protocol.
+ 
+-The accepted syntax is:
++The accepted syntaxes are:
+ @example
+ fd: -fd @var{file_descriptor}
++fd:@var{file_descriptor}
+ @end example
+ 
+-If @option{fd} is not specified, by default the stdout file descriptor will be
+-used for writing, stdin for reading. Unlike the pipe protocol, fd protocol has
+-seek support if it corresponding to a regular file. fd protocol doesn't support
+-pass file descriptor via URL for security.
++A file descriptor in the URL takes precedence over the @option{fd} option and
++must be a nonnegative decimal integer. If neither form specifies a descriptor,
++the stdout file descriptor is used for writing and stdin for reading. Unlike
++the pipe protocol, the fd protocol has seek support when the descriptor
++corresponds to a regular file.
+ 
+ This protocol accepts the following options:
+ 
+diff --git a/libavformat/file.c b/libavformat/file.c
+--- a/libavformat/file.c
++++ b/libavformat/file.c
+@@ -488,20 +488,39 @@ const URLProtocol ff_pipe_protocol = {
+ static int fd_open(URLContext *h, const char *filename, int flags)
+ {
+     FileContext *c = h->priv_data;
++    const char *descriptor;
++    int parsed_fd = 0;
+     struct stat st;
+ 
+-    if (strcmp(filename, "fd:") != 0) {
+-        av_log(h, AV_LOG_ERROR, "Doesn't support pass file descriptor via URL,"
+-                                " please set it via -fd {num}\n");
++    if (!av_strstart(filename, "fd:", &descriptor)) {
++        av_log(h, AV_LOG_ERROR, "Invalid file descriptor URL\n");
+         return AVERROR(EINVAL);
+     }
+ 
+-    if (c->fd < 0) {
++    if (*descriptor) {
++        for (; *descriptor; descriptor++) {
++            int digit;
++
++            if (*descriptor < '0' || *descriptor > '9') {
++                av_log(h, AV_LOG_ERROR, "Invalid file descriptor URL\n");
++                return AVERROR(EINVAL);
++            }
++
++            digit = *descriptor - '0';
++            if (parsed_fd > (INT_MAX - digit) / 10) {
++                av_log(h, AV_LOG_ERROR, "File descriptor is out of range\n");
++                return AVERROR(ERANGE);
++            }
++            parsed_fd = parsed_fd * 10 + digit;
++        }
++        c->fd = parsed_fd;
++    } else if (c->fd < 0) {
+         if (flags & AVIO_FLAG_WRITE) {
+             c->fd = 1;
+         } else {
+             c->fd = 0;
+         }
+     }
++
+     if (fstat(c->fd, &st) < 0)
+         return AVERROR(errno);
+     h->is_streamed = !(S_ISREG(st.st_mode) || S_ISBLK(st.st_mode));

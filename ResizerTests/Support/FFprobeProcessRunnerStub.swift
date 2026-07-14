@@ -68,6 +68,7 @@ nonisolated enum FFprobeProcessRunnerStubError: Error, Sendable, Equatable {
 
 actor FFprobeProcessRunnerStub: ProcessRunning {
     private var scripts: [FFprobeRunnerScript]
+    private var scriptsByLastArgument: [String: FFprobeRunnerScript]?
     private let blocksCancellation: Bool
     private var cancellationWasReleased: Bool
     private var requests: [ProcessRequest] = []
@@ -83,6 +84,7 @@ actor FFprobeProcessRunnerStub: ProcessRunning {
         blocksCancellation: Bool = false
     ) {
         self.scripts = scripts
+        scriptsByLastArgument = nil
         self.blocksCancellation = blocksCancellation
         cancellationWasReleased = !blocksCancellation
     }
@@ -92,6 +94,17 @@ actor FFprobeProcessRunnerStub: ProcessRunning {
         blocksCancellation: Bool = false
     ) {
         scripts = [script]
+        scriptsByLastArgument = nil
+        self.blocksCancellation = blocksCancellation
+        cancellationWasReleased = !blocksCancellation
+    }
+
+    init(
+        scriptsByLastArgument: [String: FFprobeRunnerScript],
+        blocksCancellation: Bool = false
+    ) {
+        scripts = []
+        self.scriptsByLastArgument = scriptsByLastArgument
         self.blocksCancellation = blocksCancellation
         cancellationWasReleased = !blocksCancellation
     }
@@ -99,12 +112,22 @@ actor FFprobeProcessRunnerStub: ProcessRunning {
     func start(
         _ request: ProcessRequest
     ) async throws -> AsyncThrowingStream<ProcessEvent, any Error> {
-        guard !scripts.isEmpty else {
-            throw FFprobeProcessRunnerStubError.missingScript
-        }
-
         requests.append(request)
-        let script = scripts.removeFirst()
+        let script: FFprobeRunnerScript
+        if scriptsByLastArgument != nil {
+            guard let key = request.arguments.last,
+                  let value = scriptsByLastArgument?.removeValue(
+                      forKey: key
+                  ) else {
+                throw FFprobeProcessRunnerStubError.missingScript
+            }
+            script = value
+        } else {
+            guard !scripts.isEmpty else {
+                throw FFprobeProcessRunnerStubError.missingScript
+            }
+            script = scripts.removeFirst()
+        }
         let pair = AsyncThrowingStream<ProcessEvent, any Error>.makeStream(
             bufferingPolicy: .unbounded
         )

@@ -21,7 +21,7 @@ and locally calculated SHA-256 checksum.
 Use the minimal component profile recorded in
 `Vendor/FFmpeg/build-config/profile.txt`. It accepts H.264/AAC in MOV or MP4,
 encodes H.264 through VideoToolbox and audio through FFmpeg's native AAC
-encoder, writes MP4, and enables only local-file and pipe protocols. Network,
+encoder, writes MP4, and enables only local-file, descriptor, and pipe protocols. Network,
 external libraries, GPL, nonfree, libx264, and libx265 are excluded.
 
 Build independent `arm64` and `x86_64` slices with the same macOS 14 component

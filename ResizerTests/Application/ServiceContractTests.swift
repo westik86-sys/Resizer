@@ -90,9 +90,22 @@ struct ServiceContractTests {
         #expect(commandRequest.jobID == request.jobID)
         #expect(commandRequest.inputURL == request.inputURL)
         #expect(commandRequest.temporaryOutputURL == request.temporaryOutputURL)
-        #expect(try TranscodeResult(byteCount: 1).byteCount == 1)
+        let temporaryMetadata = FileMetadata(
+            byteCount: 1,
+            isDirectory: false,
+            identity: FileIdentity(device: 1, inode: 1)
+        )
+        #expect(
+            try TranscodeResult(
+                byteCount: 1,
+                temporaryMetadata: temporaryMetadata
+            ).byteCount == 1
+        )
         #expect(throws: TranscodeContractValidationError.invalidResult) {
-            _ = try TranscodeResult(byteCount: 0)
+            _ = try TranscodeResult(
+                byteCount: 0,
+                temporaryMetadata: temporaryMetadata
+            )
         }
     }
 

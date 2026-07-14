@@ -76,8 +76,9 @@ with `rotate=0` after transforming the frames. This avoids displaying an
 already rotated result a second time.
 
 The stage-6 path is an SDR H.264 compatibility path, not tone mapping. Reject a
-selected stream classified as HDR. Also reject an unknown-range stream above
-8-bit because it may be unlabelled HDR. An explicitly classified SDR stream,
+selected stream classified as HDR. Also reject an unknown-range stream unless
+its component depth is proven to be at most 8-bit because it may be unlabelled
+HDR. An explicitly classified SDR stream,
 including an explicitly SDR 10-bit source, may be converted to 8-bit
 `yuv420p`; later integration validation must prove the supported source
 decoders and resulting playback.
@@ -98,13 +99,15 @@ Every command includes machine-readable progress with a 0.25-second update
 period:
 
 ```text
--stats_period 0.25 -nostats -progress pipe:1
+-stats_period 0.25 -nostats -progress pipe:2
 ```
 
 The builder does not add `-nostdin`, because the headless transcoder will use
 the process runner's graceful `q\n` cancellation before signal fallbacks. The
 output container is explicitly MP4, and `-movflags +faststart` prepares the
-validated result for ordinary playback and sharing.
+validated result for ordinary playback and sharing. Stage 7 binds a pre-reserved
+seekable file to stdout, so the output target is the `fd:` protocol rather than
+a pathname.
 
 Preserve-common metadata has a deliberately narrow stream-selection meaning:
 
@@ -142,9 +145,11 @@ builder invokes a shell.
 The final URL is retained in `OutputPlan` but excluded from
 `TranscodeCommandRequest`, so it cannot enter the FFmpeg argument vector. The
 builder accepts only the job-owned `.partial.mp4`, rejects an input/temp alias,
-and adds `-n` as an additional no-overwrite guard. Stage 7 must validate the
-temporary result and use the existing no-replace commit contract; planning
-does not reserve the final name against a later filesystem race.
+and emits no output pathname. Stage 7 atomically reserves that path with
+`O_EXCL`, gives FFmpeg the exact inode as inherited stdout, validates the
+temporary result, and uses the no-replace commit contract described in
+[ADR 0007](0007-headless-transcoding-core.md); planning does not reserve the
+final name against a later filesystem race.
 
 ## Capability boundary for stage 7
 
@@ -155,9 +160,9 @@ streams, including HEVC video or non-AAC audio. A valid recipe and command
 therefore do not by themselves prove that the selected input codecs are
 available.
 
-Before launching FFmpeg, the stage-7 preflight must compare selected input and
+Before launching FFmpeg, the stage-7 preflight compares selected input and
 required output features with the cached capabilities of the actual bundled
-build. Missing decoder, encoder, filter, muxer, or protocol support must return
+build. Missing decoder, encoder, filter, muxer, or protocol support returns
 a typed unavailable-capability failure. Expanding the toolchain profile is a
 separate reproducibility and licensing change; falling back to Homebrew,
 `PATH`, or another codec is not permitted.
@@ -174,8 +179,8 @@ MVP deliberately selects one video and at most one audio stream.
 
 Rejected because successful process exit is not sufficient validation and
 because a collision race could replace user data. FFmpeg writes only the
-unique job temporary with `-n`; validation and no-replace commit are separate
-stage-7 operations.
+atomically reserved job inode through `fd:`; validation and no-replace commit
+are separate stage-7 operations.
 
 ### Fixed landscape scale dimensions
 

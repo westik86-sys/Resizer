@@ -104,7 +104,14 @@ nonisolated enum TestFixtures {
             mediaProber: FakeMediaProber { _ in mediaInfo },
             transcoder: FakeTranscoder(
                 handler: { _, _ in
-                    try TranscodeResult(byteCount: 1)
+                    try TranscodeResult(
+                        byteCount: 1,
+                        temporaryMetadata: FileMetadata(
+                            byteCount: 1,
+                            isDirectory: false,
+                            identity: FileIdentity(device: 1, inode: 1)
+                        )
+                    )
                 },
                 cancellationHandler: { _ in }
             ),

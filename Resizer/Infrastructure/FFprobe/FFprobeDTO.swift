@@ -80,6 +80,7 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
         let height: FFprobeScalar?
         let averageFrameRate: String?
         let realFrameRate: String?
+        let sampleAspectRatio: String?
         let pixelFormat: String?
         let bitsPerRawSample: FFprobeScalar?
         let bitsPerSample: FFprobeScalar?
@@ -102,6 +103,7 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
             case height
             case averageFrameRate = "avg_frame_rate"
             case realFrameRate = "r_frame_rate"
+            case sampleAspectRatio = "sample_aspect_ratio"
             case pixelFormat = "pix_fmt"
             case bitsPerRawSample = "bits_per_raw_sample"
             case bitsPerSample = "bits_per_sample"
@@ -146,6 +148,10 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
             realFrameRate = try container.decodeIfPresent(
                 String.self,
                 forKey: .realFrameRate
+            )
+            sampleAspectRatio = try container.decodeIfPresent(
+                String.self,
+                forKey: .sampleAspectRatio
             )
             pixelFormat = try container.decodeIfPresent(
                 String.self,

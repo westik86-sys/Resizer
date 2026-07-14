@@ -9,6 +9,7 @@ nonisolated enum ProcessOutputChannel: Sendable, Equatable {
 nonisolated enum ProcessRunnerError: Error, Sendable, Equatable {
     case executionIDAlreadyUsed(ProcessExecutionID)
     case standardInputConfigurationFailed(ProcessExecutionID)
+    case standardOutputConfigurationFailed(ProcessExecutionID)
     case launchFailed(ProcessExecutionID)
     case outputReadFailed(ProcessExecutionID, ProcessOutputChannel)
     case eventBufferOverflow(ProcessExecutionID)
@@ -30,7 +31,7 @@ actor ProcessRunner: ProcessRunning {
         let token: ExecutionToken
         let request: ProcessRequest
         let process: Process
-        let standardOutputPipe: Pipe
+        let standardOutputPipe: Pipe?
         let standardErrorPipe: Pipe
         let standardInputPipe: Pipe?
         let continuation: AsyncThrowingStream<ProcessEvent, any Error>.Continuation
@@ -54,7 +55,7 @@ actor ProcessRunner: ProcessRunning {
             token: ExecutionToken,
             request: ProcessRequest,
             process: Process,
-            standardOutputPipe: Pipe,
+            standardOutputPipe: Pipe?,
             standardErrorPipe: Pipe,
             standardInputPipe: Pipe?,
             continuation: AsyncThrowingStream<ProcessEvent, any Error>.Continuation
@@ -125,7 +126,6 @@ actor ProcessRunner: ProcessRunning {
         let stream = streamPair.stream
         let continuation = streamPair.continuation
         let process = Process()
-        let standardOutputPipe = Pipe()
         let standardErrorPipe = Pipe()
         let standardInputPipe: Pipe?
 
@@ -141,7 +141,6 @@ actor ProcessRunner: ProcessRunning {
                 1
             ) != -1 else {
                 Self.closeAllHandles(
-                    standardOutputPipe,
                     standardErrorPipe,
                     pipe
                 )
@@ -158,10 +157,40 @@ actor ProcessRunner: ProcessRunning {
             process.standardInput = pipe
         }
 
+        let standardOutputPipe: Pipe?
+        let standardOutputFile: FileHandle?
+        switch request.standardOutputDestination {
+        case .stream:
+            let pipe = Pipe()
+            standardOutputPipe = pipe
+            standardOutputFile = nil
+            process.standardOutput = pipe
+        case .existingFile(let url, let expectedIdentity):
+            do {
+                let file = try Self.openExistingStandardOutput(
+                    at: url,
+                    expectedIdentity: expectedIdentity,
+                    executionID: request.id
+                )
+                standardOutputPipe = nil
+                standardOutputFile = file
+                process.standardOutput = file
+            } catch let runnerError as ProcessRunnerError {
+                Self.closeAllHandles(standardErrorPipe, standardInputPipe)
+                continuation.finish(throwing: runnerError)
+                throw runnerError
+            } catch {
+                Self.closeAllHandles(standardErrorPipe, standardInputPipe)
+                let runnerError = ProcessRunnerError
+                    .standardOutputConfigurationFailed(request.id)
+                continuation.finish(throwing: runnerError)
+                throw runnerError
+            }
+        }
+
         process.executableURL = request.executableURL
         process.arguments = request.arguments
         process.environment = request.environment
-        process.standardOutput = standardOutputPipe
         process.standardError = standardErrorPipe
 
         let token = ExecutionToken()
@@ -212,6 +241,7 @@ actor ProcessRunner: ProcessRunning {
                 standardErrorPipe,
                 standardInputPipe
             )
+            try? standardOutputFile?.close()
             let runnerError = ProcessRunnerError.launchFailed(request.id)
             continuation.finish(throwing: runnerError)
             throw runnerError
@@ -221,18 +251,26 @@ actor ProcessRunner: ProcessRunning {
 
         // The child inherited these descriptors during `run()`. Closing only
         // the parent's copies makes EOF observable after the child exits.
-        try? standardOutputPipe.fileHandleForWriting.close()
+        try? standardOutputPipe?.fileHandleForWriting.close()
+        try? standardOutputFile?.close()
         try? standardErrorPipe.fileHandleForWriting.close()
         try? standardInputPipe?.fileHandleForReading.close()
 
-        state.standardOutputTask = Task.detached(priority: .utility) {
-            await Self.drain(
-                standardOutputPipe.fileHandleForReading,
-                channel: .standardOutput,
-                executionID: request.id,
-                token: token,
-                runner: self
-            )
+        if let standardOutputPipe {
+            state.standardOutputTask = Task.detached(priority: .utility) {
+                await Self.drain(
+                    standardOutputPipe.fileHandleForReading,
+                    channel: .standardOutput,
+                    executionID: request.id,
+                    token: token,
+                    runner: self
+                )
+            }
+        } else {
+            // A regular output file has no parent-side read endpoint. The
+            // child owns its inherited descriptor after launch, so stdout is
+            // already complete from the runner's event-stream perspective.
+            state.standardOutputFinished = true
         }
         state.standardErrorTask = Task.detached(priority: .utility) {
             await Self.drain(
@@ -685,6 +723,43 @@ actor ProcessRunner: ProcessRunning {
             )
             return
         }
+    }
+
+    private nonisolated static func openExistingStandardOutput(
+        at url: URL,
+        expectedIdentity: FileIdentity,
+        executionID: ProcessExecutionID
+    ) throws -> FileHandle {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return Int32(-1)
+            }
+            return Darwin.open(
+                path,
+                O_WRONLY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
+        guard descriptor >= 0 else {
+            throw ProcessRunnerError.standardOutputConfigurationFailed(
+                executionID
+            )
+        }
+
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              mode_t(status.st_mode) & mode_t(S_IFMT) == mode_t(S_IFREG),
+              status.st_size == 0,
+              FileIdentity(
+                  device: UInt64(status.st_dev),
+                  inode: UInt64(status.st_ino)
+              ) == expectedIdentity else {
+            Darwin.close(descriptor)
+            throw ProcessRunnerError.standardOutputConfigurationFailed(
+                executionID
+            )
+        }
+
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     private nonisolated static func closeAllHandles(_ pipes: Pipe?...) {

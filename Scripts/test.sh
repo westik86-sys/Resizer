@@ -13,5 +13,4 @@ exec xcodebuild \
     -destination "platform=macOS" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     -only-testing:ResizerTests \
-    CODE_SIGNING_ALLOWED=NO \
     test

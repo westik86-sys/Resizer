@@ -297,6 +297,98 @@ struct FFprobeParserTests {
         #expect(audio.bitRate == nil)
     }
 
+    @Test("Pixel formats supply omitted per-component bit depths safely")
+    func infersBitDepthFromPixelFormat() throws {
+        let json = #"""
+        {
+          "streams": [
+            {
+              "index": 0,
+              "codec_type": "video",
+              "codec_name": "hevc",
+              "pix_fmt": "yuv420p10le"
+            },
+            {
+              "index": 1,
+              "codec_type": "video",
+              "pix_fmt": "nv12"
+            },
+            {
+              "index": 2,
+              "codec_type": "video",
+              "pix_fmt": "rgb24"
+            },
+            {
+              "index": 3,
+              "codec_type": "video",
+              "pix_fmt": "v210"
+            },
+            {
+              "index": 4,
+              "codec_type": "video",
+              "pix_fmt": "p210le"
+            },
+            {
+              "index": 5,
+              "codec_type": "video",
+              "pix_fmt": "rgb48le"
+            },
+            {
+              "index": 6,
+              "codec_type": "video",
+              "pix_fmt": "xyz12le"
+            }
+          ],
+          "format": {}
+        }
+        """#
+
+        let info = try parser.parse(Data(json.utf8))
+        let videos = info.videoStreams
+
+        #expect(videos.map(\.pixelFormat) == [
+            "yuv420p10le",
+            "nv12",
+            "rgb24",
+            "v210",
+            "p210le",
+            "rgb48le",
+            "xyz12le",
+        ])
+        #expect(videos.map(\.bitDepth) == [10, 8, 8, 10, 10, 16, 12])
+        #expect(videos.allSatisfy { $0.dynamicRange == .unknown })
+    }
+
+    @Test("Sample aspect ratio is retained for safe geometry preflight")
+    func sampleAspectRatio() throws {
+        let json = #"""
+        {
+          "streams": [
+            {
+              "index": 0,
+              "codec_type": "video",
+              "sample_aspect_ratio": "32:27"
+            },
+            {
+              "index": 1,
+              "codec_type": "video",
+              "sample_aspect_ratio": "1:1"
+            }
+          ],
+          "format": {}
+        }
+        """#
+
+        let videos = try parser.parse(Data(json.utf8)).videoStreams
+        let anamorphic = try RationalAspectRatio(
+            numerator: 32,
+            denominator: 27
+        )
+
+        #expect(videos[0].sampleAspectRatio == anamorphic)
+        #expect(videos[1].sampleAspectRatio?.isSquare == true)
+    }
+
     private func parseFixture(_ name: String) throws -> MediaInfo {
         try parser.parse(FFprobeFixture.data(named: name))
     }

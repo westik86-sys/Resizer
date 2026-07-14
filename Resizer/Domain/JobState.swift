@@ -66,12 +66,18 @@ nonisolated enum JobState: Sendable, Equatable {
             true
         case (.probing, .failed(let failure)):
             failure.stage == .probe
+        case (.probing, .cancelled):
+            true
         case (.ready, .queued):
+            true
+        case (.ready, .cancelled):
             true
         case (.queued, .running):
             true
         case (.queued, .failed(let failure)):
             failure.stage == .preflight
+        case (.queued, .cancelled):
+            true
         case (.running, .finishing(.validating)):
             true
         case (.running, .cancelling):
@@ -88,7 +94,11 @@ nonisolated enum JobState: Sendable, Equatable {
             failure.stage == .commit
         case (.cancelling, .cancelled):
             true
+        case (.cancelling, .failed(let failure)):
+            failure.stage == .encode && failure.reason == .fileSystem
         case (.cancelled, .ready):
+            true
+        case (.cancelled, .probing):
             true
         case (.failed(let failure), .probing):
             failure.retryTarget == .probing

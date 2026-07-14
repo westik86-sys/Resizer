@@ -27,10 +27,10 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
         var arguments = [
             "-hide_banner",
-            "-loglevel", "warning",
+            "-loglevel", "error",
             "-stats_period", "0.25",
             "-nostats",
-            "-progress", "pipe:1",
+            "-progress", "pipe:2",
             "-autorotate",
             "-i", inputURL.path,
             "-map", "0:\(video.index)",
@@ -85,8 +85,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             "-metadata:s:v:0", "rotate=0",
             "-movflags", "+faststart",
             "-f", containerArgument(request.recipe.container),
-            "-n",
-            temporaryURL.path,
+            "fd:",
         ])
         return arguments
     }
@@ -143,8 +142,15 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
     }
 
     private func validateSDRConversion(_ video: VideoStreamInfo) throws {
+        if let sampleAspectRatio = video.sampleAspectRatio,
+           !sampleAspectRatio.isSquare {
+            throw FFmpegCommandBuilderError.unsupportedVideoFormat(
+                streamIndex: video.index
+            )
+        }
+        let depthIsNotProvenEightBit = video.bitDepth.map { $0 > 8 } ?? true
         let couldBeUnlabelledHDR = video.dynamicRange == .unknown
-            && video.bitDepth.map { $0 > 8 } == true
+            && depthIsNotProvenEightBit
         guard video.dynamicRange != .hdr, !couldBeUnlabelledHDR else {
             throw FFmpegCommandBuilderError.unsupportedVideoFormat(
                 streamIndex: video.index

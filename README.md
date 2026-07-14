@@ -14,25 +14,35 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
-Implementation is currently at stage 6. In addition to the architecture
-scaffold, actor-owned `ProcessRunner`, and bundled `FFprobeClient`, the project
-now contains three fixed typed compression presets, a deterministic
-`FFmpegCommandBuilder`, and a safe `OutputPlanner`. Commands use explicit
-stream maps, H.264 VideoToolbox, optional AAC, portrait-aware no-upscale
-filters, machine-readable progress, MP4 faststart, and only a job-owned
-`.partial.mp4` destination. Output conflicts receive numeric suffixes without
-exposing the final URL to FFmpeg. Golden and validation tests cover every
-preset, Unicode paths, missing or muted audio, resize, metadata, unsupported
-HDR, stream selection, and output collisions. See
+Implementation is currently at stage 7. The production headless workflow now
+retains security-scoped input and output access while it probes the source,
+performs capability-aware preflight, encodes into a unique job-owned
+`.partial.mp4`, parses bounded machine-readable progress, probes and validates
+the result, and atomically publishes it without replacing an existing file.
+Before launch, the workflow atomically reserves the temporary with `O_EXCL`
+and records its device/inode seal. FFmpeg writes MP4 through an inherited,
+seekable descriptor instead of reopening the pathname. Validation, cleanup,
+and commit all require that identity, so every collision or replacement inode
+is preserved and unsealed cleanup always fails closed.
+Graceful cancellation sends `q` before the process runner escalates through
+signals, and a recorded cancellation takes precedence over a later nonzero
+exit. The bundled FFmpeg capabilities are queried in parallel with a bounded
+15-second discovery deadline, cached only after complete success, and checked
+against the selected input and recipe before launch.
+
+The stage also includes a real bundled-tool integration test and deterministic
+tests for progress parsing, capability discovery, process failures,
+cancellation races, output validation, security-scoped lifetimes, symlink and
+hard-link guards, exact cleanup, and no-replace commit. See
 [`docs/architecture.md`](docs/architecture.md) and
-[`docs/adr/0006-presets-command-builder.md`](docs/adr/0006-presets-command-builder.md)
+[`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md)
 for the complete contracts.
 
 The temporary stage-2 diagnostic UI remains available and still uses its narrow
 spike runner to prove the bundled toolchain. It is not the final product UI.
-The headless compression workflow, product UI, and queue remain later PLAN
-stages. The production probe, command builder, and output planner are not yet
-wired into the temporary diagnostic UI.
+The product UI and queue remain later PLAN stages. The production headless
+workflow is intentionally not wired into the temporary diagnostic UI; stage 8
+will replace that spike UI with the single-file product experience.
 
 Sandbox checkpoint A passed locally on 2026-07-13: an ad hoc-signed Universal 2
 Release app used PowerBox-selected input and output locations to run bundled
@@ -49,7 +59,11 @@ work.
 - Building the bundled toolchain requires the official source archive retained
   under `Vendor/FFmpeg/sources/`
 
-Developer ID identities and credentials are intentionally not stored in the repository. Shell verification disables code signing; signing and notarization belong to the release stage.
+Developer ID identities and credentials are intentionally not stored in the
+repository. The build script disables signing. The test script uses Xcode's
+ephemeral local signing so the sandboxed integration test can launch the
+bundled executables; Developer ID signing and notarization belong to the
+release stage.
 
 ## Build and test
 

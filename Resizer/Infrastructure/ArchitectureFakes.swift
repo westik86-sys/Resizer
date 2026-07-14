@@ -21,9 +21,11 @@ nonisolated struct FakeTranscoder: Transcoding {
 
     func transcode(
         _ request: TranscodeRequest,
+        reservation: TemporaryOutputReservation,
         onProgress: @escaping ProgressHandler
     ) async throws -> TranscodeResult {
-        try await handler(request, onProgress)
+        _ = reservation
+        return try await handler(request, onProgress)
     }
 
     func cancel(jobID: CompressionJob.ID) async {
@@ -64,11 +66,32 @@ nonisolated struct PassthroughFileAccess: FileAccessing {
         try await metadataProvider(url)
     }
 
-    func commitWithoutReplacing(_ plan: OutputPlan) async throws {
+    func reserveTemporaryOutput(
+        _ plan: OutputPlan
+    ) async throws -> TemporaryOutputReservation {
+        try TemporaryOutputReservation(
+            plan: plan,
+            metadata: FileMetadata(
+                byteCount: 0,
+                isDirectory: false,
+                identity: FileIdentity(device: 1, inode: 1)
+            )
+        )
+    }
+
+    func commitWithoutReplacing(
+        _ plan: OutputPlan,
+        expectedTemporaryMetadata: FileMetadata
+    ) async throws {
+        _ = expectedTemporaryMetadata
         try await commitHandler(plan)
     }
 
-    func cleanupTemporaryOutput(_ plan: OutputPlan) async throws {
+    func cleanupTemporaryOutput(
+        _ plan: OutputPlan,
+        expectedTemporaryMetadata: FileMetadata?
+    ) async throws {
+        _ = expectedTemporaryMetadata
         try await cleanupHandler(plan.temporaryURL)
     }
 }

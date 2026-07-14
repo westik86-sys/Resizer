@@ -71,6 +71,9 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
             guard mediaInfo != nil else {
                 throw CompressionJobMutationError.missingMediaInfo
             }
+        case .cancelled where state.phase == .probing
+            || state.phase == .ready:
+            break
         case .queued, .running, .finishing, .cancelling, .cancelled, .completed:
             guard mediaInfo != nil else {
                 throw CompressionJobMutationError.missingMediaInfo

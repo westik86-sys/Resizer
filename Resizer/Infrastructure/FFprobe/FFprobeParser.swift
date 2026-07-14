@@ -88,6 +88,9 @@ nonisolated struct FFprobeParser: Sendable {
                         average: stream.averageFrameRate,
                         real: stream.realFrameRate
                     ),
+                    sampleAspectRatio: try sampleAspectRatio(
+                        stream.sampleAspectRatio
+                    ),
                     rotationDegrees: try rotation(stream),
                     pixelFormat: cleaned(stream.pixelFormat),
                     bitDepth: try bitDepth(stream),
@@ -197,7 +200,88 @@ nonisolated struct FFprobeParser: Sendable {
         if let value = try optionalPositiveInt(stream.bitsPerRawSample) {
             return value
         }
-        return try optionalPositiveInt(stream.bitsPerSample)
+        if let value = try optionalPositiveInt(stream.bitsPerSample) {
+            return value
+        }
+        return inferredBitDepth(from: cleaned(stream.pixelFormat))
+    }
+
+    /// FFprobe commonly omits both bit-depth fields for HEVC Main10 while
+    /// still reporting an endian-qualified pixel format such as
+    /// `yuv420p10le`. Recover the trailing component conservatively so an
+    /// unlabelled 10-bit/HDR source cannot pass the SDR-only preflight.
+    private func inferredBitDepth(from pixelFormat: String?) -> Int? {
+        guard var candidate = pixelFormat?.lowercased(),
+              !candidate.isEmpty else {
+            return nil
+        }
+
+        if candidate.hasSuffix("le") || candidate.hasSuffix("be") {
+            candidate.removeLast(2)
+        }
+
+        let exactDepths: [String: Int] = [
+            "yuv420p": 8,
+            "yuvj420p": 8,
+            "yuv422p": 8,
+            "yuvj422p": 8,
+            "yuv444p": 8,
+            "yuvj444p": 8,
+            "uyvy422": 8,
+            "yuyv422": 8,
+            "nv12": 8,
+            "nv21": 8,
+            "rgb24": 8,
+            "bgr24": 8,
+            "rgba": 8,
+            "bgra": 8,
+            "argb": 8,
+            "abgr": 8,
+            "gray": 8,
+            "gray8": 8,
+            "p010": 10,
+            "p210": 10,
+            "p410": 10,
+            "y210": 10,
+            "v210": 10,
+            "v410": 10,
+            "nv20": 10,
+            "x2rgb10": 10,
+            "x2bgr10": 10,
+            "y410": 10,
+            "xv30": 10,
+            "p012": 12,
+            "p212": 12,
+            "p412": 12,
+            "y212": 12,
+            "xyz12": 12,
+            "y412": 12,
+            "xv36": 12,
+            "p016": 16,
+            "p216": 16,
+            "p416": 16,
+            "y216": 16,
+            "rgb48": 16,
+            "bgr48": 16,
+            "rgba64": 16,
+            "bgra64": 16,
+            "argb64": 16,
+            "abgr64": 16,
+            "y416": 16,
+            "gbrpf32": 32,
+            "gbrapf32": 32,
+        ]
+        if let exact = exactDepths[candidate] {
+            return exact
+        }
+
+        for depth in [9, 10, 12, 14, 16] {
+            if candidate.hasSuffix("p\(depth)")
+                || candidate.hasSuffix("gray\(depth)") {
+                return depth
+            }
+        }
+        return nil
     }
 
     private func frameRate(
@@ -205,6 +289,31 @@ nonisolated struct FFprobeParser: Sendable {
         real: String?
     ) -> RationalFrameRate? {
         parseFrameRate(average) ?? parseFrameRate(real)
+    }
+
+    private func sampleAspectRatio(
+        _ value: String?
+    ) throws -> RationalAspectRatio? {
+        guard let value = cleaned(value),
+              value.uppercased() != "N/A" else {
+            return nil
+        }
+        let components = value.split(
+            separator: ":",
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 2,
+              let numerator = Int64(components[0]),
+              let denominator = Int64(components[1]) else {
+            throw FFprobeParsingError.invalidMetadata
+        }
+        if numerator == 0, denominator > 0 {
+            return nil
+        }
+        return try RationalAspectRatio(
+            numerator: numerator,
+            denominator: denominator
+        )
     }
 
     private func parseFrameRate(_ value: String?) -> RationalFrameRate? {

@@ -1,6 +1,7 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
+Build profile revision: 3
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
 License target: LGPL 2.1-or-later
@@ -9,6 +10,16 @@ The two slices use the same component profile. ARCH, SDKROOT, compiler paths,
 prefix, and -arch flags are supplied by Scripts/build-ffmpeg.sh.
 External package discovery is disabled with the repository's fail-closed
 Scripts/support/pkg-config-disabled shim.
+
+Pinned source patch:
+
+Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch
+SHA-256: 01061179993a24248f61dbf7bb9b119a017a1edf961104d7a13373f78f54c2b1
+
+The patch preserves the legacy `fd:` behavior and adds strict decimal
+`fd:<number>` URLs for nonnegative descriptors through INT_MAX. An explicit URL
+descriptor takes precedence over the `fd` protocol option. Signs, whitespace,
+trailing characters, and numeric overflow are rejected.
 
 --target-os=darwin
 --enable-cross-compile
@@ -28,6 +39,7 @@ Scripts/support/pkg-config-disabled shim.
 --enable-videotoolbox
 --enable-ffmpeg
 --enable-ffprobe
+--enable-protocol=fd
 --enable-protocol=file
 --enable-protocol=pipe
 --enable-demuxer=mov
@@ -51,5 +63,5 @@ Explicitly absent:
 --enable-libx265
 
 No external --enable-lib* option is used. Network support and all network
-protocols are disabled. The only bundled command-line programs are ffmpeg and
-ffprobe.
+protocols are disabled. Only the local fd, file, and pipe protocols are enabled.
+The only bundled command-line programs are ffmpeg and ffprobe.

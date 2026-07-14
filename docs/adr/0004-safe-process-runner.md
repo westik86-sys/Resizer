@@ -38,6 +38,13 @@ observable while the child is still running. Workers pass only `Data`, channel,
 execution ID, and generation token back to the actor; a `Process` instance never
 enters a worker.
 
+Stage 7 extends `ProcessRequest` with a narrow alternative for stdout: an
+already-created empty regular file plus its expected device/inode. The runner
+opens it with `O_NOFOLLOW`, verifies identity and zero size with `fstat`, and
+binds that exact descriptor to the child. No stdout bytes enter the event stream
+in this mode; this is how FFmpeg writes to an atomically reserved inode without
+reopening a pathname.
+
 Publish chunks through a finite `.bufferingOldest` stream. A dropped event is a
 typed failure that starts child cancellation while both workers continue to
 drain. This avoids silent corruption of future machine-readable output. Retain
@@ -47,7 +54,8 @@ bytes were truncated.
 Finalize through one actor-owned gate only after all three facts are true:
 
 1. the direct child has terminated;
-2. stdout reached EOF or a terminal read failure;
+2. streamed stdout reached EOF or a terminal read failure, or direct-file
+   stdout was successfully bound;
 3. stderr reached EOF or a terminal read failure.
 
 On a normal or nonzero exit, yield exactly one terminal `ProcessResult` and then
