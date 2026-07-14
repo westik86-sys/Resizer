@@ -56,6 +56,144 @@ struct CompressionWorkflowTests {
         #expect(stored == completed)
     }
 
+    @Test("Preparation stops in ready and prepared start does not re-probe")
+    func preparedWorkflow() async throws {
+        let harness = try await WorkflowHarness.make()
+
+        let ready = try await harness.coordinator.prepare(
+            jobID: harness.jobID
+        )
+
+        #expect(ready.state == .ready)
+        #expect(ready.mediaInfo != nil)
+        #expect(ready.configuration == nil)
+        #expect(
+            harness.events.snapshot() == [
+                "scope.begin",
+                "probe.input",
+                "scope.end",
+            ]
+        )
+
+        let completed = try await harness.coordinator.startPrepared(
+            jobID: harness.jobID,
+            configuration: harness.configuration
+        )
+
+        guard case .completed = completed.state else {
+            Issue.record("Expected completed state, got \(completed.state)")
+            return
+        }
+        let events = harness.events.snapshot()
+        #expect(events.filter { $0 == "probe.input" }.count == 1)
+        #expect(events.filter { $0 == "scope.begin" }.count == 2)
+        #expect(events.filter { $0 == "scope.end" }.count == 2)
+        #expect(events.contains("transcode.start"))
+        #expect(events.contains("probe.temporary"))
+        #expect(events.contains("commit"))
+    }
+
+    @Test("A cancelled prepared job accepts a fresh configuration on retry")
+    func cancelledPreparedRetry() async throws {
+        let harness = try await WorkflowHarness.make()
+        let ready = try await harness.coordinator.prepare(
+            jobID: harness.jobID
+        )
+        #expect(ready.configuration == nil)
+
+        await harness.coordinator.cancel(jobID: harness.jobID)
+        let cancelled = try #require(
+            await harness.coordinator.job(id: harness.jobID)
+        )
+        #expect(cancelled.state == .cancelled)
+        #expect(cancelled.mediaInfo != nil)
+        #expect(cancelled.configuration == nil)
+
+        let completed = try await harness.coordinator.retry(
+            jobID: harness.jobID,
+            configuration: harness.configuration
+        )
+
+        guard case .completed = completed.state else {
+            Issue.record("Expected completed state, got \(completed.state)")
+            return
+        }
+        let events = harness.events.snapshot()
+        #expect(events.filter { $0 == "probe.input" }.count == 1)
+        #expect(events.filter { $0 == "transcode.start" }.count == 1)
+    }
+
+    @Test("Encode retry reuses prepared media and the same job identity")
+    func preparedEncodeRetry() async throws {
+        let harness = try await WorkflowHarness.make(
+            options: .init(transcodeFailure: .encode)
+        )
+        _ = try await harness.coordinator.prepare(jobID: harness.jobID)
+
+        do {
+            _ = try await harness.coordinator.startPrepared(
+                jobID: harness.jobID,
+                configuration: harness.configuration
+            )
+            Issue.record("Expected first encode failure")
+        } catch let failure as TranscodeFailure {
+            #expect(failure.stage == .encode)
+        }
+
+        do {
+            _ = try await harness.coordinator.retry(
+                jobID: harness.jobID,
+                configuration: harness.configuration
+            )
+            Issue.record("Expected retry encode failure")
+        } catch let failure as TranscodeFailure {
+            #expect(failure.stage == .encode)
+        }
+
+        let stored = try #require(
+            await harness.coordinator.job(id: harness.jobID)
+        )
+        guard case .failed(let failure) = stored.state else {
+            Issue.record("Expected failed state, got \(stored.state)")
+            return
+        }
+        #expect(failure.retryTarget == .ready)
+        let events = harness.events.snapshot()
+        #expect(events.filter { $0 == "probe.input" }.count == 1)
+        #expect(events.filter { $0 == "transcode.start" }.count == 2)
+        #expect(await harness.fileAccess.cleanedPlans().count == 2)
+    }
+
+    @Test("Probe retry repeats preparation without starting encode")
+    func probeRetry() async throws {
+        let harness = try await WorkflowHarness.make(
+            options: .init(inputProbeFailure: .probe)
+        )
+
+        for attempt in 0..<2 {
+            do {
+                if attempt == 0 {
+                    _ = try await harness.coordinator.prepare(
+                        jobID: harness.jobID
+                    )
+                } else {
+                    _ = try await harness.coordinator.retry(
+                        jobID: harness.jobID,
+                        configuration: harness.configuration
+                    )
+                }
+                Issue.record("Expected probe failure")
+            } catch let failure as TranscodeFailure {
+                #expect(failure.stage == .probe)
+            }
+        }
+
+        let events = harness.events.snapshot()
+        #expect(events.filter { $0 == "probe.input" }.count == 2)
+        #expect(!events.contains("transcode.start"))
+        #expect(await harness.transcoder.observedTranscodeRequests().isEmpty)
+    }
+
     @Test("Preflight failures never clean a path the workflow did not create")
     func preflightFailures() async throws {
         let cases: [WorkflowHarness.Options] = [
@@ -1062,7 +1200,8 @@ private actor WorkflowFileAccess: FileAccessing {
     private let cleanupFailure: WorkflowFakeError?
     private let temporaryMetadataChangesAfterProbe: Bool
     private let events: WorkflowEventLog
-    private var temporaryMetadataCalls = 0
+    private var temporaryIsReserved = false
+    private var reservationMetadataCalls = 0
     private var commits: [OutputPlan] = []
     private var cleanups: [OutputPlan] = []
 
@@ -1091,7 +1230,8 @@ private actor WorkflowFileAccess: FileAccessing {
         to selectedURLs: [URL],
         perform operation: @Sendable () async throws -> Result
     ) async throws -> Result {
-        guard selectedURLs == [urls.input, urls.outputDirectory] else {
+        guard selectedURLs == [urls.input]
+            || selectedURLs == [urls.input, urls.outputDirectory] else {
             throw WorkflowFakeError.unexpectedRequest
         }
         events.append("scope.begin")
@@ -1109,8 +1249,7 @@ private actor WorkflowFileAccess: FileAccessing {
             return FileMetadata(byteCount: 0, isDirectory: true)
         }
         if url == urls.temporary {
-            temporaryMetadataCalls += 1
-            if temporaryMetadataCalls == 1 {
+            if !temporaryIsReserved {
                 events.append("metadata.temporary.preflight")
                 return temporaryOutputExists
                     ? FileMetadata(
@@ -1120,7 +1259,8 @@ private actor WorkflowFileAccess: FileAccessing {
                     )
                     : nil
             }
-            if temporaryMetadataCalls >= 3,
+            reservationMetadataCalls += 1
+            if reservationMetadataCalls >= 2,
                temporaryMetadataChangesAfterProbe {
                 events.append("metadata.temporary.changed")
                 return FileMetadata(
@@ -1151,6 +1291,8 @@ private actor WorkflowFileAccess: FileAccessing {
         guard plan.temporaryURL == urls.temporary else {
             throw WorkflowFakeError.unexpectedRequest
         }
+        temporaryIsReserved = true
+        reservationMetadataCalls = 0
         events.append("reserve.temporary")
         return try TemporaryOutputReservation(
             plan: plan,
@@ -1208,6 +1350,8 @@ private actor WorkflowFileAccess: FileAccessing {
         if let cleanupFailure {
             throw cleanupFailure
         }
+        temporaryIsReserved = false
+        reservationMetadataCalls = 0
     }
 
     func committedPlans() -> [OutputPlan] {

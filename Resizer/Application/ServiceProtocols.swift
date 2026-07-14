@@ -15,6 +15,15 @@ extension MediaProbing {
 }
 
 nonisolated protocol Transcoding: Sendable {
+    /// Discovers and caches the actual bundled build capabilities, then
+    /// verifies that the prepared media can use the supplied typed recipe.
+    /// The single-file UI calls this before presenting encoder-dependent
+    /// controls.
+    func validateCapabilities(
+        for mediaInfo: MediaInfo,
+        recipe: CompressionRecipe
+    ) async throws
+
     /// Validates the complete command and the bundled encoder capabilities
     /// before the job enters its running state.
     func preflight(_ request: TranscodeRequest) async throws
@@ -29,6 +38,14 @@ nonisolated protocol Transcoding: Sendable {
 }
 
 extension Transcoding {
+    func validateCapabilities(
+        for mediaInfo: MediaInfo,
+        recipe: CompressionRecipe
+    ) async throws {
+        _ = mediaInfo
+        _ = recipe
+    }
+
     func preflight(_ request: TranscodeRequest) async throws {
         _ = request
     }

@@ -52,10 +52,41 @@ private nonisolated struct PreRunCancellation: Sendable {
     let cancel: @Sendable () -> Void
 }
 
-actor CompressionCoordinator {
+/// The UI-facing seam preserves the coordinator's actor isolation while
+/// allowing deterministic presentation tests to supply an in-memory actor.
+/// Its synchronous requirements are actor-isolated and therefore must be
+/// called with `await` from the main actor.
+nonisolated protocol CompressionCoordinating: Actor {
+    func createJob(
+        inputURL: URL,
+        id: CompressionJob.ID,
+        createdAt: Date
+    ) throws -> CompressionJob
+
+    func prepare(jobID: CompressionJob.ID) async throws -> CompressionJob
+
+    func startPrepared(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob
+
+    func retry(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob
+
+    func cancel(jobID: CompressionJob.ID) async
+    func snapshot() -> CompressionSnapshot
+    func snapshots() -> AsyncStream<CompressionSnapshot>
+}
+
+actor CompressionCoordinator: CompressionCoordinating {
     private let dependencies: CompressionCoordinatorDependencies
     private var jobsByID: [CompressionJob.ID: CompressionJob] = [:]
     private var jobOrder: [CompressionJob.ID] = []
+    private var snapshotContinuations: [
+        UUID: AsyncStream<CompressionSnapshot>.Continuation
+    ] = [:]
     private var workflowJobIDs: Set<CompressionJob.ID> = []
     private var cancellationIntents: Set<CompressionJob.ID> = []
     private var preRunCancellations: [
@@ -91,6 +122,7 @@ actor CompressionCoordinator {
         try requireAvailableActiveSlot(for: job)
         jobsByID[job.id] = job
         jobOrder.append(job.id)
+        publishSnapshot()
     }
 
     @discardableResult
@@ -102,6 +134,7 @@ actor CompressionCoordinator {
         try job.transition(to: next)
         try requireAvailableActiveSlot(for: job)
         jobsByID[jobID] = job
+        publishSnapshot()
         return job
     }
 
@@ -113,6 +146,7 @@ actor CompressionCoordinator {
         var job = try requireJob(jobID)
         try job.recordMediaInfo(mediaInfo)
         jobsByID[jobID] = job
+        publishSnapshot()
         return job
     }
 
@@ -124,6 +158,7 @@ actor CompressionCoordinator {
         var job = try requireJob(jobID)
         try job.configure(configuration)
         jobsByID[jobID] = job
+        publishSnapshot()
         return job
     }
 
@@ -135,7 +170,82 @@ actor CompressionCoordinator {
         var job = try requireJob(jobID)
         try job.updateProgress(progress)
         jobsByID[jobID] = job
+        publishSnapshot()
         return job
+    }
+
+    /// Probes one selected input and intentionally stops in `ready` so the UI
+    /// can present metadata and let the user choose a typed configuration.
+    @discardableResult
+    func prepare(jobID: CompressionJob.ID) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
+        try beginWorkflow(jobID: jobID)
+        defer { endWorkflow(jobID: jobID) }
+
+        _ = try transition(jobID: jobID, to: .probing)
+
+        return try await withTaskCancellationHandler {
+            do {
+                return try await dependencies.fileAccess
+                    .withSecurityScopedAccess(to: [job.inputURL]) { [self] in
+                        let mediaInfo = try await runProbe(
+                            job.inputURL,
+                            jobID: jobID
+                        )
+                        try await runCapabilityValidation(
+                            mediaInfo,
+                            recipe: CompressionRecipe(
+                                preset: .default
+                            ),
+                            jobID: jobID
+                        )
+                        return try await finishPreparation(
+                            mediaInfo,
+                            jobID: jobID
+                        )
+                    }
+            } catch {
+                try await finishWorkflowAfterError(error, jobID: jobID)
+            }
+        } onCancel: {
+            Task { [self] in
+                await cancel(jobID: jobID)
+            }
+        }
+    }
+
+    /// Runs encode/validate/commit for a job whose input was already probed.
+    /// Retrying an encode-side failure reuses its immutable probe result while
+    /// still rebuilding the complete typed configuration and output plan.
+    @discardableResult
+    func startPrepared(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
+        try beginWorkflow(jobID: jobID)
+        defer { endWorkflow(jobID: jobID) }
+
+        switch job.state {
+        case .ready:
+            break
+        case .failed(let failure) where failure.retryTarget == .ready:
+            _ = try transition(jobID: jobID, to: .ready)
+        case .cancelled where job.mediaInfo != nil:
+            _ = try transition(jobID: jobID, to: .ready)
+        default:
+            throw CompressionWorkflowError.workflowStateChanged(
+                job.state.phase
+            )
+        }
+        _ = try configure(configuration, for: jobID)
+        _ = try transition(jobID: jobID, to: .queued)
+
+        return try await runWorkflowWithSelectedAccess(
+            jobID: jobID,
+            configuration: configuration,
+            shouldProbeInput: false
+        )
     }
 
     /// Executes the complete headless workflow while retaining security-scoped
@@ -145,18 +255,55 @@ actor CompressionCoordinator {
         jobID: CompressionJob.ID,
         configuration: JobConfiguration
     ) async throws -> CompressionJob {
-        let job = try requireJob(jobID)
-        guard workflowJobIDs.insert(jobID).inserted else {
-            throw CompressionCoordinatorError.workflowAlreadyRunning(jobID)
-        }
-        defer {
-            workflowJobIDs.remove(jobID)
-            cancellationIntents.remove(jobID)
-            preRunCancellations.removeValue(forKey: jobID)
-            transcodeCancellations.removeValue(forKey: jobID)
-        }
+        _ = try requireJob(jobID)
+        try beginWorkflow(jobID: jobID)
+        defer { endWorkflow(jobID: jobID) }
 
         _ = try transition(jobID: jobID, to: .probing)
+        return try await runWorkflowWithSelectedAccess(
+            jobID: jobID,
+            configuration: configuration,
+            shouldProbeInput: true
+        )
+    }
+
+    /// Routes the Retry action through the state machine instead of creating a
+    /// second job. Probe failures repeat only preparation; later failures and
+    /// encode cancellations restart from the retained ready metadata.
+    @discardableResult
+    func retry(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration
+    ) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
+        switch job.state {
+        case .failed(let failure) where failure.retryTarget == .probing:
+            return try await prepare(jobID: jobID)
+        case .failed(let failure) where failure.retryTarget == .ready:
+            return try await startPrepared(
+                jobID: jobID,
+                configuration: configuration
+            )
+        case .cancelled where job.mediaInfo == nil:
+            return try await prepare(jobID: jobID)
+        case .cancelled:
+            return try await startPrepared(
+                jobID: jobID,
+                configuration: configuration
+            )
+        default:
+            throw CompressionWorkflowError.workflowStateChanged(
+                job.state.phase
+            )
+        }
+    }
+
+    private func runWorkflowWithSelectedAccess(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration,
+        shouldProbeInput: Bool
+    ) async throws -> CompressionJob {
+        let job = try requireJob(jobID)
         let clock = ContinuousClock()
         let startedAt = clock.now
         let selectedURLs = [
@@ -171,6 +318,7 @@ actor CompressionCoordinator {
                         try await runScopedWorkflow(
                             jobID: jobID,
                             configuration: configuration,
+                            shouldProbeInput: shouldProbeInput,
                             startedAt: startedAt,
                             clock: clock
                         )
@@ -189,8 +337,17 @@ actor CompressionCoordinator {
     /// any later nonzero exit. Cancellation during probe/preflight is retained
     /// and resolved before FFmpeg is launched.
     func cancel(jobID: CompressionJob.ID) async {
-        guard workflowJobIDs.contains(jobID),
-              var job = jobsByID[jobID] else {
+        guard var job = jobsByID[jobID] else { return }
+
+        // Preparation intentionally ends at `ready`. At that point there is
+        // no process to cancel, but the single active slot still has to be
+        // released before the UI can select a different input.
+        guard workflowJobIDs.contains(jobID) else {
+            if case .ready = job.state,
+               (try? job.transition(to: .cancelled)) != nil {
+                jobsByID[jobID] = job
+                publishSnapshot()
+            }
             return
         }
 
@@ -202,6 +359,10 @@ actor CompressionCoordinator {
         case .ready:
             cancellationIntents.insert(jobID)
             preRunCancellations[jobID]?.cancel()
+            if (try? job.transition(to: .cancelled)) != nil {
+                jobsByID[jobID] = job
+                publishSnapshot()
+            }
             return
         case .running(let progress):
             cancellationIntents.insert(jobID)
@@ -212,6 +373,7 @@ actor CompressionCoordinator {
                 return
             }
             jobsByID[jobID] = job
+            publishSnapshot()
         case .cancelling:
             cancellationIntents.insert(jobID)
             transcodeCancellations[jobID]?.cancel()
@@ -231,9 +393,28 @@ actor CompressionCoordinator {
         CompressionSnapshot(jobs: jobOrder.compactMap { jobsByID[$0] })
     }
 
+    /// Delivers the current snapshot immediately and then only the newest
+    /// pending value, preventing a slow UI consumer from accumulating progress
+    /// updates in memory.
+    func snapshots() -> AsyncStream<CompressionSnapshot> {
+        let identifier = UUID()
+        let pair = AsyncStream<CompressionSnapshot>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        snapshotContinuations[identifier] = pair.continuation
+        pair.continuation.onTermination = { [weak self] _ in
+            Task {
+                await self?.removeSnapshotContinuation(identifier)
+            }
+        }
+        pair.continuation.yield(snapshot())
+        return pair.stream
+    }
+
     private func runScopedWorkflow(
         jobID: CompressionJob.ID,
         configuration: JobConfiguration,
+        shouldProbeInput: Bool,
         startedAt: ContinuousClock.Instant,
         clock: ContinuousClock
     ) async throws -> CompressionJob {
@@ -243,15 +424,27 @@ actor CompressionCoordinator {
         var didCommit = false
 
         do {
-            let inputURL = try requireJob(jobID).inputURL
-            let sourceMedia = try await runProbe(
-                inputURL,
-                jobID: jobID
-            )
-            _ = try recordMediaInfo(sourceMedia, for: jobID)
-            _ = try transition(jobID: jobID, to: .ready)
-            _ = try configure(configuration, for: jobID)
-            _ = try transition(jobID: jobID, to: .queued)
+            let job = try requireJob(jobID)
+            let inputURL = job.inputURL
+            let sourceMedia: MediaInfo
+            if shouldProbeInput {
+                sourceMedia = try await runProbe(
+                    inputURL,
+                    jobID: jobID
+                )
+                _ = try recordMediaInfo(sourceMedia, for: jobID)
+                _ = try transition(jobID: jobID, to: .ready)
+                _ = try configure(configuration, for: jobID)
+                _ = try transition(jobID: jobID, to: .queued)
+            } else {
+                guard case .queued = job.state,
+                      let preparedMedia = job.mediaInfo else {
+                    throw CompressionWorkflowError.workflowStateChanged(
+                        job.state.phase
+                    )
+                }
+                sourceMedia = preparedMedia
+            }
 
             let plan = try await runOutputPlanning(
                 OutputPlanningRequest(
@@ -426,6 +619,7 @@ actor CompressionCoordinator {
                     to: .cancelling(lastProgress: progress)
                 )
                 jobsByID[jobID] = job
+                publishSnapshot()
             }
             throw CancellationError()
         }
@@ -514,6 +708,7 @@ actor CompressionCoordinator {
                (try? job.transition(to: .cancelled)) != nil {
                     jobsByID[jobID] = job
             }
+            publishSnapshot()
             throw CancellationError()
         }
 
@@ -706,6 +901,36 @@ actor CompressionCoordinator {
         }
     }
 
+    private func runCapabilityValidation(
+        _ mediaInfo: MediaInfo,
+        recipe: CompressionRecipe,
+        jobID: CompressionJob.ID
+    ) async throws {
+        let transcoder = dependencies.transcoder
+        try await runPreRunOperation(jobID: jobID) {
+            try await transcoder.validateCapabilities(
+                for: mediaInfo,
+                recipe: recipe
+            )
+        }
+    }
+
+    /// The last cancellation check, media publication, and transition to
+    /// `ready` are one actor-isolated critical section. A cancel that wins the
+    /// actor before this method is observed; a later cancel sees `ready` and
+    /// moves the job directly to `cancelled`.
+    private func finishPreparation(
+        _ mediaInfo: MediaInfo,
+        jobID: CompressionJob.ID
+    ) throws -> CompressionJob {
+        guard !Task.isCancelled,
+              !cancellationIntents.contains(jobID) else {
+            throw CancellationError()
+        }
+        _ = try recordMediaInfo(mediaInfo, for: jobID)
+        return try transition(jobID: jobID, to: .ready)
+    }
+
     private func runOutputPlanning(
         _ request: OutputPlanningRequest,
         jobID: CompressionJob.ID
@@ -839,6 +1064,30 @@ actor CompressionCoordinator {
             )
         }
         try await task.value
+    }
+
+    private func beginWorkflow(jobID: CompressionJob.ID) throws {
+        guard workflowJobIDs.insert(jobID).inserted else {
+            throw CompressionCoordinatorError.workflowAlreadyRunning(jobID)
+        }
+    }
+
+    private func endWorkflow(jobID: CompressionJob.ID) {
+        workflowJobIDs.remove(jobID)
+        cancellationIntents.remove(jobID)
+        preRunCancellations.removeValue(forKey: jobID)
+        transcodeCancellations.removeValue(forKey: jobID)
+    }
+
+    private func publishSnapshot() {
+        let value = snapshot()
+        for continuation in snapshotContinuations.values {
+            continuation.yield(value)
+        }
+    }
+
+    private func removeSnapshotContinuation(_ identifier: UUID) {
+        snapshotContinuations.removeValue(forKey: identifier)
     }
 
     private func requireJob(_ id: CompressionJob.ID) throws -> CompressionJob {

@@ -9,6 +9,31 @@ struct AppComposition {
         compressionFeatureModel = CompressionFeatureModel(coordinator: coordinator)
     }
 
+    /// Builds the production dependency graph once at application startup.
+    /// Both FFmpeg adapters intentionally share the same process runner, and
+    /// the transcoder and coordinator share one file-access implementation so
+    /// security-scoped access and temporary-output invariants stay aligned.
+    static func production() throws -> AppComposition {
+        let processRunner = ProcessRunner()
+        let fileAccess = SecurityScopedFileAccess()
+        let mediaProber = try FFprobeClient.bundled(
+            processRunner: processRunner
+        )
+        let transcoder = try FFmpegTranscodingService.bundled(
+            processRunner: processRunner,
+            fileAccess: fileAccess
+        )
+
+        return AppComposition(
+            dependencies: CompressionCoordinatorDependencies(
+                mediaProber: mediaProber,
+                transcoder: transcoder,
+                outputPlanner: OutputPlanner(),
+                fileAccess: fileAccess
+            )
+        )
+    }
+
     #if DEBUG
     static func preview() throws -> AppComposition {
         let mediaInfo = try MediaInfo(

@@ -112,6 +112,20 @@ actor FFmpegTranscodingService: Transcoding {
 
     /// Validates both the typed command mapping and the capabilities reported
     /// by the actual bundled FFmpeg build.
+    func validateCapabilities(
+        for mediaInfo: MediaInfo,
+        recipe: CompressionRecipe
+    ) async throws {
+        try Task.checkCancellation()
+        let capabilities = try await capabilityProvider.capabilities()
+        try Task.checkCancellation()
+        try preflightValidator.validate(
+            mediaInfo: mediaInfo,
+            recipe: recipe,
+            capabilities: capabilities
+        )
+    }
+
     func preflight(_ request: TranscodeRequest) async throws {
         _ = try await preparedArguments(for: request, activeToken: nil)
     }

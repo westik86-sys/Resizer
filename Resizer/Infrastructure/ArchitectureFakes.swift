@@ -10,14 +10,38 @@ nonisolated struct FakeMediaProber: MediaProbing {
 }
 
 nonisolated struct FakeTranscoder: Transcoding {
+    typealias CapabilityHandler = @Sendable (
+        MediaInfo,
+        CompressionRecipe
+    ) async throws -> Void
     typealias ProgressHandler = @Sendable (TranscodeProgress) async -> Void
     typealias Handler = @Sendable (
         TranscodeRequest,
         ProgressHandler
     ) async throws -> TranscodeResult
 
+    let capabilityHandler: CapabilityHandler
     let handler: Handler
     let cancellationHandler: @Sendable (CompressionJob.ID) async -> Void
+
+    init(
+        capabilityHandler: @escaping CapabilityHandler = { _, _ in },
+        handler: @escaping Handler,
+        cancellationHandler: @escaping @Sendable (
+            CompressionJob.ID
+        ) async -> Void
+    ) {
+        self.capabilityHandler = capabilityHandler
+        self.handler = handler
+        self.cancellationHandler = cancellationHandler
+    }
+
+    func validateCapabilities(
+        for mediaInfo: MediaInfo,
+        recipe: CompressionRecipe
+    ) async throws {
+        try await capabilityHandler(mediaInfo, recipe)
+    }
 
     func transcode(
         _ request: TranscodeRequest,

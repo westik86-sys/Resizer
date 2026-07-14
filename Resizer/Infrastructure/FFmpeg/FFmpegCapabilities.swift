@@ -514,16 +514,28 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
         _ request: TranscodeRequest,
         capabilities: FFmpegCapabilities
     ) throws {
-        let inputFormats = Set(request.mediaInfo.formatNames.map {
+        try validate(
+            mediaInfo: request.mediaInfo,
+            recipe: request.recipe,
+            capabilities: capabilities
+        )
+    }
+
+    func validate(
+        mediaInfo: MediaInfo,
+        recipe: CompressionRecipe,
+        capabilities: FFmpegCapabilities
+    ) throws {
+        let inputFormats = Set(mediaInfo.formatNames.map {
             $0.lowercased()
         })
         guard !inputFormats.isDisjoint(with: capabilities.demuxers) else {
             throw FFmpegPreflightError.unsupportedInputFormat(
-                request.mediaInfo.formatNames
+                mediaInfo.formatNames
             )
         }
 
-        let videos = request.mediaInfo.videoStreams.filter {
+        let videos = mediaInfo.videoStreams.filter {
             !$0.disposition.isAttachedPicture
         }
         guard let video = preferredVideo(videos) else {
@@ -558,8 +570,8 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
             category: .outputProtocol
         )
 
-        if case .aac = request.recipe.audioPolicy,
-           let audio = preferredAudio(request.mediaInfo.audioStreams) {
+        if case .aac = recipe.audioPolicy,
+           let audio = preferredAudio(mediaInfo.audioStreams) {
             try requireDecoder(
                 codecName: audio.codecName,
                 streamIndex: audio.index,

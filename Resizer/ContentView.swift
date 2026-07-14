@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,63 +17,50 @@ struct ContentView: View {
         }
     }
 
-    @StateObject private var model = ToolchainSpikeModel()
+    @ObservedObject private var model: CompressionFeatureModel
+    @AppStorage(CompressionPreferences.outputFilenameSuffixKey)
+    private var filenameSuffix = CompressionPreferences.defaultOutputFilenameSuffix
+    @AppStorage(CompressionPreferences.outputConflictPolicyKey)
+    private var conflictPolicyRawValue =
+        CompressionPreferences.defaultOutputConflictPolicy.rawValue
+
     @State private var importTarget: ImportTarget = .input
     @State private var isImporterPresented = false
+    @State private var isDropTargeted = false
+    @State private var isAdvancedSettingsExpanded = false
+    @State private var isDiagnosticsExpanded = false
+
+    init(model: CompressionFeatureModel) {
+        _model = ObservedObject(wrappedValue: model)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("FFmpeg Toolchain Spike", systemImage: "wrench.and.screwdriver")
-                    .font(.title2.weight(.semibold))
-                Text("Temporary stage 2 diagnostic for H.264/AAC MOV or MP4 files.")
-                    .foregroundStyle(.secondary)
-            }
+        VStack(spacing: 0) {
+            header
+            Divider()
 
-            GroupBox("Selections") {
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
-                    GridRow {
-                        Text("Input video")
-                            .foregroundStyle(.secondary)
-                        Text(model.inputURL?.lastPathComponent ?? "Not selected")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Choose File…") {
-                            importTarget = .input
-                            isImporterPresented = true
-                        }
-                    }
-
-                    GridRow {
-                        Text("Output folder")
-                            .foregroundStyle(.secondary)
-                        Text(model.outputDirectoryURL?.path(percentEncoded: false) ?? "Not selected")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Choose Folder…") {
-                            importTarget = .outputDirectory
-                            isImporterPresented = true
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            statusView
-
-            HStack {
-                Spacer()
-                Button("Run Probe + 3 Second Encode") {
-                    model.run()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canRun)
+            ScrollView {
+                screenContent
+                    .frame(maxWidth: 960)
+                    .padding(28)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .padding(24)
-        .frame(minWidth: 640, minHeight: 430)
+        .frame(minWidth: 720, idealWidth: 860, minHeight: 560)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    presentInputImporter()
+                } label: {
+                    Label("Choose Video…", systemImage: "plus")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(!model.canReplaceInput)
+                .accessibilityIdentifier("choose-video-toolbar")
+                .help("Choose one MOV or MP4 video (Command-O)")
+            }
+        }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: importTarget.allowedContentTypes,
@@ -82,85 +70,1027 @@ struct ContentView: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Resizer")
+                    .font(.title2.weight(.semibold))
+                Text("Create a smaller, compatible MP4 copy.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Label("Local processing", systemImage: "lock.shield")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.quaternary, in: Capsule())
+                .accessibilityLabel("Videos are processed locally on this Mac")
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+    }
+
     @ViewBuilder
-    private var statusView: some View {
-        switch model.state {
-        case .idle:
-            ContentUnavailableView(
-                "Ready for a diagnostic run",
-                systemImage: "video",
-                description: Text(
-                    "The source remains unchanged. A unique temporary MP4 is validated before it is renamed."
-                )
+    private var screenContent: some View {
+        switch model.screenState {
+        case .empty:
+            emptyState
+        case .importing:
+            activityCard(
+                title: "Importing video…",
+                detail: "Acquiring secure access to the selected file."
             )
-        case .unavailable(let message):
-            statusPanel(title: "Toolchain unavailable", message: message, color: .red)
-        case .running:
-            HStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.small)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Running bundled tools…")
-                        .font(.headline)
-                    Text("Probing, encoding, and validating the temporary output.")
+        case .probing(let job):
+            VStack(spacing: 20) {
+                sourceCard(job)
+                activityCard(
+                    title: "Reading video details…",
+                    detail: "Checking duration, streams, codecs, and dimensions."
+                )
+            }
+        case .ready(let job):
+            readyView(job)
+        case .running(let job, let stage):
+            runningView(job, stage: stage)
+        case .cancelling(let job, let progress):
+            cancellingView(job, progress: progress)
+        case .success(let job, let result):
+            successView(job, result: result)
+        case .failure(let job, let failure):
+            failureView(job, presentation: failure)
+        case .validationError(let message):
+            validationErrorView(message)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "arrow.down.doc.fill")
+                .font(.system(size: 46, weight: .light))
+                .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+
+            VStack(spacing: 7) {
+                Text("Drop a video here")
+                    .font(.title2.weight(.semibold))
+                Text("MOV and MP4 are supported")
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("Choose Video…") {
+                presentInputImporter()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("choose-video")
+
+            Label(
+                "The original is never changed. Your video stays on this Mac.",
+                systemImage: "checkmark.shield"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 390)
+        .padding(36)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.08) : .clear)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(
+                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
+                    style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                )
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .dropDestination(for: URL.self) { urls, _ in
+            guard model.canReplaceInput, urls.count == 1,
+                  let inputURL = urls.first else {
+                return false
+            }
+            Task { await model.importVideo(inputURL) }
+            return true
+        } isTargeted: { isDropTargeted = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("drop-zone")
+        .accessibilityLabel("Video drop zone")
+        .accessibilityHint("Drop one MOV or MP4 video, or use Choose Video")
+    }
+
+    private func readyView(_ job: CompressionJob) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+            settingsCard
+            outputCard
+
+            HStack {
+                Text("A unique temporary file is validated before the final copy appears.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Start Compression") {
+                    Task {
+                        await model.start(
+                            filenameSuffix: validatedFilenameSuffix,
+                            conflictPolicy: conflictPolicy
+                        )
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.canStart)
+                .accessibilityIdentifier("start-compression")
+            }
+        }
+    }
+
+    private var settingsCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 18) {
+                Picker("Preset", selection: presetBinding) {
+                    ForEach(CompressionPreset.allCases, id: \.rawValue) { preset in
+                        Text(preset.title).tag(Optional(preset))
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("preset-picker")
+
+                if model.draftSettings.selectedPreset == nil {
+                    Text("Custom settings")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("custom-settings-status")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Smaller file")
+                        Spacer()
+                        Text("Better quality")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Slider(value: qualityBinding, in: 0 ... 1)
+                        .accessibilityLabel("Video quality")
+                        .accessibilityValue(
+                            model.draftSettings.quality.formatted(
+                                .percent.precision(.fractionLength(0))
+                            )
+                        )
+                        .accessibilityIdentifier("quality-slider")
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.secondary)
+                    Text(recipeSummary)
+                        .font(.callout)
+                }
+
+                DisclosureGroup(
+                    "Advanced Settings",
+                    isExpanded: $isAdvancedSettingsExpanded
+                ) {
+                    Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 14) {
+                        GridRow {
+                            Text("Maximum resolution")
+                            Picker("Maximum resolution", selection: resolutionBinding) {
+                                ForEach(
+                                    Array(
+                                        CompressionDraftSettings.ResolutionOption
+                                            .allCases.enumerated()
+                                    ),
+                                    id: \.offset
+                                ) { _, option in
+                                    Text(option.title).tag(option)
+                                }
+                            }
+                            .labelsHidden()
+                            .accessibilityIdentifier("resolution-picker")
+                        }
+
+                        GridRow {
+                            Text("Frame rate")
+                            Picker("Frame rate", selection: frameRateBinding) {
+                                ForEach(
+                                    Array(
+                                        CompressionDraftSettings.FrameRateOption
+                                            .allCases.enumerated()
+                                    ),
+                                    id: \.offset
+                                ) { _, option in
+                                    Text(option.title).tag(option)
+                                }
+                            }
+                            .labelsHidden()
+                            .accessibilityIdentifier("frame-rate-picker")
+                        }
+
+                        GridRow {
+                            Text("Audio")
+                            Picker("Audio", selection: audioBinding) {
+                                ForEach(
+                                    Array(
+                                        CompressionDraftSettings.AudioOption
+                                            .allCases.enumerated()
+                                    ),
+                                    id: \.offset
+                                ) { _, option in
+                                    Text(option.title).tag(option)
+                                }
+                            }
+                            .labelsHidden()
+                            .accessibilityIdentifier("audio-picker")
+                        }
+
+                        GridRow {
+                            Text("Metadata")
+                            Picker("Metadata", selection: metadataBinding) {
+                                ForEach(
+                                    Array(
+                                        CompressionDraftSettings.MetadataOption
+                                            .allCases.enumerated()
+                                    ),
+                                    id: \.offset
+                                ) { _, option in
+                                    Text(option.title).tag(option)
+                                }
+                            }
+                            .labelsHidden()
+                            .accessibilityIdentifier("metadata-picker")
+                        }
+                    }
+                    .padding(.top, 12)
+                }
+                .accessibilityIdentifier("advanced-settings")
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Compression", systemImage: "slider.horizontal.3")
+                .font(.headline)
+        }
+    }
+
+    private var outputCard: some View {
+        GroupBox {
+            HStack(spacing: 14) {
+                Image(systemName: "folder")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if let outputURL = model.outputDirectoryURL {
+                        Text(outputURL.lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("Output: source name\(validatedFilenameSuffix).mp4")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Choose where to save the compressed copy")
+                        Text("The source folder is not assumed in the sandbox.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                Button(model.outputDirectoryURL == nil ? "Choose Folder…" : "Change…") {
+                    importTarget = .outputDirectory
+                    isImporterPresented = true
+                }
+                .accessibilityIdentifier("choose-output-folder")
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Text("Output Folder")
+                .font(.headline)
+        }
+    }
+
+    private func runningView(
+        _ job: CompressionJob,
+        stage: CompressionRunningStage
+    ) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Label(stage.title, systemImage: stage.symbolName)
+                            .font(.title3.weight(.semibold))
+                        Spacer()
+                        if case .encoding(let progress?) = stage,
+                           let fraction = progress.fractionCompleted {
+                            Text(fraction, format: .percent.precision(.fractionLength(0)))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    progressView(for: stage)
+
+                    if case .encoding(let progress?) = stage {
+                        HStack(spacing: 20) {
+                            if let speed = progress.speed, speed > 0 {
+                                Label(
+                                    "\(speed.formatted(.number.precision(.fractionLength(1))))×",
+                                    systemImage: "speedometer"
+                                )
+                            }
+                            if let eta = model.estimatedRemainingSeconds {
+                                Label(
+                                    "About \(Self.durationString(seconds: eta)) remaining",
+                                    systemImage: "clock"
+                                )
+                            }
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Text("The original remains untouched.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") {
+                            Task { await model.cancel() }
+                        }
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(!model.canCancel)
+                        .accessibilityIdentifier("cancel-compression")
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
+    private func cancellingView(
+        _ job: CompressionJob,
+        progress: TranscodeProgress?
+    ) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .controlSize(.small)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Cancelling…")
+                                .font(.headline)
+                            Text("Waiting for the encoder and its output pipes to close safely.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let fraction = progress?.fractionCompleted {
+                        ProgressView(value: fraction)
+                            .accessibilityIdentifier("compression-progress")
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
+    private func successView(
+        _ job: CompressionJob,
+        result: CompressionResult
+    ) -> some View {
+        let inputBytes = job.mediaInfo?.byteCount ?? 0
+
+        return VStack(spacing: 20) {
+            GroupBox {
+                VStack(spacing: 18) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.green)
+                        .accessibilityHidden(true)
+
+                    VStack(spacing: 5) {
+                        Text("Compressed copy is ready")
+                            .font(.title2.weight(.semibold))
+                        Text(result.outputURL.lastPathComponent)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 28) {
+                            resultMetric("Before", value: Self.byteCountString(inputBytes))
+                            Image(systemName: "arrow.right")
+                                .foregroundStyle(.tertiary)
+                            resultMetric("After", value: Self.byteCountString(result.outputByteCount))
+                            if let savings = Self.savings(input: inputBytes, output: result.outputByteCount) {
+                                resultMetric("Saved", value: savings)
+                            }
+                            resultMetric("Time", value: Self.durationString(result.elapsed))
+                        }
+
+                        VStack(spacing: 12) {
+                            resultMetric(
+                                "Size",
+                                value: "\(Self.byteCountString(inputBytes)) → \(Self.byteCountString(result.outputByteCount))"
+                            )
+                            if let savings = Self.savings(input: inputBytes, output: result.outputByteCount) {
+                                resultMetric("Saved", value: savings)
+                            }
+                            resultMetric("Time", value: Self.durationString(result.elapsed))
+                        }
+                    }
+
+                    HStack {
+                        Button("Choose Another Video…") {
+                            presentInputImporter()
+                        }
+                        .accessibilityIdentifier("choose-another-video")
+
+                        Spacer()
+
+                        Button("Reveal in Finder") {
+                            model.revealResultInFinder()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("reveal-output")
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private func failureView(
+        _ job: CompressionJob,
+        presentation: CompressionFailurePresentation
+    ) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+
+            if job.mediaInfo != nil {
+                settingsCard
+                outputCard
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: presentation.symbolName)
+                            .font(.title2)
+                            .foregroundStyle(presentation.tint)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(presentation.title)
+                                .font(.title3.weight(.semibold))
+                            Text(presentation.detail)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if model.diagnosticText != nil {
+                        diagnosticDisclosure
+                    }
+
+                    HStack {
+                        Button("Choose Another Video…") {
+                            presentInputImporter()
+                        }
+                        .disabled(!model.canReplaceInput)
+
+                        Spacer()
+
+                        Button("Retry") {
+                            Task {
+                                await model.retry(
+                                    filenameSuffix: validatedFilenameSuffix,
+                                    conflictPolicy: conflictPolicy
+                                )
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canRetry)
+                        .accessibilityIdentifier("retry-compression")
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var diagnosticDisclosure: some View {
+        DisclosureGroup("Diagnostics", isExpanded: $isDiagnosticsExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Resizer · FFmpeg \(CompressionPreferences.bundledFFmpegVersion) · LGPL-only")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let text = model.diagnosticText {
+                    ScrollView {
+                        Text(text)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                    .padding(10)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+
+                    HStack {
+                        Text("Only the bounded tail of the encoder diagnostic is shown.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Copy Diagnostics") {
+                            model.copyDiagnostics()
+                        }
+                        .accessibilityIdentifier("copy-diagnostics")
+                    }
+                }
+            }
+            .padding(.top, 10)
+        }
+        .accessibilityIdentifier("diagnostics")
+    }
+
+    private func validationErrorView(_ message: String) -> some View {
+        VStack(spacing: 18) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 42))
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text("Check your selection")
+                .font(.title2.weight(.semibold))
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+
+            HStack {
+                Button("Back") {
+                    model.dismissValidationError()
+                }
+                Button("Choose Video…") {
+                    presentInputImporter()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canReplaceInput)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 360)
+        .accessibilityIdentifier("validation-error")
+    }
+
+    private func sourceCard(_ job: CompressionJob) -> some View {
+        GroupBox {
+            HStack(alignment: .top, spacing: 16) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 30))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, height: 42)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(job.inputURL.lastPathComponent)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityLabel("Source video \(job.inputURL.lastPathComponent)")
+
+                    if let mediaInfo = job.mediaInfo {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.adaptive(minimum: 130), alignment: .leading),
+                            ],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            metadataValue("Size", Self.byteCountString(mediaInfo.byteCount))
+                            metadataValue("Duration", Self.mediaDurationString(mediaInfo.durationMicroseconds))
+                            metadataValue("Resolution", Self.resolutionString(mediaInfo))
+                            metadataValue("Frame rate", Self.frameRateString(mediaInfo))
+                            metadataValue("Codecs", Self.codecString(mediaInfo))
+                        }
+                    } else {
+                        Text("Waiting for metadata…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-        case .succeeded(let report):
-            let size = ByteCountFormatter.string(
-                fromByteCount: Int64(report.outputByteCount),
-                countStyle: .file
-            )
-            statusPanel(
-                title: "Diagnostic encode succeeded",
-                message: "Input video: \(report.inputVideoCodec)\nOutput: \(report.outputURL.path(percentEncoded: false))\nSize: \(size)",
-                color: .green
-            )
-        case .failed(let message):
-            statusPanel(title: "Diagnostic run failed", message: message, color: .red)
-        }
-    }
-
-    private func statusPanel(
-        title: String,
-        message: String,
-        color: Color
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            .padding(.vertical, 4)
+        } label: {
+            Text("Source")
                 .font(.headline)
-                .foregroundStyle(color)
-            Text(message)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityIdentifier("source-card")
     }
 
-    private func handleSelection(
-        _ result: Result<[URL], any Error>
-    ) {
-        switch result {
-        case .success(let urls):
-            if let url = urls.first {
-                switch importTarget {
-                case .input:
-                    model.selectInput(url)
-                case .outputDirectory:
-                    model.selectOutputDirectory(url)
+    private func activityCard(title: String, detail: String) -> some View {
+        GroupBox {
+            HStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                    Text(detail)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if model.canCancel {
+                    Button("Cancel") {
+                        Task { await model.cancel() }
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("cancel-compression")
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        }
+        .accessibilityIdentifier("workflow-activity")
+    }
+
+    @ViewBuilder
+    private func progressView(for stage: CompressionRunningStage) -> some View {
+        if case .encoding(let progress?) = stage,
+           let fraction = progress.fractionCompleted {
+            ProgressView(value: fraction)
+                .accessibilityValue(
+                    fraction.formatted(.percent.precision(.fractionLength(0)))
+                )
+                .accessibilityIdentifier("compression-progress")
+        } else {
+            ProgressView()
+                .accessibilityIdentifier("compression-progress")
+        }
+    }
+
+    private func metadataValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout)
+                .lineLimit(1)
+        }
+    }
+
+    private func resultMetric(_ label: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.headline)
+                .monospacedDigit()
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var presetBinding: Binding<CompressionPreset?> {
+        Binding(
+            get: { model.draftSettings.selectedPreset },
+            set: { preset in
+                if let preset { model.applyPreset(preset) }
+            }
+        )
+    }
+
+    private var qualityBinding: Binding<Double> {
+        Binding(
+            get: { model.draftSettings.quality },
+            set: { model.setQuality($0) }
+        )
+    }
+
+    private var resolutionBinding: Binding<CompressionDraftSettings.ResolutionOption> {
+        Binding(
+            get: { model.draftSettings.resolution },
+            set: { model.setResolution($0) }
+        )
+    }
+
+    private var frameRateBinding: Binding<CompressionDraftSettings.FrameRateOption> {
+        Binding(
+            get: { model.draftSettings.frameRate },
+            set: { model.setFrameRate($0) }
+        )
+    }
+
+    private var audioBinding: Binding<CompressionDraftSettings.AudioOption> {
+        Binding(
+            get: { model.draftSettings.audio },
+            set: { model.setAudio($0) }
+        )
+    }
+
+    private var metadataBinding: Binding<CompressionDraftSettings.MetadataOption> {
+        Binding(
+            get: { model.draftSettings.metadata },
+            set: { model.setMetadata($0) }
+        )
+    }
+
+    private var recipeSummary: String {
+        let settings = model.draftSettings
+        return [
+            "MP4", "H.264", settings.resolution.summary,
+            settings.frameRate.summary, settings.audio.summary,
+        ].joined(separator: " · ")
+    }
+
+    private var validatedFilenameSuffix: String {
+        guard case let .valid(normalizedValue) =
+                CompressionPreferences.validateOutputFilenameSuffix(filenameSuffix) else {
+            return CompressionPreferences.defaultOutputFilenameSuffix
+        }
+        return normalizedValue
+    }
+
+    private var conflictPolicy: OutputConflictPolicy {
+        (OutputConflictPreference(rawValue: conflictPolicyRawValue)
+            ?? CompressionPreferences.defaultOutputConflictPolicy).domainValue
+    }
+
+    private func presentInputImporter() {
+        importTarget = .input
+        isImporterPresented = true
+    }
+
+    private func handleSelection(_ result: Result<[URL], any Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            switch importTarget {
+            case .input:
+                Task { await model.importVideo(url) }
+            case .outputDirectory:
+                model.selectOutputDirectory(url)
+            }
         case .failure(let error):
-            model.reportSelectionError(error)
+            let cocoaError = error as NSError
+            guard !(cocoaError.domain == NSCocoaErrorDomain
+                    && cocoaError.code == NSUserCancelledError) else {
+                return
+            }
+            switch importTarget {
+            case .input:
+                model.reportInputSelectionError()
+            case .outputDirectory:
+                model.reportOutputDirectorySelectionError()
+            }
         }
     }
 }
 
-#Preview {
-    ContentView()
+private extension CompressionPreset {
+    var title: String {
+        switch self {
+        case .highQuality: "Best Quality"
+        case .balanced: "Balanced"
+        case .smallFile: "Smaller File"
+        }
+    }
 }
+
+private extension CompressionDraftSettings.ResolutionOption {
+    var title: String {
+        switch self {
+        case .original: "Original"
+        case .p2160: "Up to 2160p"
+        case .p1080: "Up to 1080p"
+        case .p720: "Up to 720p"
+        case .p480: "Up to 480p"
+        }
+    }
+
+    var summary: String { title.lowercased() }
+}
+
+private extension CompressionDraftSettings.FrameRateOption {
+    var title: String {
+        switch self {
+        case .original: "Original"
+        case .fps60: "Up to 60 fps"
+        case .fps30: "Up to 30 fps"
+        case .fps24: "Up to 24 fps"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .original: "original FPS"
+        case .fps60: "up to 60 FPS"
+        case .fps30: "up to 30 FPS"
+        case .fps24: "up to 24 FPS"
+        }
+    }
+}
+
+private extension CompressionDraftSettings.AudioOption {
+    var title: String {
+        switch self {
+        case .aac192Kbps: "AAC 192 kbps"
+        case .aac128Kbps: "AAC 128 kbps"
+        case .aac96Kbps: "AAC 96 kbps"
+        case .remove: "No audio"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .remove: "no audio"
+        case .aac192Kbps, .aac128Kbps, .aac96Kbps: "AAC"
+        }
+    }
+}
+
+private extension CompressionDraftSettings.MetadataOption {
+    var title: String {
+        switch self {
+        case .preserve: "Preserve common metadata"
+        case .remove: "Remove metadata"
+        }
+    }
+}
+
+private extension CompressionRunningStage {
+    var title: String {
+        switch self {
+        case .preparing: "Preparing compression…"
+        case .encoding: "Compressing video…"
+        case .validating: "Validating compressed copy…"
+        case .committing: "Saving final copy…"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .preparing: "gearshape.2"
+        case .encoding: "film"
+        case .validating: "checkmark.shield"
+        case .committing: "square.and.arrow.down"
+        }
+    }
+}
+
+private extension CompressionFailurePresentation {
+    var title: String {
+        switch self {
+        case .cancelled:
+            "Compression cancelled"
+        case .transcode(let failure):
+            switch failure.stage {
+            case .probe: "Couldn’t read this video"
+            case .preflight: "Couldn’t prepare compression"
+            case .encode: "Compression failed"
+            case .validate: "Couldn’t validate the compressed copy"
+            case .commit: "Couldn’t save the compressed copy"
+            }
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .cancelled:
+            "No final output was published. You can safely retry."
+        case .transcode(let failure):
+            switch failure.reason {
+            case .serviceUnavailable:
+                "The bundled video tools or required encoder are unavailable."
+            case .invalidMedia:
+                "The selected video contains media this version cannot process."
+            case .processFailed(let exitCode):
+                if let exitCode {
+                    "The bundled encoder exited with status \(exitCode)."
+                } else {
+                    "The bundled encoder stopped unexpectedly."
+                }
+            case .fileSystem:
+                "Check that the selected file and output folder are still available."
+            case .unknown:
+                "The operation stopped unexpectedly. Diagnostics may contain more detail."
+            }
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .cancelled: "xmark.circle"
+        case .transcode: "exclamationmark.triangle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .cancelled: .secondary
+        case .transcode: .red
+        }
+    }
+}
+
+private extension ContentView {
+    static func byteCountString(_ byteCount: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+    }
+
+    static func mediaDurationString(_ microseconds: Int64?) -> String {
+        guard let microseconds else { return "Unknown" }
+        return durationString(seconds: Double(microseconds) / 1_000_000)
+    }
+
+    static func durationString(_ duration: Duration) -> String {
+        let components = duration.components
+        let seconds = Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        return durationString(seconds: seconds)
+    }
+
+    static func durationString(seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "Unknown" }
+        let rounded = Int(seconds.rounded())
+        let hours = rounded / 3_600
+        let minutes = (rounded % 3_600) / 60
+        let remainingSeconds = rounded % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+
+    static func resolutionString(_ mediaInfo: MediaInfo) -> String {
+        guard let video = primaryVideo(in: mediaInfo),
+              let encodedWidth = video.encodedWidth,
+              let encodedHeight = video.encodedHeight else {
+            return "Unknown"
+        }
+        let rotation = abs(video.rotationDegrees ?? 0) % 180
+        let width = rotation == 90 ? encodedHeight : encodedWidth
+        let height = rotation == 90 ? encodedWidth : encodedHeight
+        return "\(width) × \(height)"
+    }
+
+    static func frameRateString(_ mediaInfo: MediaInfo) -> String {
+        guard let value = primaryVideo(in: mediaInfo)?.frameRate?.doubleValue else {
+            return "Unknown"
+        }
+        return "\(value.formatted(.number.precision(.fractionLength(0 ... 2)))) fps"
+    }
+
+    static func codecString(_ mediaInfo: MediaInfo) -> String {
+        let video = primaryVideo(in: mediaInfo)?.codecName?.uppercased() ?? "Unknown video"
+        let audio = mediaInfo.audioStreams.first?.codecName?.uppercased()
+        return audio.map { "\(video) / \($0)" } ?? "\(video) / No audio"
+    }
+
+    static func savings(input: Int64, output: Int64) -> String? {
+        guard input > 0, output >= 0, output < input else { return nil }
+        let fraction = 1 - (Double(output) / Double(input))
+        return fraction.formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    static func primaryVideo(in mediaInfo: MediaInfo) -> VideoStreamInfo? {
+        mediaInfo.videoStreams.first { !$0.disposition.isAttachedPicture }
+    }
+}
+
+#if DEBUG
+#Preview("Empty") {
+    if let composition = try? AppComposition.preview() {
+        ContentView(model: composition.compressionFeatureModel)
+    } else {
+        Text("Preview unavailable")
+    }
+}
+
+#Preview("Ready") {
+    if let composition = try? AppComposition.preview() {
+        ContentView(model: composition.compressionFeatureModel)
+            .task {
+                let model = composition.compressionFeatureModel
+                guard model.currentJob == nil else { return }
+                await model.importVideo(
+                    URL(fileURLWithPath: "/tmp/Screen Recording.mov")
+                )
+                model.selectOutputDirectory(
+                    URL(fileURLWithPath: "/tmp", isDirectory: true)
+                )
+            }
+    } else {
+        Text("Preview unavailable")
+    }
+}
+#endif
