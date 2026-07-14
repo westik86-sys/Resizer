@@ -81,10 +81,56 @@ nonisolated enum CompressionResultValidationError: Error, Sendable, Equatable {
     case invalidResult
 }
 
+/// Stable, path-free identifiers for infrastructure failures that do not have
+/// an FFmpeg stderr tail. Keep this closed and typed so diagnostics cannot
+/// accidentally expose an underlying error description or selected URL.
+nonisolated enum FailureTechnicalCode: String, Sendable, Equatable {
+    case processExecutionIDAlreadyUsed = "process_execution_id_already_used"
+    case processStandardInputConfigurationFailed =
+        "process_standard_input_configuration_failed"
+    case processStandardOutputConfigurationFailed =
+        "process_standard_output_configuration_failed"
+    case processLaunchFailed = "process_launch_failed"
+    case processStandardOutputReadFailed =
+        "process_standard_output_read_failed"
+    case processStandardErrorReadFailed =
+        "process_standard_error_read_failed"
+    case processEventBufferOverflow = "process_event_buffer_overflow"
+    case transcoderExecutableUnavailable =
+        "transcoder_executable_unavailable"
+    case transcoderExecutableInvalid = "transcoder_executable_invalid"
+    case transcoderDuplicateJob = "transcoder_duplicate_job"
+    case transcoderInvalidProcessRequest =
+        "transcoder_invalid_process_request"
+    case transcoderInvalidTemporaryReservation =
+        "transcoder_invalid_temporary_reservation"
+    case transcoderInvalidProcessEventSequence =
+        "transcoder_invalid_process_event_sequence"
+    case transcoderProgressProtocolError =
+        "transcoder_progress_protocol_error"
+    case transcoderTemporaryOutputMissing =
+        "transcoder_temporary_output_missing"
+    case transcoderTemporaryOutputInvalid =
+        "transcoder_temporary_output_invalid"
+}
+
 nonisolated struct TranscodeFailure: Error, Sendable, Equatable {
     let stage: FailureStage
     let reason: FailureReason
     let diagnosticTail: BoundedDiagnostic?
+    let technicalCode: FailureTechnicalCode?
+
+    init(
+        stage: FailureStage,
+        reason: FailureReason,
+        diagnosticTail: BoundedDiagnostic?,
+        technicalCode: FailureTechnicalCode? = nil
+    ) {
+        self.stage = stage
+        self.reason = reason
+        self.diagnosticTail = diagnosticTail
+        self.technicalCode = technicalCode
+    }
 
     var retryTarget: RetryTarget {
         switch stage {

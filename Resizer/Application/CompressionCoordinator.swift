@@ -1261,8 +1261,59 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         return TranscodeFailure(
             stage: stage,
             reason: reason,
-            diagnosticTail: nil
+            diagnosticTail: nil,
+            technicalCode: failureTechnicalCode(for: error)
         )
+    }
+
+    private func failureTechnicalCode(
+        for error: any Error
+    ) -> FailureTechnicalCode? {
+        if let runnerError = error as? ProcessRunnerError {
+            switch runnerError {
+            case .executionIDAlreadyUsed:
+                return .processExecutionIDAlreadyUsed
+            case .standardInputConfigurationFailed:
+                return .processStandardInputConfigurationFailed
+            case .standardOutputConfigurationFailed:
+                return .processStandardOutputConfigurationFailed
+            case .launchFailed:
+                return .processLaunchFailed
+            case .outputReadFailed(_, let channel):
+                return switch channel {
+                case .standardOutput: .processStandardOutputReadFailed
+                case .standardError: .processStandardErrorReadFailed
+                }
+            case .eventBufferOverflow:
+                return .processEventBufferOverflow
+            }
+        }
+
+        guard let serviceError = error as? FFmpegTranscodingServiceError else {
+            return nil
+        }
+        return switch serviceError {
+        case .bundledExecutableUnavailable:
+            .transcoderExecutableUnavailable
+        case .invalidExecutableURL:
+            .transcoderExecutableInvalid
+        case .duplicateJob:
+            .transcoderDuplicateJob
+        case .invalidProcessRequest:
+            .transcoderInvalidProcessRequest
+        case .invalidTemporaryReservation:
+            .transcoderInvalidTemporaryReservation
+        case .invalidProcessEventSequence:
+            .transcoderInvalidProcessEventSequence
+        case .progressParsing:
+            .transcoderProgressProtocolError
+        case .temporaryOutputMissing:
+            .transcoderTemporaryOutputMissing
+        case .invalidTemporaryOutput:
+            .transcoderTemporaryOutputInvalid
+        case .processFailed:
+            nil
+        }
     }
 
     private func processFailure(

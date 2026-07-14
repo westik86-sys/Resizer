@@ -285,8 +285,9 @@ private extension FFmpegProgressParser {
             _ value: String,
             key: MetricKey
         ) throws -> Int64? {
-            guard !isUnavailable(value) else { return nil }
-            guard let parsed = Int64(value), parsed >= 0 else {
+            let normalized = normalizedMetricValue(value)
+            guard !isUnavailable(normalized) else { return nil }
+            guard let parsed = Int64(normalized), parsed >= 0 else {
                 throw FFmpegProgressParsingError.invalidValue(
                     key: key.rawValue
                 )
@@ -298,8 +299,9 @@ private extension FFmpegProgressParser {
             _ value: String,
             key: MetricKey
         ) throws -> Double? {
-            guard !isUnavailable(value) else { return nil }
-            guard let parsed = Double(value),
+            let normalized = normalizedMetricValue(value)
+            guard !isUnavailable(normalized) else { return nil }
+            guard let parsed = Double(normalized),
                   parsed.isFinite,
                   parsed >= 0 else {
                 throw FFmpegProgressParsingError.invalidValue(
@@ -313,9 +315,10 @@ private extension FFmpegProgressParser {
             _ value: String,
             key: MetricKey
         ) throws -> Double? {
-            guard !isUnavailable(value) else { return nil }
-            guard value.last == "x",
-                  let parsed = Double(value.dropLast()),
+            let normalized = normalizedMetricValue(value)
+            guard !isUnavailable(normalized) else { return nil }
+            guard normalized.last == "x",
+                  let parsed = Double(normalized.dropLast()),
                   parsed.isFinite,
                   parsed >= 0 else {
                 throw FFmpegProgressParsingError.invalidValue(
@@ -329,8 +332,9 @@ private extension FFmpegProgressParser {
             _ value: String,
             key: MetricKey
         ) throws -> Int64? {
-            guard !isUnavailable(value) else { return nil }
-            let components = value.split(
+            let normalized = normalizedMetricValue(value)
+            guard !isUnavailable(normalized) else { return nil }
+            let components = normalized.split(
                 separator: ":",
                 omittingEmptySubsequences: false
             )
@@ -400,6 +404,13 @@ private extension FFmpegProgressParser {
 
         private func isUnavailable(_ value: String) -> Bool {
             value.caseInsensitiveCompare("N/A") == .orderedSame
+        }
+
+        private func normalizedMetricValue(_ value: String) -> String {
+            // FFmpeg right-aligns some machine-readable progress values (most
+            // visibly `speed= 4.1x`). Horizontal padding is presentation, not
+            // part of the value, and varies with timing and input speed.
+            value.trimmingCharacters(in: .whitespaces)
         }
     }
 }

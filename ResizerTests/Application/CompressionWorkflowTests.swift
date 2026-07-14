@@ -273,6 +273,7 @@ struct CompressionWorkflowTests {
 
         #expect(failure.stage == .probe)
         #expect(failure.reason == .serviceUnavailable)
+        #expect(failure.technicalCode == .processLaunchFailed)
         try await expectFailedState(
             coordinator: harness.coordinator,
             jobID: harness.jobID,
@@ -624,6 +625,25 @@ struct CompressionWorkflowTests {
             jobID: harness.jobID,
             stage: .encode
         )
+        try await expectOnlyExactCleanup(harness)
+    }
+
+    @Test("Progress protocol failures expose a path-free technical code")
+    func progressProtocolFailureMapping() async throws {
+        let harness = try await WorkflowHarness.make(
+            options: .init(
+                transcodingServiceFailure: .progressParsing(
+                    .invalidValue(key: "speed")
+                )
+            )
+        )
+
+        let failure = try await requireFailure(harness)
+
+        #expect(failure.stage == .encode)
+        #expect(failure.reason == .serviceUnavailable)
+        #expect(failure.diagnosticTail == nil)
+        #expect(failure.technicalCode == .transcoderProgressProtocolError)
         try await expectOnlyExactCleanup(harness)
     }
 

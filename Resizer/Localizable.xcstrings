@@ -2671,6 +2671,22 @@
         }
       }
     },
+    "Technical code: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Technical code: %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Технический код: %@"
+          }
+        }
+      }
+    },
     "Technical details include only a bounded, redacted diagnostic tail." : {
       "localizations" : {
         "en" : {

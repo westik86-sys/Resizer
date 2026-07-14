@@ -56,6 +56,12 @@ nonisolated enum DiagnosticReportBuilder {
             String(localized: "Failure reason: \(reasonName(failure.reason))"),
         ]
 
+        if let technicalCode = failure.technicalCode {
+            lines.append(
+                String(localized: "Technical code: \(technicalCode.rawValue)")
+            )
+        }
+
         if case .processFailed(let exitCode) = failure.reason {
             if let exitCode {
                 lines.append(String(localized: "Exit code: \(exitCode)"))

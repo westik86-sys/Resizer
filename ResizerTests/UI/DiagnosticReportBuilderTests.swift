@@ -71,7 +71,8 @@ struct DiagnosticReportBuilderTests {
         let failure = TranscodeFailure(
             stage: .commit,
             reason: .outputUnavailable,
-            diagnosticTail: nil
+            diagnosticTail: nil,
+            technicalCode: .processLaunchFailed
         )
 
         let report = DiagnosticReportBuilder.make(
@@ -88,6 +89,7 @@ struct DiagnosticReportBuilderTests {
 
         #expect(report.contains("commit"))
         #expect(report.contains("output_unavailable"))
+        #expect(report.contains("Technical code: process_launch_failed"))
         #expect(!report.contains("private-name.mov"))
     }
 }

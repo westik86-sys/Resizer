@@ -95,6 +95,31 @@ struct FFmpegProgressParserTests {
         #expect(snapshot.droppedFrames == nil)
     }
 
+    @Test("Space-padded numeric fields emitted by FFmpeg are accepted")
+    func paddedNumericMetrics() throws {
+        let data = Data(
+            "frame= 95 \n"
+                .appending("fps= 29.97\n")
+                .appending("total_size= 262192 \n")
+                .appending("out_time_us= 3133333\n")
+                .appending("speed= 4.1x\n")
+                .appending("progress=end\n")
+                .utf8
+        )
+        var parser = try FFmpegProgressParser(
+            totalDurationMicroseconds: 6_266_666
+        )
+
+        let snapshots = try parser.consume(data) + parser.finish()
+        let snapshot = try #require(snapshots.first)
+
+        #expect(snapshot.processedMicroseconds == 3_133_333)
+        #expect(snapshot.frame == 95)
+        #expect(snapshot.framesPerSecond == 29.97)
+        #expect(snapshot.speed == 4.1)
+        #expect(snapshot.outputByteCount == 262_192)
+    }
+
     @Test("Formatted out_time is the last-resort time fallback")
     func formattedTimeFallback() throws {
         let data = Data(

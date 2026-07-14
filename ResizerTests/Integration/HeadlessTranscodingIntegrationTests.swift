@@ -60,6 +60,93 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
+    @Test("Two bundled jobs complete through one production queue")
+    func bundledSequentialQueue() async throws {
+        let fixtureURLs = try ["short-h264-aac", "short-hevc-aac"].map {
+            try #require(Self.fixtureURL(named: $0))
+        }
+        let originalFixtureData = try fixtureURLs.map { url in
+            try Data(contentsOf: url)
+        }
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ResizerSequentialIntegration-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: outputDirectory)
+        }
+
+        let dependencies = try await Self.environment.dependencies()
+        let coordinator = CompressionCoordinator(
+            dependencies: CompressionCoordinatorDependencies(
+                mediaProber: dependencies.prober,
+                transcoder: dependencies.transcoder,
+                outputPlanner: OutputPlanner(),
+                fileAccess: dependencies.fileAccess
+            )
+        )
+        let jobIDs = try await coordinator.add(
+            fixtureURLs.map { JobQueueImport(inputURL: $0) }
+        )
+        let configuration = JobConfiguration(
+            recipe: try CompressionRecipe(preset: .balanced),
+            outputPolicy: try OutputPolicy(directoryURL: outputDirectory)
+        )
+        for jobID in jobIDs {
+            _ = try await coordinator.enqueue(
+                jobID: jobID,
+                configuration: configuration
+            )
+        }
+
+        await coordinator.startQueue()
+        let terminalSnapshot = try await ProcessHarnessFixture.withTimeout(
+            after: .seconds(60)
+        ) {
+            while true {
+                let snapshot = await coordinator.snapshot()
+                let phases = snapshot.jobs.map(\.state.phase)
+                if !snapshot.isDraining,
+                   phases.count == jobIDs.count,
+                   phases.allSatisfy({
+                       $0 == .completed || $0 == .failed || $0 == .cancelled
+                   }) {
+                    return snapshot
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+
+        #expect(terminalSnapshot.jobs.map(\.id) == jobIDs)
+        for job in terminalSnapshot.jobs {
+            guard case .completed(let result) = job.state else {
+                Issue.record("Expected completed queue job, got \(job.state)")
+                continue
+            }
+            #expect(result.outputByteCount > 0)
+            #expect(FileManager.default.fileExists(atPath: result.outputURL.path))
+        }
+        #expect(await dependencies.runner.activeExecutionCount() == 0)
+        #expect(
+            try fixtureURLs.map { url in
+                try Data(contentsOf: url)
+            } == originalFixtureData
+        )
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                at: outputDirectory,
+                includingPropertiesForKeys: nil
+            ).allSatisfy {
+                !$0.lastPathComponent.hasSuffix(".partial.mp4")
+            }
+        )
+    }
+
     private func runWorkflow(
         fixtureName: String,
         expectedInputVideoCodec: String
