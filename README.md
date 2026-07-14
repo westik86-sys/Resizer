@@ -14,7 +14,8 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
-Implementation is at stage 10. The native product UI supports multi-file MOV
+Implementation has completed stage 10 and is preparing the direct-DMG portion
+of stage 11. The native product UI supports multi-file MOV
 and MP4 import, one sequential FIFO queue, three typed presets, bounded custom
 settings, safe output naming, progress and ETA, cancellation, retry, reordering,
 results, and Finder reveal. English and Russian localizations, keyboard access,
@@ -57,8 +58,11 @@ Release app used PowerBox-selected input and output locations to run bundled
 `ffprobe`, encode three seconds with bundled `ffmpeg`, and validate and commit
 the resulting MP4. The command and evidence are recorded in
 [`docs/adr/0002-bundled-ffmpeg-toolchain.md`](docs/adr/0002-bundled-ffmpeg-toolchain.md).
-Developer ID signing, notarization, and Gatekeeper validation remain release-stage
-work.
+Developer ID signing, notarization, and Gatekeeper validation remain blocked
+until a release identity and Keychain notary profile are supplied. The
+fail-closed DMG workflow is documented in
+[`docs/RELEASING.md`](docs/RELEASING.md); App Store and TestFlight delivery are
+not part of the first beta channel.
 
 ## Requirements
 
@@ -87,6 +91,22 @@ Rebuild and audit the bundled Universal 2 tools with:
 ```sh
 ./Scripts/build-ffmpeg.sh
 ```
+
+Prepare a direct Developer ID DMG only after reading the release gates:
+
+```sh
+./Scripts/archive.sh
+./Scripts/export.sh
+# Explicit external operation:
+DEVELOPMENT_TEAM=ABCDE12345 NOTARY_PROFILE=Resizer-notary \
+  ./Scripts/notarize.sh .build/Release/Resizer-1.0-1.dmg
+DEVELOPMENT_TEAM=ABCDE12345 \
+  ./Scripts/verify-release.sh .build/Release/Resizer-1.0-1.dmg
+```
+
+The release scripts do not publish artifacts and never store credentials in
+the repository. See
+[`ADR 0010`](docs/adr/0010-direct-dmg-beta.md) for the channel decision.
 
 Both scripts keep Derived Data under `.build/DerivedData` and can be redirected with `DERIVED_DATA_PATH`:
 
