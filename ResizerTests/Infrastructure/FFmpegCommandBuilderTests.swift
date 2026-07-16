@@ -125,51 +125,6 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    @Test("Compact retry produces the complete stable argument vector")
-    func compactRetryGoldenArguments() async throws {
-        let request = try makeAutomaticRequest(mode: .compactRetry)
-
-        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
-
-        #expect(
-            arguments == [
-                "-hide_banner",
-                "-loglevel", "error",
-                "-stats_period", "0.25",
-                "-nostats",
-                "-progress", "pipe:1",
-                "-autorotate",
-                "-i", Self.inputURL.path,
-                "-map", "0:2",
-                "-map", "0:5",
-                "-sn",
-                "-dn",
-                "-c:v:0", "h264_videotoolbox",
-                "-global_quality:v:0", "45",
-                "-pix_fmt:v:0", "yuv420p",
-                "-color_range:v:0", "tv",
-                "-filter:v:0",
-                "scale=w='if(gte(iw,ih),min(iw,1280),min(iw,720))':"
-                    + "h='if(gte(iw,ih),min(ih,720),min(ih,1280))':"
-                    + "force_original_aspect_ratio=decrease:"
-                    + "force_divisible_by=2:reset_sar=1:flags=lanczos:"
-                    + "out_range=tv",
-                "-fpsmax:v:0", "24",
-                "-c:a:0", "aac",
-                "-b:a:0", "96000",
-                "-map_metadata:g", "0:g",
-                "-map_metadata:s:v:0", "0:s:2",
-                "-map_metadata:s:a:0", "0:s:5",
-                "-map_chapters", "0",
-                "-metadata:s:v:0", "rotate=0",
-                "-write_tmcd", "0",
-                "-movflags", "+faststart",
-                "-f", "mp4",
-                "fd:3",
-            ]
-        )
-    }
-
     @Test("Flexible settings produce bounded video and explicit audio removal")
     func flexibleAudioRemovalArguments() async throws {
         let mediaInfo = try makeMediaInfo()
@@ -540,13 +495,12 @@ struct FFmpegCommandBuilderTests {
     }
 
     private func makeAutomaticRequest(
-        mode: CompressionMode = .automatic,
         mediaInfo: MediaInfo? = nil
     ) throws -> TranscodeCommandRequest {
         let mediaInfo = try mediaInfo ?? makeMediaInfo()
         let recipe = try AutomaticCompressionPolicy().recipe(
             for: mediaInfo,
-            mode: mode
+            settings: .quick(audio: .keep)
         )
         return try makeRequest(recipe: recipe, mediaInfo: mediaInfo)
     }

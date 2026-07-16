@@ -153,7 +153,7 @@ struct HeadlessTranscodingIntegrationTests {
             let configuration = JobConfiguration(
                 recipe: try AutomaticCompressionPolicy().recipe(
                     for: mediaInfo,
-                    mode: job.mode
+                    settings: .quick(audio: .keep)
                 ),
                 outputPolicy: try OutputPolicy(
                     directoryURL: outputDirectory
@@ -268,7 +268,7 @@ struct HeadlessTranscodingIntegrationTests {
         let configuration = JobConfiguration(
             recipe: try AutomaticCompressionPolicy().recipe(
                 for: sourceMedia,
-                mode: job.mode
+                settings: .quick(audio: .keep)
             ),
             outputPolicy: try OutputPolicy(
                 directoryURL: outputDirectory

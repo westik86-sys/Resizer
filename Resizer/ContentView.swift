@@ -713,10 +713,6 @@ struct ContentView: View {
     }
 
     private func outputCard(_ job: CompressionJob) -> some View {
-        let outputSuffix = job.mode == .automatic
-            ? validatedFilenameSuffix
-            : validatedFilenameSuffix + "-smaller"
-
         return GroupBox {
             HStack(spacing: 14) {
                 Image(systemName: "folder")
@@ -729,7 +725,7 @@ struct ContentView: View {
                         Text(outputURL.lastPathComponent)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Text("Output: source name\(outputSuffix).mp4")
+                        Text("Output: source name\(validatedFilenameSuffix).mp4")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -929,19 +925,6 @@ struct ContentView: View {
 
                         Spacer()
 
-                        if model.canCompressMore(jobID: job.id) {
-                            Button("Compress More") {
-                                Task {
-                                    await model.compressMore(
-                                        jobID: job.id,
-                                        filenameSuffix: validatedFilenameSuffix,
-                                        conflictPolicy: conflictPolicy
-                                    )
-                                }
-                            }
-                            .accessibilityIdentifier("compress-more")
-                        }
-
                         Button("Open") {
                             model.openResult(jobID: job.id)
                         }
@@ -1006,19 +989,6 @@ struct ContentView: View {
                             presentInputImporter()
                         }
                         Spacer()
-                        if model.canCompressMore(jobID: job.id) {
-                            Button("Compress More") {
-                                Task {
-                                    await model.compressMore(
-                                        jobID: job.id,
-                                        filenameSuffix: validatedFilenameSuffix,
-                                        conflictPolicy: conflictPolicy
-                                    )
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityIdentifier("compress-more")
-                        }
                     }
                 }
                 .padding(.vertical, 10)
@@ -1424,19 +1394,15 @@ struct ContentView: View {
         if let captured = job.configuration?.recipe {
             recipe = captured
         } else if let mediaInfo = job.mediaInfo,
-                  job.mode == .compactRetry,
-                  let audio = model.compactAudioPreference(for: job.id) {
-            recipe = try? AutomaticCompressionPolicy().compactRecipe(
+                  let settings = try? model.compressionDraft(
+                    for: job.id
+                  ).primarySettings() {
+            recipe = try? AutomaticCompressionPolicy().recipe(
                 for: mediaInfo,
-                audio: audio
+                settings: settings
             )
         } else {
-            recipe = job.mediaInfo.flatMap {
-                try? AutomaticCompressionPolicy().recipe(
-                    for: $0,
-                    mode: job.mode
-                )
-            }
+            recipe = nil
         }
         guard let recipe else {
             return String(localized: "Compression settings")
@@ -1518,12 +1484,8 @@ struct ContentView: View {
             String(localized: "Quick")
         case .primary(.flexible):
             String(localized: "Flexible")
-        case .compactRetry:
-            String(localized: "Stronger compression")
         case nil:
-            job.mode == .compactRetry
-                ? String(localized: "Stronger compression")
-                : String(localized: "Quick")
+            String(localized: "Quick")
         }
     }
 
@@ -1533,10 +1495,8 @@ struct ContentView: View {
             "slider.horizontal.3"
         case .primary(.quick):
             "bolt.fill"
-        case .compactRetry:
-            "sparkles"
         case nil:
-            job.mode == .compactRetry ? "sparkles" : "bolt.fill"
+            "bolt.fill"
         }
     }
 
@@ -1546,18 +1506,8 @@ struct ContentView: View {
             String(localized: "This job captured your flexible settings.")
         case .primary(.quick):
             String(localized: "Quick mode uses a balanced size and quality.")
-        case .compactRetry:
-            String(
-                localized: "Stronger compression prioritizes a smaller file over maximum quality."
-            )
         case nil:
-            job.mode == .compactRetry
-                ? String(
-                    localized: "Stronger compression prioritizes a smaller file over maximum quality."
-                )
-                : String(
-                    localized: "Quick mode uses a balanced size and quality."
-                )
+            String(localized: "Quick mode uses a balanced size and quality.")
         }
     }
 

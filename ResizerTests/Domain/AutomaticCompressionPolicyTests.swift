@@ -218,64 +218,6 @@ struct AutomaticCompressionPolicyTests {
         #expect(recipe.audioPolicy == .remove)
     }
 
-    @Test("Compact retry derives the fixed secondary recipe")
-    func compactRetryMode() throws {
-        let recipe = try AutomaticCompressionPolicy().compactRecipe(
-            for: TestFixtures.mediaInfo(),
-            audio: .keep
-        )
-
-        expectCommonContract(recipe, origin: .compactRetry(audio: .keep))
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.45)))
-        #expect(
-            recipe.scalePolicy == .maximum(
-                try ResolutionLimit(
-                    maximumLongEdge: 1_280,
-                    maximumShortEdge: 720
-                )
-            )
-        )
-        #expect(
-            recipe.frameRatePolicy == .capped(
-                try FrameRateLimit(framesPerSecond: 24)
-            )
-        )
-        #expect(
-            recipe.audioPolicy == .aac(
-                try AudioBitRate(bitsPerSecond: 96_000)
-            )
-        )
-    }
-
-    @Test("Compact retry keeps confirmed ten-bit SDR as Main10")
-    func compactRetryMain10Mode() throws {
-        let mediaInfo = try TestFixtures.mediaInfo(
-            videoCodec: "hevc",
-            pixelFormat: "yuv420p10le",
-            bitDepth: 10,
-            dynamicRange: .sdr
-        )
-
-        let recipe = try AutomaticCompressionPolicy().compactRecipe(
-            for: mediaInfo,
-            audio: .keep
-        )
-
-        #expect(recipe.videoCodec == .hevcMain10VideoToolbox)
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.60)))
-    }
-
-    @Test("Compact retry inherits the Quick remove-audio choice")
-    func compactRetryAudioRemoval() throws {
-        let recipe = try AutomaticCompressionPolicy().compactRecipe(
-            for: TestFixtures.mediaInfo(),
-            audio: .remove
-        )
-
-        #expect(recipe.origin == .compactRetry(audio: .remove))
-        #expect(recipe.audioPolicy == .remove)
-    }
-
     @Test("Every recipe removes audio when the source has no audio stream")
     func sourceWithoutAudio() throws {
         let mediaInfo = try TestFixtures.mediaInfo(includeAudio: false)
@@ -287,24 +229,6 @@ struct AutomaticCompressionPolicyTests {
                 settings: .quick(audio: .keep)
             ).audioPolicy
                 == .remove
-        )
-        #expect(
-            try policy.compactRecipe(
-                for: mediaInfo,
-                audio: .keep
-            ).audioPolicy
-                == .remove
-        )
-    }
-
-    @Test("Omitted mode uses the automatic contract")
-    func defaultMode() throws {
-        let mediaInfo = try TestFixtures.mediaInfo()
-        let policy = AutomaticCompressionPolicy()
-
-        #expect(
-            try policy.recipe(for: mediaInfo)
-                == policy.recipe(for: mediaInfo, mode: .automatic)
         )
     }
 

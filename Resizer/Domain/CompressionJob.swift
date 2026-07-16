@@ -4,7 +4,6 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
     let id: UUID
     let inputURL: URL
     let createdAt: Date
-    let mode: CompressionMode
 
     private(set) var mediaInfo: MediaInfo?
     private(set) var configuration: JobConfiguration?
@@ -13,8 +12,7 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
     init(
         id: UUID = UUID(),
         inputURL: URL,
-        createdAt: Date = Date(),
-        mode: CompressionMode = .automatic
+        createdAt: Date = Date()
     ) throws {
         guard inputURL.isFileURL else {
             throw CompressionJobValidationError.invalidInputURL
@@ -22,7 +20,6 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
         self.id = id
         self.inputURL = inputURL
         self.createdAt = createdAt
-        self.mode = mode
         mediaInfo = nil
         configuration = nil
         state = .draft
@@ -49,26 +46,17 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
         guard state.phase == .ready else {
             throw CompressionJobMutationError.operationRequires(.ready)
         }
-        guard configuration.recipe.origin.mode == mode else {
-            throw CompressionJobMutationError.configurationModeMismatch
-        }
         guard let mediaInfo else {
             throw CompressionJobMutationError.configurationRecipeMismatch
         }
 
-        let expectedRecipe: CompressionRecipe?
-        switch configuration.recipe.origin {
-        case .primary(let settings):
-            expectedRecipe = try? AutomaticCompressionPolicy().recipe(
-                for: mediaInfo,
-                settings: settings
-            )
-        case .compactRetry(let audio):
-            expectedRecipe = try? AutomaticCompressionPolicy().compactRecipe(
-                for: mediaInfo,
-                audio: audio
-            )
+        guard case .primary(let settings) = configuration.recipe.origin else {
+            throw CompressionJobMutationError.configurationRecipeMismatch
         }
+        let expectedRecipe = try? AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: settings
+        )
 
         guard let expectedRecipe,
               configuration.recipe == expectedRecipe else {
@@ -124,7 +112,6 @@ nonisolated enum CompressionJobValidationError: Error, Sendable, Equatable {
 nonisolated enum CompressionJobMutationError: Error, Sendable, Equatable {
     case missingMediaInfo
     case missingConfiguration
-    case configurationModeMismatch
     case configurationRecipeMismatch
     case outputAliasesInput
     case operationRequires(JobPhase)

@@ -174,40 +174,6 @@ struct CompressionCoordinatorTests {
         #expect(await recorder.recipe == expectedRecipe)
     }
 
-    @Test("Preparation validates the recipe for the job's compact mode")
-    func compactPreparationUsesJobMode() async throws {
-        let recorder = CapabilityValidationRecorder()
-        let mediaInfo = try TestFixtures.mediaInfo()
-        let coordinator = CompressionCoordinator(
-            dependencies: try dependencies { observedMedia, recipe in
-                await recorder.record(
-                    mediaInfo: observedMedia,
-                    recipe: recipe
-                )
-            }
-        )
-        let jobID = UUID()
-
-        _ = try await coordinator.add([
-            JobQueueImport(
-                inputURL: URL(fileURLWithPath: "/tmp/compact.mov"),
-                id: jobID,
-                mode: .compactRetry
-            ),
-        ])
-
-        let ready = try #require(await coordinator.job(id: jobID))
-        let expectedRecipe = try AutomaticCompressionPolicy().compactRecipe(
-            for: mediaInfo,
-            audio: .remove
-        )
-        #expect(ready.mode == .compactRetry)
-        #expect(ready.state == .ready)
-        #expect(await recorder.callCount == 1)
-        #expect(await recorder.mediaInfo == mediaInfo)
-        #expect(await recorder.recipe == expectedRecipe)
-    }
-
     @Test("Unavailable bundled capabilities never publish ready settings")
     func unavailableCapabilitiesFailPreparation() async throws {
         let coordinator = CompressionCoordinator(

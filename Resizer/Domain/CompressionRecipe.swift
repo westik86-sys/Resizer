@@ -13,30 +13,6 @@ nonisolated struct CompressionRecipe: Sendable, Equatable {
 
 nonisolated enum RecipeOrigin: Sendable, Equatable {
     case primary(PrimaryCompressionSettings)
-    case compactRetry(audio: AudioPreference)
-
-    var mode: CompressionMode {
-        switch self {
-        case .primary:
-            .automatic
-        case .compactRetry:
-            .compactRetry
-        }
-    }
-
-    var audioPreference: AudioPreference {
-        switch self {
-        case .primary(let settings):
-            settings.audioPreference
-        case .compactRetry(let audio):
-            audio
-        }
-    }
-}
-
-nonisolated enum CompressionMode: Sendable, Equatable {
-    case automatic
-    case compactRetry
 }
 
 nonisolated enum CompressionControlMode: Sendable, Equatable, CaseIterable {
@@ -207,18 +183,12 @@ nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
 
 nonisolated struct AutomaticCompressionPolicy: Sendable {
     func recipe(
-        for mediaInfo: MediaInfo,
-        mode: CompressionMode = .automatic
+        for mediaInfo: MediaInfo
     ) throws -> CompressionRecipe {
-        switch mode {
-        case .automatic:
-            try recipe(
-                for: mediaInfo,
-                settings: .quick(audio: .keep)
-            )
-        case .compactRetry:
-            try compactRecipe(for: mediaInfo, audio: .keep)
-        }
+        try recipe(
+            for: mediaInfo,
+            settings: .quick(audio: .keep)
+        )
     }
 
     func recipe(
@@ -259,32 +229,6 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 audioBitsPerSecond: 128_000
             )
         }
-    }
-
-    func compactRecipe(
-        for mediaInfo: MediaInfo,
-        audio: AudioPreference
-    ) throws -> CompressionRecipe {
-        let videoCodec = videoCodec(for: mediaInfo)
-        return try makeRecipe(
-            for: mediaInfo,
-            origin: .compactRetry(audio: audio),
-            videoCodec: videoCodec,
-            quality: try VideoQuality(
-                videoCodec == .hevcMain10VideoToolbox ? 0.60 : 0.45
-            ),
-            scalePolicy: .maximum(
-                try ResolutionLimit(
-                    maximumLongEdge: 1_280,
-                    maximumShortEdge: 720
-                )
-            ),
-            frameRatePolicy: .capped(
-                try FrameRateLimit(framesPerSecond: 24)
-            ),
-            audioPreference: audio,
-            audioBitsPerSecond: 96_000
-        )
     }
 
     private func makeRecipe(

@@ -653,7 +653,7 @@ private struct QueueHarness: Sendable {
         let configuration = JobConfiguration(
             recipe: try AutomaticCompressionPolicy().recipe(
                 for: mediaInfo,
-                mode: .automatic
+                settings: .quick(audio: .keep)
             ),
             outputPolicy: try OutputPolicy(directoryURL: outputDirectory)
         )

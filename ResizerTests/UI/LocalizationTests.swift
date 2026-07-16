@@ -56,10 +56,6 @@ struct LocalizationTests {
                 localization: "ru"
             ) == "Нельзя удалить это видео во время обработки."
         )
-        #expect(
-            localized("Compress More", localization: "ru")
-                == "Сжать ещё сильнее"
-        )
         #expect(localized("Open", localization: "ru") == "Открыть")
         #expect(
             localized(
@@ -82,12 +78,6 @@ struct LocalizationTests {
                 "Each prepared video keeps its own compression settings.",
                 localization: "ru"
             ) == "Каждое подготовленное видео сохраняет собственные настройки сжатия."
-        )
-        #expect(
-            localized(
-                "Stronger compression prioritizes a smaller file over maximum quality.",
-                localization: "ru"
-            ) == "Более сильное сжатие ставит меньший размер файла выше максимального качества."
         )
         #expect(
             String(

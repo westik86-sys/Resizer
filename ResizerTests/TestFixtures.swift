@@ -53,12 +53,11 @@ nonisolated enum TestFixtures {
     }
 
     static func configuration(
-        mode: CompressionMode = .automatic,
         mediaInfo: MediaInfo? = nil
     ) throws -> JobConfiguration {
         let recipe = try AutomaticCompressionPolicy().recipe(
             for: mediaInfo ?? self.mediaInfo(),
-            mode: mode
+            settings: .quick(audio: .keep)
         )
         let outputPolicy = try OutputPolicy(
             directoryURL: URL(fileURLWithPath: "/tmp/ResizerTests", isDirectory: true)

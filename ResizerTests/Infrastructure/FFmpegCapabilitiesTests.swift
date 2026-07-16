@@ -579,12 +579,11 @@ struct FFmpegCapabilitiesTests {
     }
 
     private func automaticRecipe(
-        for mediaInfo: MediaInfo,
-        mode: CompressionMode = .automatic
+        for mediaInfo: MediaInfo
     ) throws -> CompressionRecipe {
         try AutomaticCompressionPolicy().recipe(
             for: mediaInfo,
-            mode: mode
+            settings: .quick(audio: .keep)
         )
     }
 

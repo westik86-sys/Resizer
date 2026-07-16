@@ -45,45 +45,10 @@ struct CompressionJobTests {
 
         #expect(job.id == id)
         #expect(job.inputURL == inputURL)
-        #expect(job.mode == .automatic)
         #expect(job.state.phase == .completed)
     }
 
-    @Test("A job accepts only a recipe derived for its immutable mode")
-    func configurationModeMustMatchJob() throws {
-        let mediaInfo = try TestFixtures.mediaInfo()
-        var job = try CompressionJob(
-            inputURL: URL(fileURLWithPath: "/tmp/source.mov"),
-            mode: .compactRetry
-        )
-        try job.transition(to: .probing)
-        try job.recordMediaInfo(mediaInfo)
-        try job.transition(to: .ready)
-
-        #expect(throws: CompressionJobMutationError.configurationModeMismatch) {
-            try job.configure(
-                TestFixtures.configuration(
-                    mode: .automatic,
-                    mediaInfo: mediaInfo
-                )
-            )
-        }
-        #expect(job.configuration == nil)
-
-        let compactConfiguration = try TestFixtures.configuration(
-            mode: .compactRetry,
-            mediaInfo: mediaInfo
-        )
-        try job.configure(compactConfiguration)
-
-        #expect(job.mode == .compactRetry)
-        #expect(job.configuration == compactConfiguration)
-        #expect(
-            job.configuration?.recipe.origin == .compactRetry(audio: .keep)
-        )
-    }
-
-    @Test("A matching mode cannot disguise a non-policy recipe")
+    @Test("A job rejects a non-policy recipe")
     func configurationRecipeMustMatchPolicy() throws {
         let mediaInfo = try TestFixtures.mediaInfo()
         var job = try CompressionJob(
@@ -92,19 +57,19 @@ struct CompressionJobTests {
         try job.transition(to: .probing)
         try job.recordMediaInfo(mediaInfo)
         try job.transition(to: .ready)
-        let compact = try AutomaticCompressionPolicy().recipe(
+        let primary = try AutomaticCompressionPolicy().recipe(
             for: mediaInfo,
-            mode: .compactRetry
+            settings: .quick(audio: .keep)
         )
         let disguisedRecipe = CompressionRecipe(
             origin: .primary(.quick(audio: .keep)),
-            container: compact.container,
-            videoCodec: compact.videoCodec,
-            rateControl: compact.rateControl,
-            scalePolicy: compact.scalePolicy,
-            frameRatePolicy: compact.frameRatePolicy,
-            audioPolicy: compact.audioPolicy,
-            metadataPolicy: compact.metadataPolicy
+            container: primary.container,
+            videoCodec: primary.videoCodec,
+            rateControl: .quality(try VideoQuality(0.35)),
+            scalePolicy: primary.scalePolicy,
+            frameRatePolicy: primary.frameRatePolicy,
+            audioPolicy: primary.audioPolicy,
+            metadataPolicy: primary.metadataPolicy
         )
         let configuration = JobConfiguration(
             recipe: disguisedRecipe,

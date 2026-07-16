@@ -1126,22 +1126,6 @@
         }
       }
     },
-    "Compress More" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Compress More"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сжать ещё сильнее"
-          }
-        }
-      }
-    },
     "Compressed copy is ready" : {
       "localizations" : {
         "en" : {
@@ -3132,38 +3116,6 @@
         }
       }
     },
-    "Stronger compression" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stronger compression"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Более сильное сжатие"
-          }
-        }
-      }
-    },
-    "Stronger compression prioritizes a smaller file over maximum quality." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stronger compression prioritizes a smaller file over maximum quality."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Более сильное сжатие ставит меньший размер файла выше максимального качества."
-          }
-        }
-      }
-    },
     "Technical code: %@" : {
       "localizations" : {
         "en" : {
@@ -3515,38 +3467,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Исходное видео больше недоступно. Выберите его снова и повторите попытку."
-          }
-        }
-      }
-    },
-    "The stronger compression could not be prepared." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The stronger compression could not be prepared."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не удалось подготовить более сильное сжатие."
-          }
-        }
-      }
-    },
-    "The stronger compression could not be started." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The stronger compression could not be started."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не удалось запустить более сильное сжатие."
           }
         }
       }

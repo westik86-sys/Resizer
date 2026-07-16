@@ -1049,7 +1049,7 @@ private nonisolated struct WorkflowHarness: Sendable {
         let configuration = JobConfiguration(
             recipe: try AutomaticCompressionPolicy().recipe(
                 for: source,
-                mode: .automatic
+                settings: .quick(audio: .keep)
             ),
             outputPolicy: try OutputPolicy(
                 directoryURL: outputDirectory

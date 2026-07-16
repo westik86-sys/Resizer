@@ -58,18 +58,15 @@ nonisolated struct JobQueueImport: Sendable, Equatable {
     let id: CompressionJob.ID
     let inputURL: URL
     let createdAt: Date
-    let mode: CompressionMode
 
     init(
         inputURL: URL,
         id: CompressionJob.ID = UUID(),
-        createdAt: Date = Date(),
-        mode: CompressionMode = .automatic
+        createdAt: Date = Date()
     ) {
         self.id = id
         self.inputURL = inputURL
         self.createdAt = createdAt
-        self.mode = mode
     }
 }
 
@@ -234,8 +231,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             try CompressionJob(
                 id: item.id,
                 inputURL: item.inputURL,
-                createdAt: item.createdAt,
-                mode: item.mode
+                createdAt: item.createdAt
             )
         }
 
@@ -370,8 +366,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                         try await runCapabilityValidation(
                             mediaInfo,
                             recipe: try preparationAdmissionRecipe(
-                                for: mediaInfo,
-                                mode: job.mode
+                                for: mediaInfo
                             ),
                             jobID: jobID
                         )
@@ -394,21 +389,12 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
     /// validated later against the immutable recipe captured at enqueue, so
     /// an unsupported source audio stream can still be intentionally removed.
     private func preparationAdmissionRecipe(
-        for mediaInfo: MediaInfo,
-        mode: CompressionMode
+        for mediaInfo: MediaInfo
     ) throws -> CompressionRecipe {
-        switch mode {
-        case .automatic:
-            try AutomaticCompressionPolicy().recipe(
-                for: mediaInfo,
-                settings: .quick(audio: .remove)
-            )
-        case .compactRetry:
-            try AutomaticCompressionPolicy().compactRecipe(
-                for: mediaInfo,
-                audio: .remove
-            )
-        }
+        try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: .quick(audio: .remove)
+        )
     }
 
     /// Captures an immutable configuration and appends a prepared job to the
