@@ -2,7 +2,8 @@
 
 - Status: Accepted for implementation stage 7; cancellation and publication
   sections amended by [`ADR 0008`](0008-stage-10-hardening.md), and the input
-  codec profile amended by [`ADR 0009`](0009-hevc-input.md)
+  codec profile amended by [`ADR 0009`](0009-hevc-input.md); the validated
+  outcome branch is amended by [`ADR 0011`](0011-automatic-compression.md)
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 

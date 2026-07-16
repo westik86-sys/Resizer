@@ -163,8 +163,45 @@ struct CompressionCoordinatorTests {
         )
 
         let ready = try await coordinator.prepare(jobID: job.id)
-        let expectedRecipe = try CompressionRecipe(preset: .default)
+        let expectedRecipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            mode: .automatic
+        )
 
+        #expect(ready.state == .ready)
+        #expect(await recorder.callCount == 1)
+        #expect(await recorder.mediaInfo == mediaInfo)
+        #expect(await recorder.recipe == expectedRecipe)
+    }
+
+    @Test("Preparation validates the recipe for the job's compact mode")
+    func compactPreparationUsesJobMode() async throws {
+        let recorder = CapabilityValidationRecorder()
+        let mediaInfo = try TestFixtures.mediaInfo()
+        let coordinator = CompressionCoordinator(
+            dependencies: try dependencies { observedMedia, recipe in
+                await recorder.record(
+                    mediaInfo: observedMedia,
+                    recipe: recipe
+                )
+            }
+        )
+        let jobID = UUID()
+
+        _ = try await coordinator.add([
+            JobQueueImport(
+                inputURL: URL(fileURLWithPath: "/tmp/compact.mov"),
+                id: jobID,
+                mode: .compactRetry
+            ),
+        ])
+
+        let ready = try #require(await coordinator.job(id: jobID))
+        let expectedRecipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            mode: .compactRetry
+        )
+        #expect(ready.mode == .compactRetry)
         #expect(ready.state == .ready)
         #expect(await recorder.callCount == 1)
         #expect(await recorder.mediaInfo == mediaInfo)

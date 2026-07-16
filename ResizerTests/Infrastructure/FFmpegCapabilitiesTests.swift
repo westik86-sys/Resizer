@@ -48,9 +48,10 @@ struct FFmpegCapabilitiesTests {
 
     @Test("The audited H.264/HEVC/AAC profile accepts H.264 input")
     func acceptsSupportedRequest() throws {
+        let mediaInfo = try TestFixtures.mediaInfo()
         let request = try makeRequest(
-            mediaInfo: TestFixtures.mediaInfo(),
-            recipe: CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
         )
 
         try FFmpegPreflightValidator().validate(
@@ -61,9 +62,10 @@ struct FFmpegCapabilitiesTests {
 
     @Test("The audited profile accepts SDR HEVC input")
     func acceptsHEVCInput() throws {
+        let mediaInfo = try videoOnlyMediaInfo(codecName: "hevc")
         let request = try makeRequest(
-            mediaInfo: videoOnlyMediaInfo(codecName: "hevc"),
-            recipe: CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
         )
 
         try FFmpegPreflightValidator().validate(
@@ -84,9 +86,10 @@ struct FFmpegCapabilitiesTests {
             inputProtocols: supported.inputProtocols,
             outputProtocols: supported.outputProtocols
         )
+        let mediaInfo = try videoOnlyMediaInfo(codecName: "hevc")
         let request = try makeRequest(
-            mediaInfo: videoOnlyMediaInfo(codecName: "hevc"),
-            recipe: CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
         )
 
         #expect(
@@ -104,9 +107,10 @@ struct FFmpegCapabilitiesTests {
 
     @Test("The descriptor output profile requires both fd and pipe protocols")
     func requiresDescriptorOutputProtocols() throws {
+        let mediaInfo = try TestFixtures.mediaInfo()
         let request = try makeRequest(
-            mediaInfo: TestFixtures.mediaInfo(),
-            recipe: CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
         )
         let supported = try parseCapabilities()
 
@@ -139,9 +143,10 @@ struct FFmpegCapabilitiesTests {
 
     @Test("Unsupported selected video decoder is a typed preflight error")
     func rejectsUnsupportedVideoDecoder() throws {
+        let mediaInfo = try videoOnlyMediaInfo(codecName: "vp9")
         let request = try makeRequest(
-            mediaInfo: videoOnlyMediaInfo(codecName: "vp9"),
-            recipe: CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
         )
 
         #expect(
@@ -157,18 +162,9 @@ struct FFmpegCapabilitiesTests {
         }
     }
 
-    @Test("Muted audio does not require its decoder or AAC encoder")
-    func mutedAudioSkipsAudioCapabilities() throws {
+    @Test("Automatic video-only input needs no audio decoder or AAC encoder")
+    func automaticVideoOnlySkipsAudioCapabilities() throws {
         let source = try TestFixtures.mediaInfo()
-        let unsupportedAudio = try AudioStreamInfo(
-            index: 1,
-            codecName: "pcm_s16le",
-            sampleRate: 48_000,
-            channelCount: 2,
-            channelLayout: "stereo",
-            bitRate: 1_536_000,
-            languageCode: nil
-        )
         let mediaInfo = try MediaInfo(
             formatNames: source.formatNames,
             durationMicroseconds: source.durationMicroseconds,
@@ -177,9 +173,9 @@ struct FFmpegCapabilitiesTests {
             streams: source.streams.filter {
                 if case .audio = $0 { return false }
                 return true
-            } + [.audio(unsupportedAudio)]
+            }
         )
-        let recipe = try customRecipe(audioPolicy: .remove)
+        let recipe = try automaticRecipe(for: mediaInfo)
         var capabilities = try parseCapabilities()
         capabilities = FFmpegCapabilities(
             decoders: capabilities.decoders,
@@ -535,18 +531,13 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
-    private func customRecipe(
-        audioPolicy: AudioPolicy
+    private func automaticRecipe(
+        for mediaInfo: MediaInfo,
+        mode: CompressionMode = .automatic
     ) throws -> CompressionRecipe {
-        CompressionRecipe(
-            origin: .custom,
-            container: .mp4,
-            videoCodec: .h264VideoToolbox,
-            rateControl: .quality(try VideoQuality(0.65)),
-            scalePolicy: .original,
-            frameRatePolicy: .original,
-            audioPolicy: audioPolicy,
-            metadataPolicy: .preserveCommon
+        try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            mode: mode
         )
     }
 

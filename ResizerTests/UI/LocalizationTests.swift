@@ -41,6 +41,35 @@ struct LocalizationTests {
                 == "Не удалось запустить Resizer"
         )
         #expect(
+            localized("Automatic", localization: "ru")
+                == "Автоматически"
+        )
+        #expect(
+            localized("Compress More", localization: "ru")
+                == "Сжать ещё сильнее"
+        )
+        #expect(localized("Open", localization: "ru") == "Открыть")
+        #expect(
+            localized("Video is already compact", localization: "ru")
+                == "Видео уже достаточно компактно"
+        )
+        #expect(
+            localized("Already compact", localization: "ru")
+                == "Уже компактно"
+        )
+        #expect(
+            localized(
+                "Each prepared video gets its own automatic settings.",
+                localization: "ru"
+            ) == "Для каждого подготовленного видео параметры выбираются автоматически."
+        )
+        #expect(
+            localized(
+                "Stronger compression prioritizes a smaller file over maximum quality.",
+                localization: "ru"
+            ) == "Более сильное сжатие ставит меньший размер файла выше максимального качества."
+        )
+        #expect(
             String(
                 format: localized("Version %@ (%@)", localization: "ru"),
                 locale: russian,

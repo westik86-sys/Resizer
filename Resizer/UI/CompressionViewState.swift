@@ -97,6 +97,7 @@ nonisolated enum CompressionViewState: Sendable, Equatable {
     case running(CompressionJob, CompressionRunningStage)
     case cancelling(CompressionJob, TranscodeProgress?)
     case success(CompressionJob, CompressionResult)
+    case noBenefit(CompressionJob, CompressionNoBenefitResult)
     case failure(CompressionJob, CompressionFailurePresentation)
     case validationError(String)
 }

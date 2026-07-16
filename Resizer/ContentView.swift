@@ -8,6 +8,7 @@ struct ContentView: View {
         case validationBanner
         case failure
         case success
+        case noBenefit
     }
 
     private enum ImportTarget {
@@ -34,7 +35,6 @@ struct ContentView: View {
     @State private var importTarget: ImportTarget = .input
     @State private var isImporterPresented = false
     @State private var isDropTargeted = false
-    @State private var isAdvancedSettingsExpanded = false
     @State private var isDiagnosticsExpanded = false
     @AccessibilityFocusState private var accessibilityFocus:
         AccessibilityFocusTarget?
@@ -126,6 +126,8 @@ struct ContentView: View {
                 accessibilityFocus = .failure
             case .success:
                 accessibilityFocus = .success
+            case .noBenefit:
+                accessibilityFocus = .noBenefit
             case .empty, .importing, .probing, .ready, .queued,
                  .running, .cancelling:
                 break
@@ -374,6 +376,8 @@ struct ContentView: View {
             cancellingView(job, progress: progress)
         case .success(let job, let result):
             successView(job, result: result)
+        case .noBenefit(let job, let result):
+            noBenefitView(job, result: result)
         case .failure(let job, let failure):
             failureView(job, presentation: failure)
         case .validationError(let message):
@@ -432,14 +436,14 @@ struct ContentView: View {
     private func readyView(_ job: CompressionJob) -> some View {
         VStack(spacing: 20) {
             sourceCard(job)
-            settingsCard
-            outputCard
+            settingsCard(job)
+            outputCard(job)
 
             HStack {
                 Text(
                     model.readyJobs.count == 1
                         ? "A unique temporary file is validated before the final copy appears."
-                        : "All \(model.readyJobs.count) prepared videos will capture these settings."
+                        : "Each prepared video gets its own automatic settings."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -494,140 +498,58 @@ struct ContentView: View {
         }
     }
 
-    private var settingsCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 18) {
-                Picker("Preset", selection: presetBinding) {
-                    ForEach(CompressionPreset.allCases, id: \.rawValue) { preset in
-                        Text(preset.title).tag(Optional(preset))
-                    }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("preset-picker")
+    private func settingsCard(_ job: CompressionJob) -> some View {
+        return GroupBox {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "sparkles")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
 
-                if model.draftSettings.selectedPreset == nil {
-                    Text("Custom settings")
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(
+                        job.mode == .automatic
+                            ? String(localized: "Automatic")
+                            : String(localized: "Stronger compression")
+                    )
+                        .font(.headline)
+                    Text(recipeSummary(for: job))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(
+                            "automatic-compression-summary"
+                        )
+                    Text(
+                        job.mode == .automatic
+                            ? String(
+                                localized: "Resizer chooses a balanced size and quality automatically."
+                              )
+                            : String(
+                                localized: "Stronger compression prioritizes a smaller file over maximum quality."
+                              )
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("custom-settings-status")
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Smaller file")
-                        Spacer()
-                        Text("Better quality")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                    Slider(value: qualityBinding, in: 0 ... 1)
-                        .accessibilityLabel("Video quality")
-                        .accessibilityValue(
-                            model.draftSettings.quality.formatted(
-                                .percent.precision(.fractionLength(0))
-                            )
-                        )
-                        .accessibilityHint(
-                            "Move left for a smaller file or right for better quality"
-                        )
-                        .accessibilityIdentifier("quality-slider")
-                }
-
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text(recipeSummary)
-                        .font(.callout)
-                }
-
-                DisclosureGroup(
-                    "Advanced Settings",
-                    isExpanded: $isAdvancedSettingsExpanded
-                ) {
-                    Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 14) {
-                        GridRow {
-                            Text("Maximum resolution")
-                            Picker("Maximum resolution", selection: resolutionBinding) {
-                                ForEach(
-                                    Array(
-                                        CompressionDraftSettings.ResolutionOption
-                                            .allCases.enumerated()
-                                    ),
-                                    id: \.offset
-                                ) { _, option in
-                                    Text(option.title).tag(option)
-                                }
-                            }
-                            .labelsHidden()
-                            .accessibilityIdentifier("resolution-picker")
-                        }
-
-                        GridRow {
-                            Text("Frame rate")
-                            Picker("Frame rate", selection: frameRateBinding) {
-                                ForEach(
-                                    Array(
-                                        CompressionDraftSettings.FrameRateOption
-                                            .allCases.enumerated()
-                                    ),
-                                    id: \.offset
-                                ) { _, option in
-                                    Text(option.title).tag(option)
-                                }
-                            }
-                            .labelsHidden()
-                            .accessibilityIdentifier("frame-rate-picker")
-                        }
-
-                        GridRow {
-                            Text("Audio")
-                            Picker("Audio", selection: audioBinding) {
-                                ForEach(
-                                    Array(
-                                        CompressionDraftSettings.AudioOption
-                                            .allCases.enumerated()
-                                    ),
-                                    id: \.offset
-                                ) { _, option in
-                                    Text(option.title).tag(option)
-                                }
-                            }
-                            .labelsHidden()
-                            .accessibilityIdentifier("audio-picker")
-                        }
-
-                        GridRow {
-                            Text("Metadata")
-                            Picker("Metadata", selection: metadataBinding) {
-                                ForEach(
-                                    Array(
-                                        CompressionDraftSettings.MetadataOption
-                                            .allCases.enumerated()
-                                    ),
-                                    id: \.offset
-                                ) { _, option in
-                                    Text(option.title).tag(option)
-                                }
-                            }
-                            .labelsHidden()
-                            .accessibilityIdentifier("metadata-picker")
-                        }
-                    }
-                    .padding(.top, 12)
-                }
-                .accessibilityIdentifier("advanced-settings")
+                Spacer()
             }
             .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label("Compression", systemImage: "slider.horizontal.3")
+            Text("Compression")
                 .font(.headline)
         }
+        .accessibilityIdentifier("automatic-mode")
     }
 
-    private var outputCard: some View {
-        GroupBox {
+    private func outputCard(_ job: CompressionJob) -> some View {
+        let outputSuffix = job.configuration?.outputPolicy.filenameSuffix
+            ?? (job.mode == .automatic
+                ? validatedFilenameSuffix
+                : validatedFilenameSuffix + "-smaller")
+
+        return GroupBox {
             HStack(spacing: 14) {
                 Image(systemName: "folder")
                     .font(.title2)
@@ -639,7 +561,7 @@ struct ContentView: View {
                         Text(outputURL.lastPathComponent)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Text("Output: source name\(validatedFilenameSuffix).mp4")
+                        Text("Output: source name\(outputSuffix).mp4")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -770,7 +692,7 @@ struct ContentView: View {
         _ job: CompressionJob,
         result: CompressionResult
     ) -> some View {
-        let inputBytes = job.mediaInfo?.byteCount ?? 0
+        let inputBytes = result.sourceByteCount
 
         return VStack(spacing: 20) {
             GroupBox {
@@ -839,6 +761,24 @@ struct ContentView: View {
 
                         Spacer()
 
+                        if model.canCompressMore(jobID: job.id) {
+                            Button("Compress More") {
+                                Task {
+                                    await model.compressMore(
+                                        jobID: job.id,
+                                        filenameSuffix: validatedFilenameSuffix,
+                                        conflictPolicy: conflictPolicy
+                                    )
+                                }
+                            }
+                            .accessibilityIdentifier("compress-more")
+                        }
+
+                        Button("Open") {
+                            model.openResult(jobID: job.id)
+                        }
+                        .accessibilityIdentifier("open-output")
+
                         Button("Reveal in Finder") {
                             model.revealResultInFinder(jobID: job.id)
                         }
@@ -851,6 +791,74 @@ struct ContentView: View {
         }
     }
 
+    private func noBenefitView(
+        _ job: CompressionJob,
+        result: CompressionNoBenefitResult
+    ) -> some View {
+        VStack(spacing: 20) {
+            sourceCard(job)
+
+            GroupBox {
+                VStack(spacing: 18) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    VStack(spacing: 5) {
+                        Text("Video is already compact")
+                            .font(.title2.weight(.semibold))
+                            .accessibilityFocused(
+                                $accessibilityFocus,
+                                equals: .noBenefit
+                            )
+                            .accessibilityAddTraits(.isHeader)
+                        Text("The compressed result would not be smaller, so no new copy was saved.")
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    HStack(spacing: 28) {
+                        resultMetric(
+                            String(localized: "Original"),
+                            value: Self.byteCountString(result.sourceByteCount)
+                        )
+                        resultMetric(
+                            String(localized: "Attempted"),
+                            value: Self.byteCountString(result.candidateByteCount)
+                        )
+                        resultMetric(
+                            String(localized: "Time"),
+                            value: Self.durationString(result.elapsed)
+                        )
+                    }
+
+                    HStack {
+                        Button("Add More Videos…") {
+                            presentInputImporter()
+                        }
+                        Spacer()
+                        if model.canCompressMore(jobID: job.id) {
+                            Button("Compress More") {
+                                Task {
+                                    await model.compressMore(
+                                        jobID: job.id,
+                                        filenameSuffix: validatedFilenameSuffix,
+                                        conflictPolicy: conflictPolicy
+                                    )
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("compress-more")
+                        }
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+        }
+        .accessibilityIdentifier("no-benefit-result")
+    }
+
     private func failureView(
         _ job: CompressionJob,
         presentation: CompressionFailurePresentation
@@ -861,8 +869,8 @@ struct ContentView: View {
             sourceCard(job)
 
             if job.mediaInfo != nil {
-                settingsCard
-                outputCard
+                settingsCard(job)
+                outputCard(job)
             }
 
             GroupBox {
@@ -1196,6 +1204,8 @@ struct ContentView: View {
             String(localized: "Cancelled")
         case .completed:
             String(localized: "Completed")
+        case .noBenefit:
+            String(localized: "Already compact")
         case .failed:
             String(localized: "Failed")
         }
@@ -1217,6 +1227,8 @@ struct ContentView: View {
             "xmark.circle"
         case .completed:
             "checkmark.circle.fill"
+        case .noBenefit:
+            "info.circle.fill"
         case .failed:
             "exclamationmark.triangle.fill"
         }
@@ -1228,6 +1240,8 @@ struct ContentView: View {
             .accentColor
         case .completed:
             .green
+        case .noBenefit:
+            .secondary
         case .failed:
             .red
         case .cancelling, .cancelled:
@@ -1237,56 +1251,44 @@ struct ContentView: View {
         }
     }
 
-    private var presetBinding: Binding<CompressionPreset?> {
-        Binding(
-            get: { model.draftSettings.selectedPreset },
-            set: { preset in
-                if let preset { model.applyPreset(preset) }
+    private func recipeSummary(for job: CompressionJob) -> String {
+        let recipe = job.configuration?.recipe
+            ?? job.mediaInfo.flatMap {
+                try? AutomaticCompressionPolicy().recipe(
+                    for: $0,
+                    mode: job.mode
+                )
             }
-        )
-    }
+        guard let recipe else {
+            return String(localized: "Automatic compression")
+        }
 
-    private var qualityBinding: Binding<Double> {
-        Binding(
-            get: { model.draftSettings.quality },
-            set: { model.setQuality($0) }
-        )
-    }
-
-    private var resolutionBinding: Binding<CompressionDraftSettings.ResolutionOption> {
-        Binding(
-            get: { model.draftSettings.resolution },
-            set: { model.setResolution($0) }
-        )
-    }
-
-    private var frameRateBinding: Binding<CompressionDraftSettings.FrameRateOption> {
-        Binding(
-            get: { model.draftSettings.frameRate },
-            set: { model.setFrameRate($0) }
-        )
-    }
-
-    private var audioBinding: Binding<CompressionDraftSettings.AudioOption> {
-        Binding(
-            get: { model.draftSettings.audio },
-            set: { model.setAudio($0) }
-        )
-    }
-
-    private var metadataBinding: Binding<CompressionDraftSettings.MetadataOption> {
-        Binding(
-            get: { model.draftSettings.metadata },
-            set: { model.setMetadata($0) }
-        )
-    }
-
-    private var recipeSummary: String {
-        let settings = model.draftSettings
-        return [
-            "MP4", "H.264", settings.resolution.summary,
-            settings.frameRate.summary, settings.audio.summary,
-        ].joined(separator: " · ")
+        let resolution = switch recipe.scalePolicy {
+        case .original:
+            String(localized: "Original resolution")
+        case .maximum(let limit):
+            String(
+                localized: "Up to \(limit.maximumLongEdge)×\(limit.maximumShortEdge)"
+            )
+        }
+        let frameRate = switch recipe.frameRatePolicy {
+        case .original:
+            String(localized: "Original FPS")
+        case .capped(let limit):
+            String(
+                localized: "Up to \(limit.framesPerSecond.formatted(.number)) FPS"
+            )
+        }
+        let audio = switch recipe.audioPolicy {
+        case .remove:
+            String(localized: "No audio")
+        case .aac(let bitRate):
+            String(
+                localized: "AAC \(bitRate.bitsPerSecond / 1_000) kbps"
+            )
+        }
+        return ["MP4", "H.264", resolution, frameRate, audio]
+            .joined(separator: " · ")
     }
 
     private var validatedFilenameSuffix: String {
@@ -1330,78 +1332,6 @@ struct ContentView: View {
             case .outputDirectory:
                 model.reportOutputDirectorySelectionError()
             }
-        }
-    }
-}
-
-private extension CompressionPreset {
-    var title: String {
-        switch self {
-        case .highQuality: String(localized: "Best Quality")
-        case .balanced: String(localized: "Balanced")
-        case .smallFile: String(localized: "Smaller File")
-        }
-    }
-}
-
-private extension CompressionDraftSettings.ResolutionOption {
-    var title: String {
-        switch self {
-        case .original: String(localized: "Original")
-        case .p2160: String(localized: "Up to 2160p")
-        case .p1080: String(localized: "Up to 1080p")
-        case .p720: String(localized: "Up to 720p")
-        case .p480: String(localized: "Up to 480p")
-        }
-    }
-
-    var summary: String { title.lowercased(with: .current) }
-}
-
-private extension CompressionDraftSettings.FrameRateOption {
-    var title: String {
-        switch self {
-        case .original: String(localized: "Original")
-        case .fps60: String(localized: "Up to 60 fps")
-        case .fps30: String(localized: "Up to 30 fps")
-        case .fps24: String(localized: "Up to 24 fps")
-        }
-    }
-
-    var summary: String {
-        switch self {
-        case .original: String(localized: "original FPS")
-        case .fps60: String(localized: "up to 60 FPS")
-        case .fps30: String(localized: "up to 30 FPS")
-        case .fps24: String(localized: "up to 24 FPS")
-        }
-    }
-}
-
-private extension CompressionDraftSettings.AudioOption {
-    var title: String {
-        switch self {
-        case .aac192Kbps: String(localized: "AAC 192 kbps")
-        case .aac128Kbps: String(localized: "AAC 128 kbps")
-        case .aac96Kbps: String(localized: "AAC 96 kbps")
-        case .remove: String(localized: "No audio")
-        }
-    }
-
-    var summary: String {
-        switch self {
-        case .remove: String(localized: "no audio")
-        case .aac192Kbps, .aac128Kbps, .aac96Kbps:
-            String(localized: "AAC")
-        }
-    }
-}
-
-private extension CompressionDraftSettings.MetadataOption {
-    var title: String {
-        switch self {
-        case .preserve: String(localized: "Preserve common metadata")
-        case .remove: String(localized: "Remove metadata")
         }
     }
 }

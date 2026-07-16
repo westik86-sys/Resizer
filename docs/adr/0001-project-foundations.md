@@ -1,12 +1,13 @@
 # ADR 0001: Project foundations
 
-- Status: Accepted for bootstrap; codec defaults remain proposed
+- Status: Accepted for bootstrap; first-run UX amended by ADR 0011; codec defaults remain proposed
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
+- Amended by: [`ADR 0011`](0011-automatic-compression.md)
 
 ## Context
 
-The product is a native macOS utility for people who need a smaller, broadly compatible video without learning FFmpeg or uploading media to a service. Its promise is a simple preset-led workflow that creates a verified copy while leaving the original unchanged.
+The product is a native macOS utility for people who need a smaller, broadly compatible video without learning FFmpeg or uploading media to a service. Its promise is a simple opinionated workflow that creates a verified copy while leaving the original unchanged. ADR 0011 later replaced the preset-led public UX with one automatic first-run mode.
 
 The first engineering target is a narrow vertical slice rather than the full public MVP: select one MOV or MP4, probe it with bundled `ffprobe`, run one fixed H.264/AAC transcode with progress and cancellation, validate the temporary MP4 with `ffprobe`, commit it to a safe final name, and show the before/after sizes. This must establish the risky process, file-access, and output-safety boundaries before complex UI or queue work.
 
@@ -67,7 +68,7 @@ The following still require explicit confirmation or evidence before they become
 
 ### Universal FFmpeg GUI
 
-Rejected for the MVP because arbitrary codecs, containers, filters, and CLI flags enlarge the product surface, weaken validation, and increase safety and support risk. The product stays preset-led.
+Rejected for the MVP because arbitrary codecs, containers, filters, and CLI flags enlarge the product surface, weaken validation, and increase safety and support risk. The product stays opinionated and derives a closed, typed automatic recipe.
 
 ### Direct `libav*` integration
 
@@ -122,7 +123,7 @@ Before or during the relevant PLAN stages, validate all of the following:
 - A signed sandbox spike proves bundled `ffmpeg` and `ffprobe` can access user-selected input and output-folder resources for the full security-scope lifetime.
 - Record the FFmpeg source revision and checksum, exact configure flags, build outputs for required architectures, `-version`, `-buildconf`, and actual encoder/decoder/muxer/protocol lists.
 - Prove the required `h264_videotoolbox`, AAC, and MP4 capabilities exist before showing dependent settings.
-- Unit tests cover state transitions, JSON/rational parsing, progress parsing, typed command construction, presets, output naming, and collision/input-overwrite policy.
+- Unit tests cover state transitions, JSON/rational parsing, progress parsing, typed command construction, automatic policies, output naming, and collision/input-overwrite policy.
 - A deterministic `ProcessHarness` proves simultaneous pipe draining, bounded large output, exit handling, graceful and forced cancellation, ignored signals, and completion/cancel races without orphan processes.
 - An integration fixture completes `probe -> transcode -> probe`, validates the temporary result, commits it, and cleans only its own temp file on failure or cancellation.
 - Release validation eventually covers architectures, nested signing, entitlements, codesign, notarization, Gatekeeper, bundled-tool execution, QuickTime/Quick Look playback, and license/source completeness.

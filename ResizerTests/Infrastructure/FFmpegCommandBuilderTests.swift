@@ -19,52 +19,9 @@ struct FFmpegCommandBuilderTests {
         "результат.\(jobToken).partial.mp4"
     )
 
-    @Test("High Quality produces the complete stable argument vector")
-    func highQualityGoldenArguments() async throws {
-        let recipe = try CompressionRecipe(preset: .highQuality)
-        let request = try makeRequest(recipe: recipe)
-
-        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
-
-        #expect(
-            arguments == [
-                "-hide_banner",
-                "-loglevel", "error",
-                "-stats_period", "0.25",
-                "-nostats",
-                "-progress", "pipe:1",
-                "-autorotate",
-                "-i", Self.inputURL.path,
-                "-map", "0:2",
-                "-map", "0:5",
-                "-sn",
-                "-dn",
-                "-c:v:0", "h264_videotoolbox",
-                "-global_quality:v:0", "85",
-                "-pix_fmt:v:0", "yuv420p",
-                "-color_range:v:0", "tv",
-                "-filter:v:0",
-                "scale=w='max(2,trunc(iw/2)*2)':"
-                    + "h='max(2,trunc(ih/2)*2)':"
-                    + "flags=lanczos:out_range=tv",
-                "-c:a:0", "aac",
-                "-b:a:0", "192000",
-                "-map_metadata:g", "0:g",
-                "-map_metadata:s:v:0", "0:s:2",
-                "-map_metadata:s:a:0", "0:s:5",
-                "-map_chapters", "0",
-                "-metadata:s:v:0", "rotate=0",
-                "-movflags", "+faststart",
-                "-f", "mp4",
-                "fd:3",
-            ]
-        )
-    }
-
-    @Test("Balanced produces the complete stable argument vector")
-    func balancedGoldenArguments() async throws {
-        let recipe = try CompressionRecipe(preset: .balanced)
-        let request = try makeRequest(recipe: recipe)
+    @Test("Automatic mode produces the complete stable argument vector")
+    func automaticGoldenArguments() async throws {
+        let request = try makeAutomaticRequest()
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
@@ -99,6 +56,7 @@ struct FFmpegCommandBuilderTests {
                 "-map_metadata:s:a:0", "0:s:5",
                 "-map_chapters", "0",
                 "-metadata:s:v:0", "rotate=0",
+                "-write_tmcd", "0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
                 "fd:3",
@@ -106,10 +64,9 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    @Test("Small File produces the complete stable argument vector")
-    func smallFileGoldenArguments() async throws {
-        let recipe = try CompressionRecipe(preset: .smallFile)
-        let request = try makeRequest(recipe: recipe)
+    @Test("Compact retry produces the complete stable argument vector")
+    func compactRetryGoldenArguments() async throws {
+        let request = try makeAutomaticRequest(mode: .compactRetry)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
@@ -144,6 +101,7 @@ struct FFmpegCommandBuilderTests {
                 "-map_metadata:s:a:0", "0:s:5",
                 "-map_chapters", "0",
                 "-metadata:s:v:0", "rotate=0",
+                "-write_tmcd", "0",
                 "-movflags", "+faststart",
                 "-f", "mp4",
                 "fd:3",
@@ -151,15 +109,12 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    @Test("AAC policy accepts input without an audio stream")
-    func aacWithoutAudioStream() async throws {
+    @Test("Automatic mode omits audio arguments when the source has no audio")
+    func automaticWithoutAudioStream() async throws {
         let mediaInfo = try makeMediaInfo(
             streams: [.video(try makeVideo(index: 2))]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .balanced),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
@@ -184,10 +139,7 @@ struct FFmpegCommandBuilderTests {
                 .audio(try makeAudio(index: 5)),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .balanced),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
@@ -203,23 +155,9 @@ struct FFmpegCommandBuilderTests {
         #expect(optionValues("-map", in: arguments) == ["0:2", "0:5"])
     }
 
-    @Test("Mute omits the input audio map and audio encoder")
-    func muteRemovesAudio() async throws {
-        let recipe = try customRecipe(audioPolicy: .remove)
-        let request = try makeRequest(recipe: recipe)
-
-        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
-
-        #expect(optionValues("-map", in: arguments) == ["0:2"])
-        #expect(arguments.contains("-an"))
-        #expect(!arguments.contains("-c:a:0"))
-        #expect(!arguments.contains("-b:a:0"))
-        #expect(!arguments.contains("-map_metadata:s:a:0"))
-    }
-
     @Test("Remove metadata maps global, selected streams, and chapters to none")
     func removesMetadata() async throws {
-        let recipe = try customRecipe(metadataPolicy: .remove)
+        let recipe = try makeRecipe(metadataPolicy: .remove)
         let request = try makeRequest(recipe: recipe)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
@@ -272,10 +210,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .highQuality),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
@@ -301,10 +236,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .highQuality),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         await expectBuilderError(.unsupportedVideoFormat(streamIndex: 7)) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -324,10 +256,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .highQuality),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         await expectBuilderError(.unsupportedVideoFormat(streamIndex: 6)) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -347,10 +276,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .highQuality),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         await expectBuilderError(.unsupportedVideoFormat(streamIndex: 8)) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -372,10 +298,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .highQuality),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         await expectBuilderError(.unsupportedVideoFormat(streamIndex: 4)) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -394,10 +317,7 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: CompressionRecipe(preset: .balanced),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         await expectBuilderError(.missingVideoStream) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -406,13 +326,13 @@ struct FFmpegCommandBuilderTests {
 
     @Test("Quality endpoints and fractional FPS serialize deterministically")
     func qualityAndFractionalFrameRateArguments() async throws {
-        let zeroQuality = try customRecipe(
+        let zeroQuality = try makeRecipe(
             quality: 0,
             frameRatePolicy: .capped(
                 try FrameRateLimit(framesPerSecond: 29.97)
             )
         )
-        let fullQuality = try customRecipe(quality: 1)
+        let fullQuality = try makeRecipe(quality: 1)
 
         let zeroArguments = try await FFmpegCommandBuilder().arguments(
             for: makeRequest(recipe: zeroQuality)
@@ -433,11 +353,11 @@ struct FFmpegCommandBuilderTests {
 
     @Test("Validated requests route media through the reserved stdout descriptor")
     func outputSafetyArguments() async throws {
-        let recipe = try CompressionRecipe(preset: .balanced)
-        let request = try makeRequest(recipe: recipe)
+        let request = try makeAutomaticRequest()
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
         #expect(arguments.suffix(3) == ["-f", "mp4", "fd:3"])
+        #expect(optionValues("-write_tmcd", in: arguments) == ["0"])
         #expect(arguments.last == "fd:3")
         #expect(!arguments.contains("-n"))
         #expect(!arguments.contains(Self.temporaryURL.path))
@@ -521,6 +441,18 @@ struct FFmpegCommandBuilderTests {
         return TranscodeCommandRequest(transcodeRequest: transcodeRequest)
     }
 
+    private func makeAutomaticRequest(
+        mode: CompressionMode = .automatic,
+        mediaInfo: MediaInfo? = nil
+    ) throws -> TranscodeCommandRequest {
+        let mediaInfo = try mediaInfo ?? makeMediaInfo()
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            mode: mode
+        )
+        return try makeRequest(recipe: recipe, mediaInfo: mediaInfo)
+    }
+
     private func planningRequest() throws -> OutputPlanningRequest {
         OutputPlanningRequest(
             jobID: Self.jobID,
@@ -529,7 +461,7 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    private func customRecipe(
+    private func makeRecipe(
         quality: Double = 0.65,
         scalePolicy: ScalePolicy = .original,
         frameRatePolicy: FrameRatePolicy = .original,
@@ -537,7 +469,7 @@ struct FFmpegCommandBuilderTests {
         metadataPolicy: MetadataPolicy = .preserveCommon
     ) throws -> CompressionRecipe {
         CompressionRecipe(
-            origin: .custom,
+            origin: .mode(.automatic),
             container: .mp4,
             videoCodec: .h264VideoToolbox,
             rateControl: .quality(try VideoQuality(quality)),

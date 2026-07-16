@@ -8,6 +8,7 @@ nonisolated enum JobPhase: String, CaseIterable, Sendable, Equatable {
     case cancelling
     case cancelled
     case completed
+    case noBenefit
     case failed
 }
 
@@ -31,6 +32,7 @@ nonisolated enum JobState: Sendable, Equatable {
     case cancelling(lastProgress: TranscodeProgress?)
     case cancelled
     case completed(CompressionResult)
+    case noBenefit(CompressionNoBenefitResult)
     case failed(TranscodeFailure)
 
     var phase: JobPhase {
@@ -53,6 +55,8 @@ nonisolated enum JobState: Sendable, Equatable {
             .cancelled
         case .completed:
             .completed
+        case .noBenefit:
+            .noBenefit
         case .failed:
             .failed
         }
@@ -87,6 +91,8 @@ nonisolated enum JobState: Sendable, Equatable {
         case (.running, .failed(let failure)):
             failure.stage == .encode
         case (.finishing(.validating), .finishing(.committing)):
+            true
+        case (.finishing(.validating), .noBenefit):
             true
         case (.finishing, .cancelling):
             true

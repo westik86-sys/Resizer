@@ -22,9 +22,33 @@ struct JobStateTests {
         }
     }
 
+    @Test("Validated output can finish with neutral no-benefit result")
+    func noBenefitPath() throws {
+        let states: [JobState] = [
+            .draft,
+            .probing,
+            .ready,
+            .queued,
+            .running(progress: nil),
+            .finishing(.validating),
+            .noBenefit(try TestFixtures.noBenefitResult()),
+        ]
+
+        for (current, next) in zip(states, states.dropFirst()) {
+            #expect(current.canTransition(to: next))
+            #expect(try current.transitioning(to: next) == next)
+        }
+
+        let terminal = try #require(states.last)
+        #expect(terminal.phase == .noBenefit)
+        #expect(!terminal.canTransition(to: .ready))
+        #expect(!terminal.canTransition(to: .probing))
+    }
+
     @Test("Concrete state matrix accepts exactly the documented edges")
     func transitionMatrix() throws {
         let result = try TestFixtures.result()
+        let noBenefitResult = try TestFixtures.noBenefitResult()
         let states: [(name: String, state: JobState)] = [
             ("draft", .draft),
             ("probing", .probing),
@@ -36,6 +60,7 @@ struct JobStateTests {
             ("cancelling", .cancelling(lastProgress: nil)),
             ("cancelled", .cancelled),
             ("completed", .completed(result)),
+            ("noBenefit", .noBenefit(noBenefitResult)),
             ("failedProbe", .failed(TestFixtures.failure(stage: .probe))),
             ("failedPreflight", .failed(TestFixtures.failure(stage: .preflight))),
             ("failedEncode", .failed(TestFixtures.failure(stage: .encode))),
@@ -57,6 +82,7 @@ struct JobStateTests {
             "running->cancelling",
             "running->failedEncode",
             "validating->committing",
+            "validating->noBenefit",
             "validating->cancelling",
             "validating->failedValidate",
             "committing->completed",

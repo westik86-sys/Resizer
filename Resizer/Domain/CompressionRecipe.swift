@@ -12,16 +12,12 @@ nonisolated struct CompressionRecipe: Sendable, Equatable {
 }
 
 nonisolated enum RecipeOrigin: Sendable, Equatable {
-    case preset(CompressionPreset)
-    case custom
+    case mode(CompressionMode)
 }
 
-nonisolated enum CompressionPreset: String, CaseIterable, Sendable, Equatable {
-    case highQuality
-    case balanced
-    case smallFile
-
-    static let `default`: CompressionPreset = .balanced
+nonisolated enum CompressionMode: Sendable, Equatable {
+    case automatic
+    case compactRetry
 }
 
 nonisolated enum OutputContainer: Sendable, Equatable {
@@ -113,63 +109,60 @@ nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
     case invalidAudioBitRate
 }
 
-extension CompressionRecipe {
-    init(preset: CompressionPreset) throws {
-        switch preset {
-        case .highQuality:
-            self.init(
-                origin: .preset(preset),
-                container: .mp4,
-                videoCodec: .h264VideoToolbox,
-                rateControl: .quality(try VideoQuality(0.85)),
-                scalePolicy: .original,
-                frameRatePolicy: .original,
-                audioPolicy: .aac(
-                    try AudioBitRate(bitsPerSecond: 192_000)
-                ),
-                metadataPolicy: .preserveCommon
-            )
-        case .balanced:
-            self.init(
-                origin: .preset(preset),
-                container: .mp4,
-                videoCodec: .h264VideoToolbox,
-                rateControl: .quality(try VideoQuality(0.65)),
-                scalePolicy: .maximum(
-                    try ResolutionLimit(
-                        maximumLongEdge: 1_920,
-                        maximumShortEdge: 1_080
-                    )
-                ),
-                frameRatePolicy: .capped(
-                    try FrameRateLimit(framesPerSecond: 30)
-                ),
-                audioPolicy: .aac(
-                    try AudioBitRate(bitsPerSecond: 128_000)
-                ),
-                metadataPolicy: .preserveCommon
-            )
-        case .smallFile:
-            self.init(
-                origin: .preset(preset),
-                container: .mp4,
-                videoCodec: .h264VideoToolbox,
-                rateControl: .quality(try VideoQuality(0.45)),
-                scalePolicy: .maximum(
-                    try ResolutionLimit(
-                        maximumLongEdge: 1_280,
-                        maximumShortEdge: 720
-                    )
-                ),
-                frameRatePolicy: .capped(
-                    try FrameRateLimit(framesPerSecond: 24)
-                ),
-                audioPolicy: .aac(
-                    try AudioBitRate(bitsPerSecond: 96_000)
-                ),
-                metadataPolicy: .preserveCommon
+nonisolated struct AutomaticCompressionPolicy: Sendable {
+    func recipe(
+        for mediaInfo: MediaInfo,
+        mode: CompressionMode = .automatic
+    ) throws -> CompressionRecipe {
+        let audioPolicy: AudioPolicy
+        if mediaInfo.audioStreams.isEmpty {
+            audioPolicy = .remove
+        } else {
+            let bitsPerSecond = switch mode {
+            case .automatic: 128_000
+            case .compactRetry: 96_000
+            }
+            audioPolicy = .aac(
+                try AudioBitRate(bitsPerSecond: bitsPerSecond)
             )
         }
+
+        let values = switch mode {
+        case .automatic:
+            (
+                quality: 0.65,
+                maximumLongEdge: 1_920,
+                maximumShortEdge: 1_080,
+                framesPerSecond: 30.0
+            )
+        case .compactRetry:
+            (
+                quality: 0.45,
+                maximumLongEdge: 1_280,
+                maximumShortEdge: 720,
+                framesPerSecond: 24.0
+            )
+        }
+
+        return CompressionRecipe(
+            origin: .mode(mode),
+            container: .mp4,
+            videoCodec: .h264VideoToolbox,
+            rateControl: .quality(try VideoQuality(values.quality)),
+            scalePolicy: .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: values.maximumLongEdge,
+                    maximumShortEdge: values.maximumShortEdge
+                )
+            ),
+            frameRatePolicy: .capped(
+                try FrameRateLimit(
+                    framesPerSecond: values.framesPerSecond
+                )
+            ),
+            audioPolicy: audioPolicy,
+            metadataPolicy: .preserveCommon
+        )
     }
 }
 

@@ -2,29 +2,27 @@ import Foundation
 @testable import Resizer
 
 nonisolated enum TestFixtures {
-    static func mediaInfo() throws -> MediaInfo {
-        try MediaInfo(
-            formatNames: ["mov", "mp4"],
-            durationMicroseconds: 10_000_000,
-            byteCount: 4_096,
-            bitRate: 2_000_000,
-            streams: [
-                .video(
-                    try VideoStreamInfo(
-                        index: 0,
-                        codecName: "h264",
-                        encodedWidth: 1_920,
-                        encodedHeight: 1_080,
-                        frameRate: try RationalFrameRate(
-                            numerator: 30_000,
-                            denominator: 1_001
-                        ),
-                        rotationDegrees: 0,
-                        pixelFormat: "yuv420p",
-                        bitDepth: 8,
-                        dynamicRange: .sdr
-                    )
-                ),
+    static func mediaInfo(includeAudio: Bool = true) throws -> MediaInfo {
+        var streams: [MediaStream] = [
+            .video(
+                try VideoStreamInfo(
+                    index: 0,
+                    codecName: "h264",
+                    encodedWidth: 1_920,
+                    encodedHeight: 1_080,
+                    frameRate: try RationalFrameRate(
+                        numerator: 30_000,
+                        denominator: 1_001
+                    ),
+                    rotationDegrees: 0,
+                    pixelFormat: "yuv420p",
+                    bitDepth: 8,
+                    dynamicRange: .sdr
+                )
+            ),
+        ]
+        if includeAudio {
+            streams.append(
                 .audio(
                     try AudioStreamInfo(
                         index: 1,
@@ -35,30 +33,26 @@ nonisolated enum TestFixtures {
                         bitRate: 128_000,
                         languageCode: nil
                     )
-                ),
-            ]
+                )
+            )
+        }
+
+        return try MediaInfo(
+            formatNames: ["mov", "mp4"],
+            durationMicroseconds: 10_000_000,
+            byteCount: 4_096,
+            bitRate: 2_000_000,
+            streams: streams
         )
     }
 
-    static func configuration() throws -> JobConfiguration {
-        let recipe = CompressionRecipe(
-            origin: .preset(.balanced),
-            container: .mp4,
-            videoCodec: .h264VideoToolbox,
-            rateControl: .quality(try VideoQuality(0.65)),
-            scalePolicy: .maximum(
-                try ResolutionLimit(
-                    maximumLongEdge: 1_920,
-                    maximumShortEdge: 1_080
-                )
-            ),
-            frameRatePolicy: .capped(
-                try FrameRateLimit(framesPerSecond: 30)
-            ),
-            audioPolicy: .aac(
-                try AudioBitRate(bitsPerSecond: 128_000)
-            ),
-            metadataPolicy: .preserveCommon
+    static func configuration(
+        mode: CompressionMode = .automatic,
+        mediaInfo: MediaInfo? = nil
+    ) throws -> JobConfiguration {
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo ?? self.mediaInfo(),
+            mode: mode
         )
         let outputPolicy = try OutputPolicy(
             directoryURL: URL(fileURLWithPath: "/tmp/ResizerTests", isDirectory: true)
@@ -85,7 +79,16 @@ nonisolated enum TestFixtures {
     static func result() throws -> CompressionResult {
         try CompressionResult(
             outputURL: URL(fileURLWithPath: "/tmp/ResizerTests/result.mp4"),
+            sourceByteCount: 4_096,
             outputByteCount: 2_048,
+            elapsed: .seconds(4)
+        )
+    }
+
+    static func noBenefitResult() throws -> CompressionNoBenefitResult {
+        try CompressionNoBenefitResult(
+            sourceByteCount: 4_096,
+            candidateByteCount: 4_096,
             elapsed: .seconds(4)
         )
     }

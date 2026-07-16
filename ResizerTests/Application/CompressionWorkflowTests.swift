@@ -56,6 +56,67 @@ struct CompressionWorkflowTests {
         #expect(stored == completed)
     }
 
+    @Test("Equal or larger validated output returns NoBenefit without commit")
+    func noBenefitDoesNotPublish() async throws {
+        for candidateByteCount in [
+            WorkflowHarness.sourceByteCount,
+            WorkflowHarness.sourceByteCount * 2,
+        ] {
+            let harness = try await WorkflowHarness.make(
+                options: .init(outputByteCount: candidateByteCount)
+            )
+
+            let finished = try await harness.coordinator.process(
+                jobID: harness.jobID,
+                configuration: harness.configuration
+            )
+
+            guard case .noBenefit(let result) = finished.state else {
+                Issue.record(
+                    "Expected noBenefit for candidate size \(candidateByteCount), got \(finished.state)"
+                )
+                continue
+            }
+            #expect(result.sourceByteCount == WorkflowHarness.sourceByteCount)
+            #expect(result.candidateByteCount == candidateByteCount)
+            #expect(result.elapsed >= .zero)
+            #expect(await harness.fileAccess.committedPlans().isEmpty)
+            try await expectOnlyExactCleanup(harness)
+
+            let events = harness.events.snapshot()
+            let validationIndex = try #require(
+                events.firstIndex(of: "validate")
+            )
+            let cleanupIndex = try #require(
+                events.firstIndex(of: "cleanup")
+            )
+            #expect(validationIndex < cleanupIndex)
+            #expect(!events.contains("commit"))
+        }
+    }
+
+    @Test("NoBenefit cleanup failure is one validate file-system failure")
+    func noBenefitCleanupFailure() async throws {
+        let harness = try await WorkflowHarness.make(
+            options: .init(
+                outputByteCount: WorkflowHarness.sourceByteCount,
+                cleanupFailure: .cleanup
+            )
+        )
+
+        let failure = try await requireFailure(harness)
+
+        #expect(failure.stage == .validate)
+        #expect(failure.reason == .fileSystem)
+        try await expectFailedState(
+            coordinator: harness.coordinator,
+            jobID: harness.jobID,
+            stage: .validate
+        )
+        #expect(await harness.fileAccess.committedPlans().isEmpty)
+        try await expectOnlyExactCleanup(harness)
+    }
+
     @Test("Preparation stops in ready and prepared start does not re-probe")
     func preparedWorkflow() async throws {
         let harness = try await WorkflowHarness.make()
@@ -887,9 +948,11 @@ struct CompressionWorkflowTests {
 }
 
 private nonisolated struct WorkflowHarness: Sendable {
+    static let sourceByteCount: Int64 = 1_024
     static let outputByteCount: Int64 = 777
 
     nonisolated struct Options: Sendable {
+        var outputByteCount = WorkflowHarness.outputByteCount
         var finalOutputExists = false
         var temporaryOutputExists = false
         var inputProbeFailure: WorkflowFakeError?
@@ -949,7 +1012,10 @@ private nonisolated struct WorkflowHarness: Sendable {
         let source = try TestFixtures.mediaInfo()
         let encoded = try TestFixtures.mediaInfo()
         let configuration = JobConfiguration(
-            recipe: try CompressionRecipe(preset: .balanced),
+            recipe: try AutomaticCompressionPolicy().recipe(
+                for: source,
+                mode: .automatic
+            ),
             outputPolicy: try OutputPolicy(
                 directoryURL: outputDirectory
             )
@@ -970,7 +1036,7 @@ private nonisolated struct WorkflowHarness: Sendable {
         )
         let planner = WorkflowPlanner(urls: urls, events: events)
         let transcoder = WorkflowTranscoder(
-            outputByteCount: outputByteCount,
+            outputByteCount: options.outputByteCount,
             progress: try TestFixtures.progress(),
             preflightFailure: options.preflightFailure,
             transcodeFailure: options.transcodeFailure,
@@ -985,7 +1051,7 @@ private nonisolated struct WorkflowHarness: Sendable {
         )
         let fileAccess = WorkflowFileAccess(
             urls: urls,
-            outputByteCount: outputByteCount,
+            outputByteCount: options.outputByteCount,
             finalOutputExists: options.finalOutputExists,
             temporaryOutputExists: options.temporaryOutputExists,
             commitFailure: options.commitFailure,
@@ -1347,7 +1413,10 @@ private actor WorkflowFileAccess: FileAccessing {
     func metadata(at url: URL) async throws -> FileMetadata? {
         if url == urls.input {
             events.append("metadata.input")
-            return FileMetadata(byteCount: 1_024, isDirectory: false)
+            return FileMetadata(
+                byteCount: WorkflowHarness.sourceByteCount,
+                isDirectory: false
+            )
         }
         if url == urls.outputDirectory {
             events.append("metadata.directory")

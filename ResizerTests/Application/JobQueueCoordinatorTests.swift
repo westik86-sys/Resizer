@@ -146,6 +146,30 @@ struct JobQueueCoordinatorTests {
         #expect(await harness.transcoder.maximumConcurrentCount() == 1)
     }
 
+    @Test("A NoBenefit job advances FIFO to the next queued job")
+    func noBenefitContinuation() async throws {
+        let ids = [UUID(), UUID()]
+        let harness = try await QueueHarness.make(
+            candidateByteCounts: [
+                ids[0]: QueueHarness.sourceByteCount,
+            ]
+        )
+        try await harness.addAndEnqueue(ids)
+        await harness.coordinator.startQueue()
+
+        try await harness.transcoder.waitUntilStarted(ids[0])
+        try await harness.transcoder.succeed(ids[0])
+        try await harness.transcoder.waitUntilStarted(ids[1])
+        try await harness.transcoder.succeed(ids[1])
+        try await harness.waitUntilIdle()
+
+        let snapshot = await harness.coordinator.snapshot()
+        #expect(snapshot.job(id: ids[0])?.state.phase == .noBenefit)
+        #expect(snapshot.job(id: ids[1])?.state.phase == .completed)
+        #expect(await harness.transcoder.startedJobIDs() == ids)
+        #expect(await harness.transcoder.maximumConcurrentCount() == 1)
+    }
+
     @Test("Only waiting jobs can be reordered or removed")
     func reorderRemoveAndMutationGuards() async throws {
         let harness = try await QueueHarness.make()
@@ -501,13 +525,16 @@ struct JobQueueCoordinatorTests {
 }
 
 private struct QueueHarness: Sendable {
+    static let sourceByteCount: Int64 = 4_096
+
     let coordinator: JobQueueCoordinator
     let transcoder: ControlledQueueTranscoder
     let configuration: JobConfiguration
 
     static func make(
         mediaProber: (any MediaProbing)? = nil,
-        plannerMode: QueueOutputPlannerMode = .perJob
+        plannerMode: QueueOutputPlannerMode = .perJob,
+        candidateByteCounts: [CompressionJob.ID: Int64] = [:]
     ) async throws -> QueueHarness {
         let outputDirectory = URL(
             fileURLWithPath: "/tmp/ResizerQueueTests-\(UUID().uuidString)",
@@ -541,7 +568,10 @@ private struct QueueHarness: Sendable {
             outputDirectory: outputDirectory,
             committedPathLedger: committedPathLedger
         )
-        let transcoder = ControlledQueueTranscoder(fileAccess: fileAccess)
+        let transcoder = ControlledQueueTranscoder(
+            fileAccess: fileAccess,
+            candidateByteCounts: candidateByteCounts
+        )
         let mediaInfo = try TestFixtures.mediaInfo()
         let selectedMediaProber: any MediaProbing
         if let mediaProber {
@@ -550,7 +580,10 @@ private struct QueueHarness: Sendable {
             selectedMediaProber = FakeMediaProber { _ in mediaInfo }
         }
         let configuration = JobConfiguration(
-            recipe: try CompressionRecipe(preset: .balanced),
+            recipe: try AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                mode: .automatic
+            ),
             outputPolicy: try OutputPolicy(directoryURL: outputDirectory)
         )
         let coordinator = JobQueueCoordinator(
@@ -688,6 +721,7 @@ private nonisolated enum QueueAttemptCompletion: Sendable {
 
 private actor ControlledQueueTranscoder: Transcoding {
     private let fileAccess: QueueFileAccess
+    private let candidateByteCounts: [CompressionJob.ID: Int64]
     private var starts: [QueueAttemptKey] = []
     private var active: Set<QueueAttemptKey> = []
     private var maximumConcurrent = 0
@@ -696,8 +730,12 @@ private actor ControlledQueueTranscoder: Transcoding {
     ] = [:]
     private var cancellations: [CompressionJob.ID] = []
 
-    init(fileAccess: QueueFileAccess) {
+    init(
+        fileAccess: QueueFileAccess,
+        candidateByteCounts: [CompressionJob.ID: Int64]
+    ) {
         self.fileAccess = fileAccess
+        self.candidateByteCounts = candidateByteCounts
     }
 
     func transcode(
@@ -723,8 +761,10 @@ private actor ControlledQueueTranscoder: Transcoding {
         case .cancelled:
             throw CancellationError()
         case .success:
+            let candidateByteCount = candidateByteCounts[request.jobID]
+                ?? 2_048
             let metadata = FileMetadata(
-                byteCount: 2_048,
+                byteCount: candidateByteCount,
                 isDirectory: false,
                 identity: reservation.metadata.identity
             )
@@ -840,7 +880,7 @@ private actor QueueFileAccess: FileAccessing {
         if normalized.deletingLastPathComponent() != outputDirectory,
            ["mov", "mp4"].contains(normalized.pathExtension.lowercased()) {
             return FileMetadata(
-                byteCount: 4_096,
+                byteCount: QueueHarness.sourceByteCount,
                 isDirectory: false,
                 identity: FileIdentity(device: 7, inode: 2)
             )

@@ -509,10 +509,11 @@ struct FFmpegTranscodingServiceTests {
         )!
     ) throws -> TranscodeRequest {
         let plan = try makeOutputPlan(jobID: jobID)
+        let mediaInfo = try TestFixtures.mediaInfo()
         return TranscodeRequest(
             outputPlan: plan,
-            mediaInfo: try TestFixtures.mediaInfo(),
-            recipe: try CompressionRecipe(preset: .balanced)
+            mediaInfo: mediaInfo,
+            recipe: try AutomaticCompressionPolicy().recipe(for: mediaInfo)
         )
     }
 

@@ -44,7 +44,7 @@ private actor HeadlessIntegrationEnvironment {
 struct HeadlessTranscodingIntegrationTests {
     private static let environment = HeadlessIntegrationEnvironment()
 
-    @Test("Bundled H.264 probe → transcode → probe commits a validated MP4")
+    @Test("Bundled H.264 probe → transcode → probe reaches a valid result")
     func bundledProbeTranscodeProbe() async throws {
         try await runWorkflow(
             fixtureName: "short-h264-aac",
@@ -52,7 +52,7 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
-    @Test("Bundled HEVC input becomes a validated H.264/AAC MP4")
+    @Test("Bundled HEVC input reaches a valid automatic result")
     func bundledHEVCProbeTranscodeProbe() async throws {
         try await runWorkflow(
             fixtureName: "short-hevc-aac",
@@ -60,7 +60,50 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
-    @Test("Two bundled jobs complete through one production queue")
+    @Test("Bundled MP4 output suppresses a source timecode data track")
+    func bundledTimecodeInputDoesNotRecreateTMCD() async throws {
+        let fixtureURL = try #require(
+            Self.fixtureURL(named: "short-h264-aac")
+        )
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ResizerTimecodeIntegration-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: fixtureDirectory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: fixtureDirectory)
+        }
+
+        let timecodeInputURL = fixtureDirectory.appendingPathComponent(
+            "short-h264-aac-timecode.mp4"
+        )
+        let dependencies = try await Self.environment.dependencies()
+        try await Self.createTimecodeFixture(
+            from: fixtureURL,
+            at: timecodeInputURL,
+            runner: dependencies.runner
+        )
+        let sourceMedia = try await dependencies.prober.probe(
+            timecodeInputURL
+        )
+        #expect(
+            sourceMedia.streams.contains { stream in
+                guard case .other(let other) = stream else { return false }
+                return other.codecType == "data"
+            }
+        )
+
+        try await runWorkflow(
+            inputURL: timecodeInputURL,
+            expectedInputVideoCodec: "h264"
+        )
+    }
+
+    @Test("Two bundled jobs reach terminal results through one production queue")
     func bundledSequentialQueue() async throws {
         let fixtureURLs = try ["short-h264-aac", "short-hevc-aac"].map {
             try #require(Self.fixtureURL(named: $0))
@@ -93,11 +136,21 @@ struct HeadlessTranscodingIntegrationTests {
         let jobIDs = try await coordinator.add(
             fixtureURLs.map { JobQueueImport(inputURL: $0) }
         )
-        let configuration = JobConfiguration(
-            recipe: try CompressionRecipe(preset: .balanced),
-            outputPolicy: try OutputPolicy(directoryURL: outputDirectory)
-        )
+        let preparedSnapshot = await coordinator.snapshot()
         for jobID in jobIDs {
+            let job = try #require(
+                preparedSnapshot.jobs.first { $0.id == jobID }
+            )
+            let mediaInfo = try #require(job.mediaInfo)
+            let configuration = JobConfiguration(
+                recipe: try AutomaticCompressionPolicy().recipe(
+                    for: mediaInfo,
+                    mode: job.mode
+                ),
+                outputPolicy: try OutputPolicy(
+                    directoryURL: outputDirectory
+                )
+            )
             _ = try await coordinator.enqueue(
                 jobID: jobID,
                 configuration: configuration
@@ -114,7 +167,10 @@ struct HeadlessTranscodingIntegrationTests {
                 if !snapshot.isDraining,
                    phases.count == jobIDs.count,
                    phases.allSatisfy({
-                       $0 == .completed || $0 == .failed || $0 == .cancelled
+                       $0 == .completed
+                           || $0 == .noBenefit
+                           || $0 == .failed
+                           || $0 == .cancelled
                    }) {
                     return snapshot
                 }
@@ -124,12 +180,22 @@ struct HeadlessTranscodingIntegrationTests {
 
         #expect(terminalSnapshot.jobs.map(\.id) == jobIDs)
         for job in terminalSnapshot.jobs {
-            guard case .completed(let result) = job.state else {
-                Issue.record("Expected completed queue job, got \(job.state)")
-                continue
+            switch job.state {
+            case .completed(let result):
+                #expect(result.outputByteCount > 0)
+                #expect(result.outputByteCount < result.sourceByteCount)
+                #expect(
+                    FileManager.default.fileExists(
+                        atPath: result.outputURL.path
+                    )
+                )
+            case .noBenefit(let result):
+                #expect(result.candidateByteCount >= result.sourceByteCount)
+            default:
+                Issue.record(
+                    "Expected completed or no-benefit queue job, got \(job.state)"
+                )
             }
-            #expect(result.outputByteCount > 0)
-            #expect(FileManager.default.fileExists(atPath: result.outputURL.path))
         }
         #expect(await dependencies.runner.activeExecutionCount() == 0)
         #expect(
@@ -152,7 +218,17 @@ struct HeadlessTranscodingIntegrationTests {
         expectedInputVideoCodec: String
     ) async throws {
         let fixtureURL = try #require(Self.fixtureURL(named: fixtureName))
-        let originalFixtureData = try Data(contentsOf: fixtureURL)
+        try await runWorkflow(
+            inputURL: fixtureURL,
+            expectedInputVideoCodec: expectedInputVideoCodec
+        )
+    }
+
+    private func runWorkflow(
+        inputURL: URL,
+        expectedInputVideoCodec: String
+    ) async throws {
+        let originalFixtureData = try Data(contentsOf: inputURL)
         let outputDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "ResizerHeadlessIntegration-\(UUID().uuidString)",
@@ -179,15 +255,19 @@ struct HeadlessTranscodingIntegrationTests {
                 fileAccess: fileAccess
             )
         )
-        let job = try await coordinator.createJob(inputURL: fixtureURL)
+        let job = try await coordinator.createJob(inputURL: inputURL)
+        let sourceMedia = try await prober.probe(inputURL)
         let configuration = JobConfiguration(
-            recipe: try CompressionRecipe(preset: .balanced),
+            recipe: try AutomaticCompressionPolicy().recipe(
+                for: sourceMedia,
+                mode: job.mode
+            ),
             outputPolicy: try OutputPolicy(
                 directoryURL: outputDirectory
             )
         )
 
-        let completed = try await ProcessHarnessFixture.withTimeout(
+        let terminal = try await ProcessHarnessFixture.withTimeout(
             after: .seconds(60)
         ) {
             try await coordinator.process(
@@ -196,29 +276,56 @@ struct HeadlessTranscodingIntegrationTests {
             )
         }
 
-        guard case .completed(let result) = completed.state else {
-            Issue.record("Expected completed workflow, got \(completed.state)")
-            return
-        }
         #expect(
-            completed.mediaInfo?.videoStreams.first?.codecName
+            terminal.mediaInfo?.videoStreams.first?.codecName
                 == expectedInputVideoCodec
         )
-        #expect(result.outputURL.standardizedFileURL != fixtureURL.standardizedFileURL)
-        #expect(result.outputByteCount > 0)
-        #expect(FileManager.default.fileExists(atPath: result.outputURL.path))
+        switch terminal.state {
+        case .completed(let result):
+            #expect(
+                result.outputURL.standardizedFileURL
+                    != inputURL.standardizedFileURL
+            )
+            #expect(result.outputByteCount > 0)
+            #expect(result.outputByteCount < result.sourceByteCount)
+            #expect(
+                FileManager.default.fileExists(atPath: result.outputURL.path)
+            )
 
-        let outputMedia = try await prober.probe(result.outputURL)
-        try TranscodeOutputValidator().validate(
-            output: outputMedia,
-            source: try #require(completed.mediaInfo),
-            recipe: configuration.recipe
-        )
-        #expect(outputMedia.formatNames.contains("mp4"))
-        #expect(outputMedia.videoStreams.first?.codecName == "h264")
-        #expect(outputMedia.audioStreams.count == 1)
-        #expect(outputMedia.audioStreams.first?.codecName == "aac")
-        #expect(try Data(contentsOf: fixtureURL) == originalFixtureData)
+            let outputMedia = try await prober.probe(result.outputURL)
+            try TranscodeOutputValidator().validate(
+                output: outputMedia,
+                source: try #require(terminal.mediaInfo),
+                recipe: configuration.recipe
+            )
+            #expect(outputMedia.formatNames.contains("mp4"))
+            #expect(outputMedia.videoStreams.first?.codecName == "h264")
+            #expect(outputMedia.audioStreams.count == 1)
+            #expect(outputMedia.audioStreams.first?.codecName == "aac")
+            #expect(
+                outputMedia.streams.allSatisfy { stream in
+                    switch stream {
+                    case .video, .audio:
+                        true
+                    case .subtitle, .other:
+                        false
+                    }
+                }
+            )
+        case .noBenefit(let result):
+            #expect(result.candidateByteCount >= result.sourceByteCount)
+            #expect(
+                try FileManager.default.contentsOfDirectory(
+                    at: outputDirectory,
+                    includingPropertiesForKeys: nil
+                ).isEmpty
+            )
+        default:
+            Issue.record(
+                "Expected completed or no-benefit workflow, got \(terminal.state)"
+            )
+        }
+        #expect(try Data(contentsOf: inputURL) == originalFixtureData)
         #expect(await runner.activeExecutionCount() == 0)
         #expect(
             try FileManager.default.contentsOfDirectory(
@@ -227,6 +334,44 @@ struct HeadlessTranscodingIntegrationTests {
             ).allSatisfy {
                 !$0.lastPathComponent.hasSuffix(".partial.mp4")
             }
+        )
+    }
+
+    /// Creates a disposable input fixture through the bundled executable.
+    /// This deliberately enables MP4 tmcd generation so the production
+    /// command must suppress it again while preserving common metadata.
+    private static func createTimecodeFixture(
+        from sourceURL: URL,
+        at outputURL: URL,
+        runner: ProcessRunner
+    ) async throws {
+        let executableURL = try #require(
+            Bundle.main.url(forAuxiliaryExecutable: "ffmpeg")
+        )
+        let request = try ProcessRequest(
+            executableURL: executableURL,
+            arguments: [
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", sourceURL.path,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c", "copy",
+                "-metadata:s:v:0", "timecode=00:00:00:00",
+                "-write_tmcd", "1",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                "-y", outputURL.path,
+            ],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024
+        )
+        let collected = try await ProcessHarnessFixture.collect(
+            try await runner.start(request)
+        )
+        try #require(collected.result.termination.status == 0)
+        try #require(
+            FileManager.default.fileExists(atPath: outputURL.path)
         )
     }
 

@@ -57,27 +57,59 @@ nonisolated enum TranscodeProgressValidationError: Error, Sendable, Equatable {
 
 nonisolated struct CompressionResult: Sendable, Equatable {
     let outputURL: URL
+    let sourceByteCount: Int64
     let outputByteCount: Int64
     let elapsed: Duration
 
     init(
         outputURL: URL,
+        sourceByteCount: Int64,
         outputByteCount: Int64,
         elapsed: Duration
     ) throws {
         guard outputURL.isFileURL,
+              sourceByteCount > 0,
               outputByteCount > 0,
+              outputByteCount < sourceByteCount,
               elapsed >= .zero else {
             throw CompressionResultValidationError.invalidResult
         }
 
         self.outputURL = outputURL
+        self.sourceByteCount = sourceByteCount
         self.outputByteCount = outputByteCount
         self.elapsed = elapsed
     }
 }
 
 nonisolated enum CompressionResultValidationError: Error, Sendable, Equatable {
+    case invalidResult
+}
+
+nonisolated struct CompressionNoBenefitResult: Sendable, Equatable {
+    let sourceByteCount: Int64
+    let candidateByteCount: Int64
+    let elapsed: Duration
+
+    init(
+        sourceByteCount: Int64,
+        candidateByteCount: Int64,
+        elapsed: Duration
+    ) throws {
+        guard sourceByteCount > 0,
+              candidateByteCount >= sourceByteCount,
+              elapsed >= .zero else {
+            throw CompressionNoBenefitResultValidationError.invalidResult
+        }
+
+        self.sourceByteCount = sourceByteCount
+        self.candidateByteCount = candidateByteCount
+        self.elapsed = elapsed
+    }
+}
+
+nonisolated enum CompressionNoBenefitResultValidationError:
+    Error, Sendable, Equatable {
     case invalidResult
 }
 

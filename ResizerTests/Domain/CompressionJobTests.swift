@@ -45,7 +45,76 @@ struct CompressionJobTests {
 
         #expect(job.id == id)
         #expect(job.inputURL == inputURL)
+        #expect(job.mode == .automatic)
         #expect(job.state.phase == .completed)
+    }
+
+    @Test("A job accepts only a recipe derived for its immutable mode")
+    func configurationModeMustMatchJob() throws {
+        let mediaInfo = try TestFixtures.mediaInfo()
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/source.mov"),
+            mode: .compactRetry
+        )
+        try job.transition(to: .probing)
+        try job.recordMediaInfo(mediaInfo)
+        try job.transition(to: .ready)
+
+        #expect(throws: CompressionJobMutationError.configurationModeMismatch) {
+            try job.configure(
+                TestFixtures.configuration(
+                    mode: .automatic,
+                    mediaInfo: mediaInfo
+                )
+            )
+        }
+        #expect(job.configuration == nil)
+
+        let compactConfiguration = try TestFixtures.configuration(
+            mode: .compactRetry,
+            mediaInfo: mediaInfo
+        )
+        try job.configure(compactConfiguration)
+
+        #expect(job.mode == .compactRetry)
+        #expect(job.configuration == compactConfiguration)
+        #expect(job.configuration?.recipe.origin == .mode(.compactRetry))
+    }
+
+    @Test("A matching mode cannot disguise a non-policy recipe")
+    func configurationRecipeMustMatchPolicy() throws {
+        let mediaInfo = try TestFixtures.mediaInfo()
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/source.mov")
+        )
+        try job.transition(to: .probing)
+        try job.recordMediaInfo(mediaInfo)
+        try job.transition(to: .ready)
+        let compact = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            mode: .compactRetry
+        )
+        let disguisedRecipe = CompressionRecipe(
+            origin: .mode(.automatic),
+            container: compact.container,
+            videoCodec: compact.videoCodec,
+            rateControl: compact.rateControl,
+            scalePolicy: compact.scalePolicy,
+            frameRatePolicy: compact.frameRatePolicy,
+            audioPolicy: compact.audioPolicy,
+            metadataPolicy: compact.metadataPolicy
+        )
+        let configuration = JobConfiguration(
+            recipe: disguisedRecipe,
+            outputPolicy: try TestFixtures.configuration().outputPolicy
+        )
+
+        #expect(
+            throws: CompressionJobMutationError.configurationRecipeMismatch
+        ) {
+            try job.configure(configuration)
+        }
+        #expect(job.configuration == nil)
     }
 
     @Test("Ready requires probed media")
@@ -143,6 +212,7 @@ struct CompressionJobTests {
         try job.transition(to: .finishing(.committing))
         let unsafeResult = try CompressionResult(
             outputURL: job.inputURL,
+            sourceByteCount: 4_096,
             outputByteCount: 1,
             elapsed: .seconds(1)
         )
@@ -154,6 +224,20 @@ struct CompressionJobTests {
             #expect(error == .outputAliasesInput)
         }
         #expect(job.state == .finishing(.committing))
+    }
+
+    @Test("No-benefit is a terminal validated result without publication")
+    func noBenefitResult() throws {
+        var job = try makeRunningJob()
+        try job.transition(to: .finishing(.validating))
+        let result = try TestFixtures.noBenefitResult()
+
+        try job.transition(to: .noBenefit(result))
+
+        #expect(job.state == .noBenefit(result))
+        #expect(job.state.phase == .noBenefit)
+        #expect(job.inputURL == URL(fileURLWithPath: "/tmp/source.mov"))
+        #expect(!job.state.canTransition(to: .ready))
     }
 
     @Test("Retrying probe discards stale probe data")

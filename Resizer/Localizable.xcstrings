@@ -182,6 +182,7 @@
       }
     },
     "AAC" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -197,7 +198,24 @@
         }
       }
     },
+    "AAC %lld kbps" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AAC %lld kbps"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AAC %lld кбит/с"
+          }
+        }
+      }
+    },
     "AAC 96 kbps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -214,6 +232,7 @@
       }
     },
     "AAC 128 kbps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -230,6 +249,7 @@
       }
     },
     "AAC 192 kbps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -422,6 +442,7 @@
       }
     },
     "Advanced Settings" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -454,6 +475,7 @@
       }
     },
     "All %lld prepared videos will capture these settings." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "variations" : {
@@ -505,6 +527,22 @@
         }
       }
     },
+    "Already compact" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Already compact"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Уже компактно"
+          }
+        }
+      }
+    },
     "Application version: %@" : {
       "localizations" : {
         "en" : {
@@ -521,7 +559,24 @@
         }
       }
     },
+    "Attempted" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attempted"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Результат попытки"
+          }
+        }
+      }
+    },
     "Audio" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -533,6 +588,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Аудио"
+          }
+        }
+      }
+    },
+    "Automatic" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматически"
+          }
+        }
+      }
+    },
+    "Automatic compression" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic compression"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматическое сжатие"
           }
         }
       }
@@ -554,6 +641,7 @@
       }
     },
     "Balanced" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -586,6 +674,7 @@
       }
     },
     "Best Quality" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -602,6 +691,7 @@
       }
     },
     "Better quality" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -810,6 +900,7 @@
       }
     },
     "Check the compression settings and output filename suffix." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -821,6 +912,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Проверьте настройки сжатия и суффикс имени файла результата."
+          }
+        }
+      }
+    },
+    "Check the output filename suffix." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check the output filename suffix."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверьте суффикс имени выходного файла."
           }
         }
       }
@@ -981,6 +1088,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Завершено"
+          }
+        }
+      }
+    },
+    "Compress More" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compress More"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сжать ещё сильнее"
           }
         }
       }
@@ -1210,6 +1333,7 @@
       }
     },
     "Custom settings" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1349,6 +1473,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Длительность"
+          }
+        }
+      }
+    },
+    "Each prepared video gets its own automatic settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each prepared video gets its own automatic settings."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для каждого подготовленного видео параметры выбираются автоматически."
           }
         }
       }
@@ -1658,6 +1798,7 @@
       }
     },
     "Maximum resolution" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1674,6 +1815,7 @@
       }
     },
     "Metadata" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1706,6 +1848,7 @@
       }
     },
     "Move left for a smaller file or right for better quality" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1786,6 +1929,7 @@
       }
     },
     "no audio" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1930,6 +2074,22 @@
         }
       }
     },
+    "Open" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открыть"
+          }
+        }
+      }
+    },
     "Original" : {
       "localizations" : {
         "en" : {
@@ -1947,6 +2107,7 @@
       }
     },
     "original FPS" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1958,6 +2119,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "исходная частота кадров"
+          }
+        }
+      }
+    },
+    "Original FPS" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original FPS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Исходная частота кадров"
+          }
+        }
+      }
+    },
+    "Original resolution" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original resolution"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Исходное разрешение"
           }
         }
       }
@@ -2091,6 +2284,7 @@
       }
     },
     "Preserve common metadata" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2107,6 +2301,7 @@
       }
     },
     "Preset" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2140,6 +2335,7 @@
       }
     },
     "Quality must be between 0 and 1." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2220,6 +2416,7 @@
       }
     },
     "Remove metadata" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2295,6 +2492,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Resizer · FFmpeg %@ · только LGPL"
+          }
+        }
+      }
+    },
+    "Resizer chooses a balanced size and quality automatically." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resizer chooses a balanced size and quality automatically."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resizer автоматически выбирает баланс размера и качества."
           }
         }
       }
@@ -2460,6 +2673,7 @@
       }
     },
     "Smaller file" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2476,6 +2690,7 @@
       }
     },
     "Smaller File" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2671,6 +2886,38 @@
         }
       }
     },
+    "Stronger compression" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stronger compression"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Более сильное сжатие"
+          }
+        }
+      }
+    },
+    "Stronger compression prioritizes a smaller file over maximum quality." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stronger compression prioritizes a smaller file over maximum quality."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Более сильное сжатие ставит меньший размер файла выше максимального качества."
+          }
+        }
+      }
+    },
     "Technical code: %@" : {
       "localizations" : {
         "en" : {
@@ -2699,6 +2946,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Технические данные содержат только ограниченный обезличенный диагностический фрагмент."
+          }
+        }
+      }
+    },
+    "The automatic compression settings could not be prepared." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The automatic compression settings could not be prepared."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подготовить параметры автоматического сжатия."
           }
         }
       }
@@ -2781,6 +3044,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Встроенные видеоинструменты или требуемый кодировщик недоступны."
+          }
+        }
+      }
+    },
+    "The compressed result would not be smaller, so no new copy was saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The compressed result would not be smaller, so no new copy was saved."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Результат сжатия не был бы меньше, поэтому новая копия не сохранена."
           }
         }
       }
@@ -2977,6 +3256,38 @@
         }
       }
     },
+    "The stronger compression could not be prepared." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The stronger compression could not be prepared."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подготовить более сильное сжатие."
+          }
+        }
+      }
+    },
+    "The stronger compression could not be started." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The stronger compression could not be started."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось запустить более сильное сжатие."
+          }
+        }
+      }
+    },
     "The suffix cannot contain slashes, colons, line breaks, or control characters." : {
       "localizations" : {
         "en" : {
@@ -3121,7 +3432,40 @@
         }
       }
     },
+    "Up to %@ FPS" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to %@ FPS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До %@ кадр/с"
+          }
+        }
+      }
+    },
+    "Up to %lld×%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to %1$lld×%2$lld"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До %1$lld×%2$lld"
+          }
+        }
+      }
+    },
     "up to 24 FPS" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3138,6 +3482,7 @@
       }
     },
     "Up to 24 fps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3154,6 +3499,7 @@
       }
     },
     "up to 30 FPS" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3170,6 +3516,7 @@
       }
     },
     "Up to 30 fps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3186,6 +3533,7 @@
       }
     },
     "up to 60 FPS" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3202,6 +3550,7 @@
       }
     },
     "Up to 60 fps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3218,6 +3567,7 @@
       }
     },
     "Up to 480p" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3234,6 +3584,7 @@
       }
     },
     "Up to 720p" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3250,6 +3601,7 @@
       }
     },
     "Up to 1080p" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3266,6 +3618,7 @@
       }
     },
     "Up to 2160p" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3397,7 +3750,24 @@
         }
       }
     },
+    "Video is already compact" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video is already compact"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Видео уже достаточно компактно"
+          }
+        }
+      }
+    },
     "Video quality" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

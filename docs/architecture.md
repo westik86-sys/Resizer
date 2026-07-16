@@ -1,9 +1,12 @@
 # Resizer architecture
 
-This document describes the production architecture through stage 10: domain
-and service contracts, process and FFmpeg boundaries, the transactional
-workflow, the session FIFO queue, the SwiftUI feature model, and hardening for
-shutdown, publication, diagnostics, accessibility, and localization.
+This document describes the production architecture through stage 10 and the
+implemented automatic-compression contract:
+domain and service contracts, process and FFmpeg boundaries, the transactional
+commit/no-benefit workflow, the session FIFO queue, the SwiftUI feature model,
+and hardening for shutdown, publication, diagnostics, accessibility, and
+localization. Automatic recipe selection and `noBenefit` are defined by
+[ADR 0011](adr/0011-automatic-compression.md).
 
 ## Dependency direction
 
@@ -12,6 +15,7 @@ SwiftUI views
     -> @MainActor CompressionFeatureModel
         -> CompressionCoordinator actor
             -> MediaProbing
+            -> AutomaticCompressionPolicy
             -> Transcoding
             -> OutputPlanning
             -> FileAccessing
@@ -189,16 +193,22 @@ while missing, negative, or duplicate stream indices invalidate the metadata.
 Chapters are requested and decoded for forward compatibility but are not yet
 part of the domain model.
 
-## Preset and FFmpeg command contract
+## Automatic recipe and FFmpeg command contract
 
-`CompressionRecipe(preset:)` expands the three product presets into immutable,
-validated values. High Quality uses quality `0.85`, original resolution and
-FPS, and AAC at 192 kbit/s. Balanced is the default and uses quality `0.65`, a
-1920x1080 maximum, 30 FPS maximum, and AAC at 128 kbit/s. Small File uses
-quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and AAC at 96 kbit/s. All
-three produce MP4 through `h264_videotoolbox` and preserve common input
-metadata. Custom recipes use the same closed enums and validated value types;
-there is no arbitrary-flag escape hatch.
+`AutomaticCompressionPolicy` deterministically derives an immutable,
+validated `CompressionRecipe` from probed `MediaInfo` and a closed
+`CompressionMode`. `automatic` is the only first-run mode: quality `0.65`, a
+1920x1080 maximum, 30 FPS maximum, and AAC at 128 kbit/s. `compactRetry` is an
+explicit secondary action: quality `0.45`, a 1280x720 maximum, 24 FPS maximum,
+and AAC at 96 kbit/s. Both produce MP4 through `h264_videotoolbox`, preserve
+common input metadata, preserve aspect ratio, and never increase source
+resolution or frame rate. Missing source audio produces a no-audio recipe.
+
+The MVP has no preset selector, manual encoding settings, or custom recipe
+path. `compactRetry` is never an alternative initial preset and always creates
+a fresh attempt from the immutable original rather than the first encoded
+result. Equal `MediaInfo` and mode values must produce the same recipe; content
+classification, trial encodes, and target-size search remain outside the MVP.
 
 `FFmpegCommandBuilder` is pure and stateless. It returns an ordered `[String]`
 and never creates a shell command. It selects one non-attached video stream and
@@ -206,6 +216,11 @@ at most one audio stream, preferring the lowest-index default stream and then
 the lowest absolute index. Those absolute indices are mapped explicitly;
 subtitles, data, and unselected audio are excluded. Missing audio is valid and
 becomes `-an`, as does the remove-audio policy.
+
+MP4 output also sets `-write_tmcd 0`. Without that explicit muxer option, a
+copied video `timecode` tag can synthesize a new `tmcd` data stream after input
+mapping, bypassing the intent of `-dn`. The strict output validator continues
+to reject every subtitle, attachment, and data stream.
 
 Video output is H.264 VideoToolbox in limited-range `yuv420p`. The scale filter
 performs the range conversion for full-range 8-bit SDR input, and matching
@@ -229,8 +244,10 @@ positioned I/O for a seekable descriptor, so MP4 `+faststart` can reopen the
 output internally without sharing or corrupting offsets. stdin remains
 available for stage-7 graceful `q\n` cancellation. Preserve metadata maps only
 global data, selected stream data, and chapters; remove metadata disables those
-input mappings. The full argument and preset decision is recorded in
-[`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md).
+input mappings. The retained command decisions are recorded in
+[`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md),
+and the automatic product policy is recorded in
+[`adr/0011-automatic-compression.md`](adr/0011-automatic-compression.md).
 
 ## Safe output planning contract
 
@@ -248,18 +265,23 @@ receives neither the final nor temporary pathname as an output argument. The
 workflow atomically reserves the planned temporary and binds its descriptor to
 FFmpeg. The directory entry is unlinked immediately after successful
 reservation, while the open file and directory descriptors remain held through
-encode, validation, and publication. Planning cannot reserve a final path, so
-validation and no-replace publication remain distinct steps.
+encode, validation, and publication or no-benefit cleanup. Planning cannot
+reserve a final path, so validation and no-replace publication remain distinct
+steps.
 
 ## Headless transcoding workflow
 
-`CompressionCoordinator.process(jobID:configuration:)` owns the complete
-non-UI transaction. It keeps security-scoped access to the selected input and
-output directory alive across this ordered sequence:
+`CompressionCoordinator` owns the complete non-UI transaction. Each admitted
+`CompressionJob` owns a closed mode. After probing, its `JobConfiguration`
+captures the exact policy-derived recipe and output policy; the job rejects any
+recipe that differs from `AutomaticCompressionPolicy` for its media and mode. The
+coordinator keeps security-scoped access to the selected input and output
+directory alive across this ordered sequence:
 
 ```text
 probe input
-    -> record MediaInfo and configuration
+    -> record MediaInfo and derive automatic or compactRetry recipe
+    -> capture immutable mode and output policy
     -> plan unique temporary and final paths
     -> file and bundled-capability preflight
     -> verify clone publication on the held output-directory fd
@@ -268,8 +290,12 @@ probe input
     -> claim finishing(validating)
     -> inspect and re-probe that same child-fd-3 file
     -> validate the encoded media contract
-    -> no-replace fclonefileat publication to final
-    -> completed result
+    -> compare validated staging bytes with verified input bytes
+        -> smaller: claim finishing(committing)
+            -> no-replace fclonefileat publication to final
+            -> completed result
+        -> equal/larger: release anonymous staging
+            -> noBenefit result without a final file
 ```
 
 The workflow never gives FFmpeg the final URL. Before launch it verifies a
@@ -284,6 +310,14 @@ Failures before commit and cancellations release only that lease; cleanup never
 accepts an arbitrary URL or uses a wildcard or directory scan. A second
 concurrent workflow for the same job is rejected, and the coordinator
 continues to enforce one running/finishing/cancelling job.
+
+Size comparison occurs only after the normal process/pipe completion barrier,
+fresh descriptor probe, and full technical validation. A validated candidate
+that is equal to or larger than the immutable input is not published: the
+coordinator releases only its anonymous lease and emits terminal `noBenefit`.
+This is a neutral successful outcome with source/candidate sizes and elapsed
+time, not a failure, and it has no URL to open or reveal. A smaller candidate
+continues through the unchanged atomic no-replace publication path.
 
 `FFmpegCapabilityClient` queries the actual bundled executable for decoders,
 encoders, filters, demuxers, muxers, and protocols. Discovery is single-flight
@@ -367,24 +401,29 @@ input or an existing final output.
 `JobQueueCoordinator` owns ordered job identity, the one active workflow, and a
 single FIFO drain task. Imports may probe concurrently, but queue admission
 order defines encode order. One job cannot be active twice; cancel, retry,
-remove, and reorder are actor-serialized. A failed or cancelled job releases
-the active slot and does not block the next waiter. Monotonic snapshot revisions
-prevent a delayed observation from replacing newer UI state.
+remove, and reorder are actor-serialized. Every terminal outcome releases the
+active slot; a failed, cancelled, or `noBenefit` job does not block the next
+waiter. Monotonic snapshot revisions prevent a delayed observation from
+replacing newer UI state.
 
 `CompressionFeatureModel` is `MainActor`-isolated and consumes immutable
 snapshots. It owns only transient presentation state: selection, import and
-button activity, session defaults, validation messages, and smoothed ETA.
-SwiftUI views never launch or retain a process. Every queued attempt captures a
-validated immutable `JobConfiguration`; later settings edits affect only future
-admissions and retries.
+button activity, output selection, validation messages, and smoothed ETA.
+SwiftUI views never launch or retain a process. Every queue job owns an
+immutable mode, and every queued attempt captures the validated policy recipe
+and output policy derived for that job's probed media. Output-location edits
+affect only future admissions. The initial
+UI exposes only `automatic`; `compactRetry` is a secondary action after an
+automatic completed or `noBenefit` outcome and always targets the original.
 
 Typed `FailureReason` values provide actionable primary messages. Process exit
 status is confined to `DiagnosticReportBuilder`, which adds app/tool versions,
 license profile, stage, reason, truncation state, and a bounded sanitized tail.
 Selected paths and filenames are redacted before either display or pasteboard
 copy. The string catalog contains English and Russian values and plural rules.
-Accessibility focus moves to validation, failure, and success headings; controls
-and metrics expose explicit labels, values, and keyboard actions.
+Accessibility focus moves to validation, failure, completed, and no-benefit
+headings; controls and metrics expose explicit labels, values, and keyboard
+actions.
 
 Normal app termination calls `CompressionFeatureModel.shutdown()`. The queue
 stops accepting work, cancels its driver and every workflow, then waits for its
@@ -404,13 +443,14 @@ self-transitions.
 | `ready` | `queued`, `cancelled` |
 | `queued` | `running`, `cancelled`, `failed(preflight)` |
 | `running` | `finishing(validating)`, `cancelling`, `failed(encode)` |
-| `finishing(validating)` | `finishing(committing)`, `cancelling`, `failed(validate)` |
+| `finishing(validating)` | `finishing(committing)`, `noBenefit`, `cancelling`, `failed(validate)` |
 | `finishing(committing)` | `completed`, `cancelling`, `failed(commit)` |
 | `cancelling` | `cancelled`, `completed`, `failed(file-system only)` |
 | `cancelled` | `ready`, `probing` |
 | `failed(retry: probing)` | `probing` |
 | `failed(retry: ready)` | `ready` |
 | `completed` | none |
+| `noBenefit` | none |
 
 The failure stage must match its source phase. It also derives a typed
 `RetryTarget`, so stage and retry destination cannot disagree. The PLAN overview
@@ -423,9 +463,10 @@ to `probing`. Post-probe failures return to `ready`.
 - jobs accept only local file input URLs;
 - the input URL, job ID, and creation date never change;
 - `ready` requires probed media information;
-- `queued` and post-probe processing/final states require both media information
-  and a typed configuration; cancellation from `probing` or pre-configuration
-  `ready` is the explicit exception;
+- `queued` and post-probe processing/final states require media information, an
+  immutable automatic/compact job mode, and its matching recipe/output policy;
+  cancellation from
+  `probing` or pre-configuration `ready` is the explicit exception;
 - the coordinator permits at most one `running`, `finishing`, or `cancelling`
   job at a time;
 - once cancellation wins the transition to `cancelling`, ordinary workflow
@@ -434,7 +475,16 @@ to `probing`. Post-probe failures return to `ready`.
 - retrying a failed probe clears stale media and configuration before probing
   again;
 - a completed result must be a non-empty local file and cannot directly resolve
-  to the immutable input path.
+  to the immutable input path;
+- `noBenefit` is allowed only after successful validation proves that the
+  candidate byte count is greater than or equal to the verified input byte
+  count. It carries no final URL, and its anonymous staging lease has been
+  released without publication.
+
+`completed` and `noBenefit` are terminal outcomes for that attempt. The
+secondary compact action creates a new `compactRetry` attempt from the original
+input; it does not transition the completed/no-benefit job back into the active
+state machine and does not encode a prior result.
 
 Pre-run cancellation intent does not mutate the visible phase immediately.
 Only after an in-flight probe or preflight has been asked to cancel and the
@@ -449,7 +499,9 @@ through `probing`; later cancellation can reuse `ready`.
   The final URL never enters the FFmpeg argument vector. A reservation carries
   the retained exact file and directory descriptor lease; a `TranscodeResult`
   must include a positive byte count for that reservation and cannot substitute
-  another URL or descriptor.
+  another URL or descriptor. After validation, the coordinator compares that
+  exact count with the verified input count and alone selects completed
+  publication or `noBenefit` non-publication.
 - `OutputPlan` binds the job, input, temporary, and final URLs and rejects direct
   path aliases. Both outputs must be MP4 files in the selected directory, and
   the `.partial.mp4` name must contain the job UUID. `OutputPlanner` supplies
@@ -465,23 +517,26 @@ through `probing`; later cancellation can reuse `ready`.
   a bounded diagnostic tail, never a framework process instance across
   isolation domains.
 - Security-scoped access is expressed as one async operation so its lifetime can
-  cover probe, encode, validation, and commit.
+  cover probe, encode, validation, and commit or no-benefit cleanup.
 
 The production runner implements pipe draining, bounded diagnostics, and direct
 child cancellation. The FFprobe adapter resolves and interprets bundled probe
-output. Presets, deterministic FFmpeg command construction, safe output naming,
-capability-aware preflight, process-level progress, cancellation, temporary
-validation, exact cleanup, and no-replace publication are implemented.
+output. The implementation adds deterministic automatic/compact policy
+selection and no-benefit branching to the existing deterministic FFmpeg
+command construction, safe output naming, capability-aware preflight,
+process-level progress, cancellation, temporary validation, exact cleanup, and
+no-replace publication.
 
 ## Verification
 
 `./Scripts/test.sh` covers the architecture scaffold; real child-process
 success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
 cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
-all preset argument vectors; stream, HDR, audio, scaling, metadata, and path
-behavior; output-name collisions; capability discovery; incremental progress;
-headless success/failure/cancellation races; output validation; and guarded
-publication and cleanup. Signed targeted integration tests run the bundled
+automatic and `compactRetry` argument vectors; stream, HDR, audio, scaling,
+metadata, and path behavior; output-name collisions; capability discovery;
+incremental progress; headless success/failure/no-benefit/cancellation races;
+output validation; and guarded publication and cleanup. Signed targeted
+integration tests run the bundled
 probe → transcode → probe transaction on deterministic H.264/AAC and HEVC/AAC
 MP4 fixtures and verify that both produce the same H.264/AAC compatibility
 output without modifying the input.

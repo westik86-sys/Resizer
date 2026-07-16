@@ -15,10 +15,11 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
 
 Implementation has completed stage 10 and is preparing the direct-DMG portion
-of stage 11. The native product UI supports multi-file MOV
-and MP4 import, one sequential FIFO queue, three typed presets, bounded custom
-settings, safe output naming, progress and ETA, cancellation, retry, reordering,
-results, and Finder reveal. English and Russian localizations, keyboard access,
+of stage 11. The native product UI supports multi-file MOV and MP4 import, one
+sequential FIFO queue, a single automatic first-run mode, an explicit stronger
+retry from the immutable original, safe output naming, progress and ETA,
+cancellation, retry, reordering, neutral no-benefit results, and Finder reveal.
+English and Russian localizations, keyboard access,
 VoiceOver-focused state changes, actionable typed errors, and redacted bounded
 diagnostics are included.
 
@@ -49,6 +50,7 @@ tests cover the state machine, queue races, process teardown, validation,
 filesystem publication paths, localization, accessibility-facing copy, and a
 real bundled `probe → transcode → probe` flow. See
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/adr/0011-automatic-compression.md`](docs/adr/0011-automatic-compression.md),
 [`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md),
 [`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md),
 and [`docs/adr/0009-hevc-input.md`](docs/adr/0009-hevc-input.md).

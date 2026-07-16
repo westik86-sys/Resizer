@@ -125,11 +125,22 @@ struct DomainValueTests {
         }
     }
 
-    @Test("Completed results require a non-empty local output")
-    func resultValidation() {
+    @Test("Completed results require a smaller non-empty local output")
+    func resultValidation() throws {
+        let validResult = try CompressionResult(
+            outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+            sourceByteCount: 2,
+            outputByteCount: 1,
+            elapsed: .zero
+        )
+
+        #expect(validResult.sourceByteCount == 2)
+        #expect(validResult.outputByteCount == 1)
+
         #expect(throws: CompressionResultValidationError.invalidResult) {
             _ = try CompressionResult(
                 outputURL: URL(string: "https://example.com/output.mp4")!,
+                sourceByteCount: 2,
                 outputByteCount: 1,
                 elapsed: .seconds(1)
             )
@@ -137,6 +148,7 @@ struct DomainValueTests {
         #expect(throws: CompressionResultValidationError.invalidResult) {
             _ = try CompressionResult(
                 outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+                sourceByteCount: 2,
                 outputByteCount: 0,
                 elapsed: .seconds(1)
             )
@@ -144,7 +156,77 @@ struct DomainValueTests {
         #expect(throws: CompressionResultValidationError.invalidResult) {
             _ = try CompressionResult(
                 outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+                sourceByteCount: 2,
                 outputByteCount: 1,
+                elapsed: .seconds(-1)
+            )
+        }
+        #expect(throws: CompressionResultValidationError.invalidResult) {
+            _ = try CompressionResult(
+                outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+                sourceByteCount: 0,
+                outputByteCount: 1,
+                elapsed: .seconds(1)
+            )
+        }
+        #expect(throws: CompressionResultValidationError.invalidResult) {
+            _ = try CompressionResult(
+                outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+                sourceByteCount: 2,
+                outputByteCount: 2,
+                elapsed: .seconds(1)
+            )
+        }
+        #expect(throws: CompressionResultValidationError.invalidResult) {
+            _ = try CompressionResult(
+                outputURL: URL(fileURLWithPath: "/tmp/output.mp4"),
+                sourceByteCount: 2,
+                outputByteCount: 3,
+                elapsed: .seconds(1)
+            )
+        }
+    }
+
+    @Test("No-benefit results require a candidate at least as large as the source")
+    func noBenefitResultValidation() throws {
+        let equalSize = try CompressionNoBenefitResult(
+            sourceByteCount: 2,
+            candidateByteCount: 2,
+            elapsed: .zero
+        )
+        let largerCandidate = try CompressionNoBenefitResult(
+            sourceByteCount: 2,
+            candidateByteCount: 3,
+            elapsed: .seconds(1)
+        )
+
+        #expect(equalSize.candidateByteCount == equalSize.sourceByteCount)
+        #expect(largerCandidate.candidateByteCount > largerCandidate.sourceByteCount)
+
+        #expect(
+            throws: CompressionNoBenefitResultValidationError.invalidResult
+        ) {
+            _ = try CompressionNoBenefitResult(
+                sourceByteCount: 0,
+                candidateByteCount: 1,
+                elapsed: .seconds(1)
+            )
+        }
+        #expect(
+            throws: CompressionNoBenefitResultValidationError.invalidResult
+        ) {
+            _ = try CompressionNoBenefitResult(
+                sourceByteCount: 2,
+                candidateByteCount: 1,
+                elapsed: .seconds(1)
+            )
+        }
+        #expect(
+            throws: CompressionNoBenefitResultValidationError.invalidResult
+        ) {
+            _ = try CompressionNoBenefitResult(
+                sourceByteCount: 2,
+                candidateByteCount: 2,
                 elapsed: .seconds(-1)
             )
         }

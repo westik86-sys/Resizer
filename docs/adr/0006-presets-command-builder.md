@@ -1,7 +1,9 @@
 # ADR 0006: Preset recipes, FFmpeg command construction, and output planning
 
-- Status: Accepted for implementation stage 6; input capability profile
-  amended by [`ADR 0009`](0009-hevc-input.md)
+- Status: Accepted for implementation stage 6; preset selection, default preset,
+  and custom-recipe product decisions superseded by
+  [`ADR 0011`](0011-automatic-compression.md); input capability profile amended
+  by [`ADR 0009`](0009-hevc-input.md)
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 
@@ -59,6 +61,12 @@ their absolute input indices (`0:<index>`) so an attached picture or an earlier
 unselected stream cannot shift a type-relative map. Explicit `-sn` and `-dn`
 drop subtitle and data streams; multi-audio and subtitle management remain
 outside the MVP.
+
+Preserved video metadata may contain a `timecode` tag. In its automatic mode,
+the MP4 muxer can turn that tag back into a new `tmcd` data stream even when
+`-dn` excluded every input data stream. Every MP4 command therefore emits
+`-write_tmcd 0`. Timecode tracks are intentionally not preserved; the output
+validator remains strict and rejects any subtitle, attachment, or data stream.
 
 When the recipe requests AAC and a selected audio stream exists, map only that
 stream and encode it at the typed bitrate. If probe data contains no audio,
@@ -119,6 +127,7 @@ Preserve-common metadata has a deliberately narrow stream-selection meaning:
 - copy metadata only from the selected video and included audio streams;
 - preserve chapters;
 - clear the stale rotation tag after autorotation.
+- disable MP4 `tmcd` generation from copied timecode metadata.
 
 Remove metadata disables global, selected-stream, and chapter mappings. It
 still writes `rotate=0` as the orientation-safety override. Unselected stream
@@ -201,7 +210,7 @@ orientation and input-bounded expressions.
 
 ## Consequences
 
-- Preset behavior and argument ordering are stable, reviewable golden-test
+- Recipe behavior and argument ordering are stable, reviewable golden-test
   contracts rather than UI conventions.
 - Originals and final outputs remain outside FFmpeg's writable target. FFmpeg
   receives only child fd 3 for the anonymous temporary, never either output
@@ -223,6 +232,6 @@ orientation and input-bounded expressions.
 
 - `./Scripts/build.sh`
 - `./Scripts/test.sh`
-- `ResizerTests/Domain/CompressionPresetTests.swift`
+- `ResizerTests/Domain/AutomaticCompressionPolicyTests.swift`
 - `ResizerTests/Infrastructure/FFmpegCommandBuilderTests.swift`
 - `ResizerTests/Infrastructure/OutputPlannerTests.swift`

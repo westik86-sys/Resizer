@@ -58,15 +58,18 @@ nonisolated struct JobQueueImport: Sendable, Equatable {
     let id: CompressionJob.ID
     let inputURL: URL
     let createdAt: Date
+    let mode: CompressionMode
 
     init(
         inputURL: URL,
         id: CompressionJob.ID = UUID(),
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        mode: CompressionMode = .automatic
     ) {
         self.id = id
         self.inputURL = inputURL
         self.createdAt = createdAt
+        self.mode = mode
     }
 }
 
@@ -95,6 +98,11 @@ nonisolated enum CompressionWorkflowError: Error, Sendable, Equatable {
 private nonisolated struct PreRunCancellation: Sendable {
     let token: UUID
     let cancel: @Sendable () -> Void
+}
+
+private nonisolated enum CompressionWorkflowOutcome: Sendable {
+    case completed(CompressionResult)
+    case noBenefit(CompressionNoBenefitResult)
 }
 
 /// The UI-facing seam preserves the coordinator's actor isolation while
@@ -225,7 +233,8 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             try CompressionJob(
                 id: item.id,
                 inputURL: item.inputURL,
-                createdAt: item.createdAt
+                createdAt: item.createdAt,
+                mode: item.mode
             )
         }
 
@@ -359,8 +368,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                         )
                         try await runCapabilityValidation(
                             mediaInfo,
-                            recipe: CompressionRecipe(
-                                preset: .default
+                            recipe: try AutomaticCompressionPolicy().recipe(
+                                for: mediaInfo,
+                                mode: job.mode
                             ),
                             jobID: jobID
                         )
@@ -663,7 +673,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 jobsByID[jobID] = job
                 publishSnapshot()
             case .probing, .running, .finishing, .cancelling,
-                 .cancelled, .completed, .failed:
+                 .cancelled, .completed, .noBenefit, .failed:
                 break
             }
             return
@@ -711,7 +721,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             jobsByID[jobID] = job
             publishSnapshot()
             return
-        case .draft, .cancelled, .completed, .failed:
+        case .draft, .cancelled, .completed, .noBenefit, .failed:
             return
         }
 
@@ -782,9 +792,32 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         startedAt: ContinuousClock.Instant,
         clock: ContinuousClock
     ) async throws -> CompressionJob {
+        let outcome = try await runScopedWorkflowToOutcome(
+            jobID: jobID,
+            configuration: configuration,
+            shouldProbeInput: shouldProbeInput,
+            startedAt: startedAt,
+            clock: clock
+        )
+        switch outcome {
+        case .completed(let result):
+            return try transition(jobID: jobID, to: .completed(result))
+        case .noBenefit(let result):
+            return try transition(jobID: jobID, to: .noBenefit(result))
+        }
+    }
+
+    private func runScopedWorkflowToOutcome(
+        jobID: CompressionJob.ID,
+        configuration: JobConfiguration,
+        shouldProbeInput: Bool,
+        startedAt: ContinuousClock.Instant,
+        clock: ContinuousClock
+    ) async throws -> CompressionWorkflowOutcome {
         var outputPlan: OutputPlan?
         var outputReservation: TemporaryOutputReservation?
         var expectedTemporaryMetadata: FileMetadata?
+        var cleanupAttempted = false
         var didCommit = false
 
         do {
@@ -825,7 +858,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 recipe: configuration.recipe
             )
 
-            try await validateFilePreflight(plan)
+            let sourceMetadata = try await validateFilePreflight(plan)
             try await runTranscodePreflight(request, jobID: jobID)
             let reservation = try await runTemporaryReservation(
                 plan,
@@ -863,6 +896,26 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 jobID: jobID
             )
 
+            if validatedOutput.byteCount >= sourceMetadata.byteCount {
+                cleanupAttempted = true
+                do {
+                    try await cleanupWithoutCallerCancellation(
+                        plan,
+                        reservation: reservation,
+                        expectedTemporaryMetadata: validatedOutput
+                    )
+                } catch {
+                    throw CompressionWorkflowError.temporaryCleanupFailed
+                }
+                expectedTemporaryMetadata = nil
+                let result = try CompressionNoBenefitResult(
+                    sourceByteCount: sourceMetadata.byteCount,
+                    candidateByteCount: validatedOutput.byteCount,
+                    elapsed: startedAt.duration(to: clock.now)
+                )
+                return .noBenefit(result)
+            }
+
             _ = try transition(
                 jobID: jobID,
                 to: .finishing(.committing)
@@ -877,17 +930,16 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
 
             let result = try CompressionResult(
                 outputURL: plan.finalURL,
+                sourceByteCount: sourceMetadata.byteCount,
                 outputByteCount: validatedOutput.byteCount,
                 elapsed: startedAt.duration(to: clock.now)
             )
-            return try transition(
-                jobID: jobID,
-                to: .completed(result)
-            )
+            return .completed(result)
         } catch {
             if let outputPlan,
                let outputReservation,
                expectedTemporaryMetadata != nil,
+               !cleanupAttempted,
                !didCommit {
                 do {
                     try await cleanupWithoutCallerCancellation(
@@ -903,7 +955,9 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         }
     }
 
-    private func validateFilePreflight(_ plan: OutputPlan) async throws {
+    private func validateFilePreflight(
+        _ plan: OutputPlan
+    ) async throws -> FileMetadata {
         let input = try await runMetadataRead(
             plan.inputURL,
             jobID: plan.jobID
@@ -938,6 +992,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         ) == nil else {
             throw CompressionWorkflowError.finalOutputAlreadyExists
         }
+        return input
     }
 
     private func validateTemporaryOutput(
@@ -1012,7 +1067,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         case .running, .cancelling:
             _ = try? updateProgress(progress, for: jobID)
         case .draft, .probing, .ready, .queued, .finishing,
-             .cancelled, .completed, .failed:
+             .cancelled, .completed, .noBenefit, .failed:
             break
         }
     }
@@ -1027,7 +1082,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             case .probing, .ready, .queued, .running, .cancelling,
                  .finishing, .cancelled:
                 true
-            case .draft, .completed, .failed:
+            case .draft, .completed, .noBenefit, .failed:
                 false
             }
         } ?? false
@@ -1074,7 +1129,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                     )) != nil {
                         jobsByID[jobID] = job
                     }
-                case .draft, .cancelled, .completed, .failed:
+                case .draft, .cancelled, .completed, .noBenefit, .failed:
                     break
                 }
             }
@@ -1116,7 +1171,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             .commit
         case .cancelling:
             cancellationFailureStages[jobID] ?? .encode
-        case .draft, .ready, .cancelled, .completed, .failed:
+        case .draft, .ready, .cancelled, .completed, .noBenefit, .failed:
             nil
         }
     }
@@ -1704,7 +1759,8 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         switch state.phase {
         case .running, .finishing, .cancelling:
             true
-        case .draft, .probing, .ready, .queued, .cancelled, .completed, .failed:
+        case .draft, .probing, .ready, .queued, .cancelled, .completed,
+             .noBenefit, .failed:
             false
         }
     }

@@ -4,6 +4,7 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
     let id: UUID
     let inputURL: URL
     let createdAt: Date
+    let mode: CompressionMode
 
     private(set) var mediaInfo: MediaInfo?
     private(set) var configuration: JobConfiguration?
@@ -12,7 +13,8 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
     init(
         id: UUID = UUID(),
         inputURL: URL,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        mode: CompressionMode = .automatic
     ) throws {
         guard inputURL.isFileURL else {
             throw CompressionJobValidationError.invalidInputURL
@@ -20,6 +22,7 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
         self.id = id
         self.inputURL = inputURL
         self.createdAt = createdAt
+        self.mode = mode
         mediaInfo = nil
         configuration = nil
         state = .draft
@@ -45,6 +48,17 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
     mutating func configure(_ configuration: JobConfiguration) throws {
         guard state.phase == .ready else {
             throw CompressionJobMutationError.operationRequires(.ready)
+        }
+        guard configuration.recipe.origin == .mode(mode) else {
+            throw CompressionJobMutationError.configurationModeMismatch
+        }
+        guard let mediaInfo,
+              let expectedRecipe = try? AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                mode: mode
+              ),
+              configuration.recipe == expectedRecipe else {
+            throw CompressionJobMutationError.configurationRecipeMismatch
         }
         self.configuration = configuration
     }
@@ -75,7 +89,8 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
             || state.phase == .probing
             || state.phase == .ready:
             break
-        case .queued, .running, .finishing, .cancelling, .cancelled, .completed:
+        case .queued, .running, .finishing, .cancelling, .cancelled,
+             .completed, .noBenefit:
             guard mediaInfo != nil else {
                 throw CompressionJobMutationError.missingMediaInfo
             }
@@ -95,6 +110,8 @@ nonisolated enum CompressionJobValidationError: Error, Sendable, Equatable {
 nonisolated enum CompressionJobMutationError: Error, Sendable, Equatable {
     case missingMediaInfo
     case missingConfiguration
+    case configurationModeMismatch
+    case configurationRecipeMismatch
     case outputAliasesInput
     case operationRequires(JobPhase)
 }

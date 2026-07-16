@@ -84,6 +84,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
         arguments.append(contentsOf: [
             "-metadata:s:v:0", "rotate=0",
+            "-write_tmcd", "0",
             "-movflags", "+faststart",
             "-f", containerArgument(request.recipe.container),
             "fd:3",

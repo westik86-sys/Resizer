@@ -601,7 +601,7 @@ struct TranscodeOutputValidatorTests {
         audioPolicy: AudioPolicy? = nil
     ) throws -> CompressionRecipe {
         try CompressionRecipe(
-            origin: .custom,
+            origin: .mode(.automatic),
             container: .mp4,
             videoCodec: .h264VideoToolbox,
             rateControl: .quality(VideoQuality(0.65)),
