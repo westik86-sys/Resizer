@@ -86,6 +86,58 @@ final class ResizerUITests: XCTestCase {
     }
 
     @MainActor
+    func testReadyVideoOffersQuickFlexibleAudioAndRemoval() throws {
+        let app = launchFreshApp()
+        defer { app.terminate() }
+
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "ResizerTests/Fixtures/Media/short-h264-aac.mp4"
+            )
+
+        let addButton = app.buttons["choose-video"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.click()
+
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+
+        let locationField = app.sheets.textFields.firstMatch
+        XCTAssertTrue(locationField.waitForExistence(timeout: 5))
+        locationField.typeText(fixtureURL.path)
+        app.typeKey(.enter, modifierFlags: [])
+        app.typeKey(.enter, modifierFlags: [])
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["compression-mode-selector"]
+                .waitForExistence(timeout: 10)
+        )
+        XCTAssertTrue(app.descendants(matching: .any)["keep-audio"].exists)
+
+        let removeButton = app.buttons["remove-queue-job"]
+        XCTAssertTrue(removeButton.isEnabled)
+
+        let flexibleSegment = app.descendants(matching: .any)["Flexible"]
+        XCTAssertTrue(flexibleSegment.exists)
+        flexibleSegment.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["flexible-quality"].exists
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["flexible-resolution"].exists
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["flexible-frame-rate"].exists
+        )
+
+        removeButton.click()
+        XCTAssertTrue(app.staticTexts["No videos"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     private func launchFreshApp(
         language: String = "en",
         locale: String = "en_US",

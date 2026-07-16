@@ -44,6 +44,18 @@ struct LocalizationTests {
             localized("Automatic", localization: "ru")
                 == "Автоматически"
         )
+        #expect(localized("Quick", localization: "ru") == "Быстрый")
+        #expect(localized("Flexible", localization: "ru") == "Гибкий")
+        #expect(
+            localized("Keep Audio", localization: "ru")
+                == "Сохранить звук"
+        )
+        #expect(
+            localized(
+                "This video cannot be removed while it is being processed.",
+                localization: "ru"
+            ) == "Нельзя удалить это видео во время обработки."
+        )
         #expect(
             localized("Compress More", localization: "ru")
                 == "Сжать ещё сильнее"
@@ -59,9 +71,9 @@ struct LocalizationTests {
         )
         #expect(
             localized(
-                "Each prepared video gets its own automatic settings.",
+                "Each prepared video keeps its own compression settings.",
                 localization: "ru"
-            ) == "Для каждого подготовленного видео параметры выбираются автоматически."
+            ) == "Каждое подготовленное видео сохраняет собственные настройки сжатия."
         )
         #expect(
             localized(

@@ -165,7 +165,7 @@ struct CompressionCoordinatorTests {
         let ready = try await coordinator.prepare(jobID: job.id)
         let expectedRecipe = try AutomaticCompressionPolicy().recipe(
             for: mediaInfo,
-            mode: .automatic
+            settings: .quick(audio: .remove)
         )
 
         #expect(ready.state == .ready)
@@ -197,9 +197,9 @@ struct CompressionCoordinatorTests {
         ])
 
         let ready = try #require(await coordinator.job(id: jobID))
-        let expectedRecipe = try AutomaticCompressionPolicy().recipe(
+        let expectedRecipe = try AutomaticCompressionPolicy().compactRecipe(
             for: mediaInfo,
-            mode: .compactRetry
+            audio: .remove
         )
         #expect(ready.mode == .compactRetry)
         #expect(ready.state == .ready)

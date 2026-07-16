@@ -3,15 +3,15 @@
 - This repository is for a native macOS utility that creates smaller, compatible video copies through bundled FFmpeg tools.
 - Processing is local-first: application media is not uploaded and the product does not require network access.
 - Treat every input file as immutable. The original must never be modified or overwritten.
-- The happy path is: select or drop video, probe it, derive the automatic recipe, choose an output folder, transcode with visible progress, validate the temporary result, then either publish a smaller final copy or return a neutral no-benefit result.
+- The happy path is: select or drop video, probe it, choose Quick or bounded Flexible settings, choose an output folder, transcode with visible progress, validate the temporary result, then either publish a smaller final copy or return a neutral no-benefit result.
 - [`PLAN.md`](PLAN.md) is the complete source of product and technical requirements. Keep this file concise and consult the plan before every stage. If `PLAN.md` is unavailable, stop and request it rather than guessing.
 
 # MVP boundaries
 
 - The first vertical slice handles one MOV or MP4: bundled `ffprobe`, one fixed H.264/AAC encode, machine-readable progress, cancellation, temporary MP4 output, validation with `ffprobe`, final commit, and before/after sizes.
-- The public MVP adds multi-file import, a sequential queue, one visible automatic mode, a secondary `compactRetry` action from the immutable original, safe output naming, progress/ETA, cancel/retry, completed and `NoBenefit` results, notifications, and FFmpeg version/license disclosure.
-- The automatic recipe is the default first attempt: H.264 VideoToolbox quality `0.65`, at most 1920x1080 and 30 FPS, and AAC 128 kbit/s when audio is present. `compactRetry` uses quality `0.45`, at most 1280x720 and 24 FPS, and AAC 96 kbit/s. Neither mode may upscale resolution or frame rate.
-- Do not expose preset selection or manual encoding settings in the MVP. Both recipes remain closed, typed product policies; `compactRetry` is available only as an explicit secondary action and always re-encodes the original, never the first result.
+- The public MVP adds multi-file import, a sequential queue, a native Quick/Flexible selector, a secondary `compactRetry` action from the immutable original, safe output naming, progress/ETA, cancel/retry, completed and `NoBenefit` results, notifications, and FFmpeg version/license disclosure.
+- Quick uses H.264 VideoToolbox quality `0.65`, at most 1920x1080 and 30 FPS, and optionally AAC 128 kbit/s. Flexible exposes only bounded quality `0.30...0.90`, source/1080p/720p/480p resolution, source/60/30/24 FPS, and keep/remove audio. `compactRetry` uses quality `0.45`, at most 1280x720 and 24 FPS, and inherits the Quick audio choice. No mode may upscale resolution or frame rate.
+- Do not expose arbitrary FFmpeg flags, codecs, containers, target size, video bitrate, audio bitrate, or metadata policy. Quick, Flexible, and `compactRetry` remain closed, typed product policies; `compactRetry` is available only as an explicit secondary action and always re-encodes the original, never the first result.
 - Do not add target-size encoding, arbitrary FFmpeg flags, editing tools, extra codecs or containers, persistent history, pause/resume, cloud/accounts, Finder extensions, watch folders, full HDR handling, or complex stream management without a separate product decision.
 - Do not turn the MVP into a universal FFmpeg GUI or a video editor.
 
@@ -19,11 +19,11 @@
 
 - SwiftUI views never launch or own `Process` instances.
 - Domain must not import SwiftUI, AppKit, or `Foundation.Process`; keep domain models typed, immutable where practical, and `Sendable`.
-- The Application coordinator owns the workflow and the single-source-of-truth `JobState`, including valid transitions and `probe -> automatic recipe -> preflight -> encode -> validate -> commit/no-benefit`.
+- The Application coordinator owns the workflow and the single-source-of-truth `JobState`, including valid transitions and `probe -> captured typed recipe -> preflight -> encode -> validate -> commit/no-benefit`.
 - Infrastructure owns `ProcessRunner`, `FFmpegRunner`, `FFprobeClient`, parsers, file access, diagnostic storage, and output planning.
 - UI models run on `MainActor`. Isolate coordinators and other long-lived concurrent services with actors.
 - Perform dependency injection in the composition root. Do not add global singletons or a service locator.
-- Represent automatic and `compactRetry` encoding policies with validated, typed models. Represent FFmpeg arguments only as `[String]`.
+- Represent Quick, Flexible, and `compactRetry` encoding policies with validated, typed models. Represent FFmpeg arguments only as `[String]`.
 
 # FFmpeg and process safety
 
@@ -56,7 +56,7 @@
 
 # Testing and verification
 
-- Unit-test the state machine, probe/progress parsers, command builder, automatic and `compactRetry` policies, `NoBenefit`, naming, and output policy.
+- Unit-test the state machine, probe/progress parsers, command builder, Quick/Flexible/`compactRetry` policies, audio removal, `NoBenefit`, naming, and output policy.
 - Use a deterministic `ProcessHarness` for simultaneous pipes, large output, exit codes, graceful cancellation, ignored signals, and cancellation races.
 - Cover an integration flow of `probe -> transcode -> probe`, including temporary-file cleanup and unavailable capabilities.
 - Tests must not depend on Homebrew, `PATH`, or personal media files.

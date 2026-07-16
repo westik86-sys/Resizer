@@ -79,6 +79,7 @@ nonisolated enum CompressionCoordinatorError: Error, Sendable, Equatable {
     case activeJobExists(CompressionJob.ID)
     case workflowAlreadyRunning(CompressionJob.ID)
     case queueMutationRequiresQueued(CompressionJob.ID)
+    case jobNotRemovable(CompressionJob.ID)
     case activeQueueJob(CompressionJob.ID)
     case invalidQueueSuccessor(CompressionJob.ID)
     case shuttingDown
@@ -142,7 +143,7 @@ nonisolated protocol JobQueueCoordinating: Actor {
         before successorID: CompressionJob.ID?
     ) throws
 
-    func removeQueued(jobID: CompressionJob.ID) throws
+    func removeJob(jobID: CompressionJob.ID) throws
 
     func cancel(jobID: CompressionJob.ID) async
     func shutdown() async
@@ -368,7 +369,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                         )
                         try await runCapabilityValidation(
                             mediaInfo,
-                            recipe: try AutomaticCompressionPolicy().recipe(
+                            recipe: try preparationAdmissionRecipe(
                                 for: mediaInfo,
                                 mode: job.mode
                             ),
@@ -386,6 +387,27 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             Task { [self] in
                 await cancel(jobID: jobID)
             }
+        }
+    }
+
+    /// Preparation verifies the common video-only path. Audio capability is
+    /// validated later against the immutable recipe captured at enqueue, so
+    /// an unsupported source audio stream can still be intentionally removed.
+    private func preparationAdmissionRecipe(
+        for mediaInfo: MediaInfo,
+        mode: CompressionMode
+    ) throws -> CompressionRecipe {
+        switch mode {
+        case .automatic:
+            try AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                settings: .quick(audio: .remove)
+            )
+        case .compactRetry:
+            try AutomaticCompressionPolicy().compactRecipe(
+                for: mediaInfo,
+                audio: .remove
+            )
         }
     }
 
@@ -530,8 +552,18 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
         publishSnapshot()
     }
 
-    func removeQueued(jobID: CompressionJob.ID) throws {
-        try requireWaitingQueueMutation(jobID)
+    func removeJob(jobID: CompressionJob.ID) throws {
+        let job = try requireJob(jobID)
+        guard jobID != activeQueueJobID,
+              !workflowJobIDs.contains(jobID) else {
+            throw CompressionCoordinatorError.activeQueueJob(jobID)
+        }
+        switch job.state {
+        case .ready, .queued, .cancelled, .completed, .noBenefit, .failed:
+            break
+        case .draft, .probing, .running, .finishing, .cancelling:
+            throw CompressionCoordinatorError.jobNotRemovable(jobID)
+        }
         jobsByID.removeValue(forKey: jobID)
         jobOrder.removeAll { $0 == jobID }
         cancellationIntents.remove(jobID)

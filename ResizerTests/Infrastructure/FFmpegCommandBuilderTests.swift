@@ -109,6 +109,43 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
+    @Test("Flexible settings produce bounded video and explicit audio removal")
+    func flexibleAudioRemovalArguments() async throws {
+        let mediaInfo = try makeMediaInfo()
+        let settings = PrimaryCompressionSettings.flexible(
+            try FlexibleCompressionSettings(
+                quality: VideoQuality(0.80),
+                resolution: .p720,
+                frameRate: .fps24,
+                audioPreference: .remove
+            )
+        )
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: settings
+        )
+        let request = try makeRequest(recipe: recipe, mediaInfo: mediaInfo)
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(optionValues("-global_quality:v:0", in: arguments) == ["80"])
+        #expect(
+            optionValues("-filter:v:0", in: arguments) == [
+                "scale=w='if(gte(iw,ih),min(iw,1280),min(iw,720))':"
+                    + "h='if(gte(iw,ih),min(ih,720),min(ih,1280))':"
+                    + "force_original_aspect_ratio=decrease:"
+                    + "force_divisible_by=2:reset_sar=1:flags=lanczos:"
+                    + "out_range=tv",
+            ]
+        )
+        #expect(optionValues("-fpsmax:v:0", in: arguments) == ["24"])
+        #expect(optionValues("-map", in: arguments) == ["0:2"])
+        #expect(arguments.contains("-an"))
+        #expect(!arguments.contains("-c:a:0"))
+        #expect(!arguments.contains("-b:a:0"))
+        #expect(!arguments.contains("-map_metadata:s:a:0"))
+    }
+
     @Test("Automatic mode omits audio arguments when the source has no audio")
     func automaticWithoutAudioStream() async throws {
         let mediaInfo = try makeMediaInfo(
@@ -469,7 +506,7 @@ struct FFmpegCommandBuilderTests {
         metadataPolicy: MetadataPolicy = .preserveCommon
     ) throws -> CompressionRecipe {
         CompressionRecipe(
-            origin: .mode(.automatic),
+            origin: .primary(.quick(audio: .keep)),
             container: .mp4,
             videoCodec: .h264VideoToolbox,
             rateControl: .quality(try VideoQuality(quality)),

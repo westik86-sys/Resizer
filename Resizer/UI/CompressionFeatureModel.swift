@@ -32,6 +32,32 @@ struct PasteboardDiagnosticCopier: DiagnosticCopying {
     }
 }
 
+nonisolated struct CompressionDraftSettings: Sendable, Equatable {
+    static let defaultQuality = 0.65
+
+    var controlMode: CompressionControlMode = .quick
+    var quality = CompressionDraftSettings.defaultQuality
+    var resolution: FlexibleResolution = .p1080
+    var frameRate: FlexibleFrameRate = .fps30
+    var audioPreference: AudioPreference = .keep
+
+    func primarySettings() throws -> PrimaryCompressionSettings {
+        switch controlMode {
+        case .quick:
+            .quick(audio: audioPreference)
+        case .flexible:
+            .flexible(
+                try FlexibleCompressionSettings(
+                    quality: VideoQuality(quality),
+                    resolution: resolution,
+                    frameRate: frameRate,
+                    audioPreference: audioPreference
+                )
+            )
+        }
+    }
+}
+
 @MainActor
 final class CompressionFeatureModel: ObservableObject {
     @Published private(set) var snapshot: CompressionSnapshot = .empty
@@ -42,6 +68,9 @@ final class CompressionFeatureModel: ObservableObject {
     @Published private(set) var isImporting = false
     @Published private(set) var isStartingQueue = false
     @Published private(set) var pendingActionJobIDs: Set<CompressionJob.ID> = []
+    @Published private(set) var compressionDrafts: [
+        CompressionJob.ID: CompressionDraftSettings
+    ] = [:]
 
     private let coordinator: any JobQueueCoordinating
     private let outputRevealer: any OutputRevealing
@@ -50,6 +79,9 @@ final class CompressionFeatureModel: ObservableObject {
     private var pendingImportedSelectionID: CompressionJob.ID?
     private var lastConsumedSnapshotRevision: UInt64?
     private var automaticallyQueueingJobIDs: Set<CompressionJob.ID> = []
+    private var compactAudioPreferences: [
+        CompressionJob.ID: AudioPreference
+    ] = [:]
 
     private var etaJobID: CompressionJob.ID?
     private var etaSpeedSamples: [Double] = []
@@ -103,10 +135,16 @@ final class CompressionFeatureModel: ObservableObject {
     }
 
     private var startableReadyJobs: [CompressionJob] {
-        readyJobs.filter {
-            !pendingActionJobIDs.contains($0.id)
-                && !automaticallyQueueingJobIDs.contains($0.id)
+        readyJobs.filter { job in
+            !pendingActionJobIDs.contains(job.id)
+                && !automaticallyQueueingJobIDs.contains(job.id)
+                && (job.mode == .automatic
+                    || compactAudioPreferences[job.id] != nil)
         }
+    }
+
+    var startableReadyJobCount: Int {
+        startableReadyJobs.count
     }
 
     var queuedJobs: [CompressionJob] {
@@ -199,6 +237,68 @@ final class CompressionFeatureModel: ObservableObject {
         return jobs.first { $0.id == id }
     }
 
+    func compressionDraft(
+        for jobID: CompressionJob.ID
+    ) -> CompressionDraftSettings {
+        compressionDrafts[jobID] ?? CompressionDraftSettings()
+    }
+
+    func compactAudioPreference(
+        for jobID: CompressionJob.ID
+    ) -> AudioPreference? {
+        compactAudioPreferences[jobID]
+    }
+
+    func canEditCompression(jobID: CompressionJob.ID) -> Bool {
+        guard pendingActionJobIDs.contains(jobID) == false,
+              automaticallyQueueingJobIDs.contains(jobID) == false,
+              let job = job(id: jobID),
+              job.mode == .automatic,
+              case .ready = job.state else {
+            return false
+        }
+        return true
+    }
+
+    func setCompressionControlMode(
+        _ mode: CompressionControlMode,
+        jobID: CompressionJob.ID
+    ) {
+        updateCompressionDraft(jobID: jobID) { $0.controlMode = mode }
+    }
+
+    func setFlexibleQuality(
+        _ quality: Double,
+        jobID: CompressionJob.ID
+    ) {
+        updateCompressionDraft(jobID: jobID) {
+            $0.quality = min(
+                FlexibleCompressionSettings.maximumQuality,
+                max(FlexibleCompressionSettings.minimumQuality, quality)
+            )
+        }
+    }
+
+    func setFlexibleResolution(
+        _ resolution: FlexibleResolution,
+        jobID: CompressionJob.ID
+    ) {
+        updateCompressionDraft(jobID: jobID) { $0.resolution = resolution }
+    }
+
+    func setFlexibleFrameRate(
+        _ frameRate: FlexibleFrameRate,
+        jobID: CompressionJob.ID
+    ) {
+        updateCompressionDraft(jobID: jobID) { $0.frameRate = frameRate }
+    }
+
+    func setKeepsAudio(_ keepsAudio: Bool, jobID: CompressionJob.ID) {
+        updateCompressionDraft(jobID: jobID) {
+            $0.audioPreference = keepsAudio ? .keep : .remove
+        }
+    }
+
     func selectJob(_ jobID: CompressionJob.ID?) {
         guard let jobID else {
             guard jobs.isEmpty else { return }
@@ -229,7 +329,9 @@ final class CompressionFeatureModel: ObservableObject {
         guard outputDirectoryURL != nil,
               pendingActionJobIDs.contains(jobID) == false,
               let job = job(id: jobID),
-              job.mode == .automatic else {
+              job.mode == .automatic,
+              case .primary(.quick(audio: _)) =
+                job.configuration?.recipe.origin else {
             return false
         }
         switch job.state {
@@ -254,11 +356,16 @@ final class CompressionFeatureModel: ObservableObject {
     func canRemove(jobID: CompressionJob.ID) -> Bool {
         guard snapshot.activeJobID != jobID,
               pendingActionJobIDs.contains(jobID) == false,
-              let job = job(id: jobID),
-              case .queued = job.state else {
+              automaticallyQueueingJobIDs.contains(jobID) == false,
+              let job = job(id: jobID) else {
             return false
         }
-        return true
+        switch job.state {
+        case .ready, .queued, .cancelled, .completed, .noBenefit, .failed:
+            return true
+        case .draft, .probing, .running, .finishing, .cancelling:
+            return false
+        }
     }
 
     func queuePosition(for jobID: CompressionJob.ID) -> Int? {
@@ -375,7 +482,7 @@ final class CompressionFeatureModel: ObservableObject {
         outputDirectoryURL = nil
     }
 
-    /// Derives and captures one immutable automatic recipe per ready job, then
+    /// Derives and captures one immutable typed recipe per ready job, then
     /// wakes the single FIFO driver. The method returns while encoding runs.
     func start(
         filenameSuffix: String = "-compressed",
@@ -389,11 +496,32 @@ final class CompressionFeatureModel: ObservableObject {
             )
             return
         }
-        guard let automaticOutputPolicy = makeOutputPolicy(
-            filenameSuffix: filenameSuffix,
-            conflictPolicy: conflictPolicy
-        ) else {
-            return
+
+        let needsAutomaticPolicy = jobIDs.contains {
+            job(id: $0)?.mode == .automatic
+        }
+        let needsCompactPolicy = jobIDs.contains {
+            job(id: $0)?.mode == .compactRetry
+        }
+        let automaticOutputPolicy: OutputPolicy?
+        if needsAutomaticPolicy {
+            guard let outputPolicy = makeOutputPolicy(
+                filenameSuffix: filenameSuffix,
+                conflictPolicy: conflictPolicy
+            ) else { return }
+            automaticOutputPolicy = outputPolicy
+        } else {
+            automaticOutputPolicy = nil
+        }
+        let compactOutputPolicy: OutputPolicy?
+        if needsCompactPolicy {
+            guard let outputPolicy = makeOutputPolicy(
+                filenameSuffix: filenameSuffix + "-smaller",
+                conflictPolicy: conflictPolicy
+            ) else { return }
+            compactOutputPolicy = outputPolicy
+        } else {
+            compactOutputPolicy = nil
         }
 
         isStartingQueue = true
@@ -408,17 +536,40 @@ final class CompressionFeatureModel: ObservableObject {
         var failedCount = 0
         for jobID in jobIDs {
             do {
-                guard let job = job(id: jobID),
-                      let outputPolicy = job.mode == .automatic
-                        ? automaticOutputPolicy
-                        : makeOutputPolicy(
-                            filenameSuffix: filenameSuffix + "-smaller",
-                            conflictPolicy: conflictPolicy
-                          ),
-                      let configuration = makeConfiguration(
+                guard let job = job(id: jobID) else {
+                    failedCount += 1
+                    continue
+                }
+
+                let configuration: JobConfiguration?
+                switch job.mode {
+                case .automatic:
+                    guard let primarySettings = try? compressionDraft(
+                        for: jobID
+                    ).primarySettings(),
+                    let automaticOutputPolicy else {
+                        failedCount += 1
+                        continue
+                    }
+                    configuration = makePrimaryConfiguration(
                         for: job,
-                        outputPolicy: outputPolicy
-                      ) else {
+                        settings: primarySettings,
+                        outputPolicy: automaticOutputPolicy
+                    )
+                case .compactRetry:
+                    guard let audio = compactAudioPreferences[jobID],
+                          let compactOutputPolicy else {
+                        failedCount += 1
+                        continue
+                    }
+                    configuration = makeCompactConfiguration(
+                        for: job,
+                        audio: audio,
+                        outputPolicy: compactOutputPolicy
+                    )
+                }
+
+                guard let configuration else {
                     failedCount += 1
                     continue
                 }
@@ -464,6 +615,8 @@ final class CompressionFeatureModel: ObservableObject {
               ) else {
             return
         }
+        let audioPreference = sourceJob.configuration?.recipe.origin
+            .audioPreference ?? .keep
 
         let item = JobQueueImport(
             inputURL: sourceJob.inputURL,
@@ -471,6 +624,7 @@ final class CompressionFeatureModel: ObservableObject {
         )
         pendingActionJobIDs.insert(jobID)
         automaticallyQueueingJobIDs.insert(item.id)
+        compactAudioPreferences[item.id] = audioPreference
         pendingImportedSelectionID = item.id
         selectedJobID = item.id
         validationMessage = nil
@@ -479,6 +633,9 @@ final class CompressionFeatureModel: ObservableObject {
             automaticallyQueueingJobIDs.remove(item.id)
             if pendingImportedSelectionID == item.id {
                 pendingImportedSelectionID = nil
+            }
+            if job(id: item.id) == nil {
+                compactAudioPreferences.removeValue(forKey: item.id)
             }
         }
 
@@ -495,8 +652,9 @@ final class CompressionFeatureModel: ObservableObject {
                 return
             }
             guard case .ready = compactJob.state,
-                  let configuration = makeConfiguration(
+                  let configuration = makeCompactConfiguration(
                     for: compactJob,
+                    audio: audioPreference,
                     outputPolicy: outputPolicy
                   ) else {
                 presentValidationError(
@@ -562,13 +720,13 @@ final class CompressionFeatureModel: ObservableObject {
                         : filenameSuffix + "-smaller",
                     conflictPolicy: conflictPolicy
                   ),
-                  let value = makeConfiguration(
-                    for: job,
-                    outputPolicy: outputPolicy
-                  ) else {
+                  let retryRecipe = retryRecipe(for: job) else {
                 return
             }
-            configuration = value
+            configuration = JobConfiguration(
+                recipe: retryRecipe,
+                outputPolicy: outputPolicy
+            )
         }
 
         pendingActionJobIDs.insert(jobID)
@@ -594,19 +752,21 @@ final class CompressionFeatureModel: ObservableObject {
         }
     }
 
-    func removeSelectedQueuedJob() async {
+    func removeSelectedJob() async {
         guard let selectedJobID else { return }
-        await removeQueued(jobID: selectedJobID)
+        await removeJob(jobID: selectedJobID)
     }
 
-    func removeQueued(jobID: CompressionJob.ID) async {
+    func removeJob(jobID: CompressionJob.ID) async {
         guard canRemove(jobID: jobID) else { return }
+        pendingActionJobIDs.insert(jobID)
+        defer { pendingActionJobIDs.remove(jobID) }
         do {
-            try await coordinator.removeQueued(jobID: jobID)
+            try await coordinator.removeJob(jobID: jobID)
             await synchronizeSnapshot()
         } catch {
             presentValidationError(
-                String(localized: "Only waiting jobs can be removed.")
+                String(localized: "This video cannot be removed while it is being processed.")
             )
         }
     }
@@ -750,25 +910,92 @@ final class CompressionFeatureModel: ObservableObject {
         }
     }
 
-    private func makeConfiguration(
+    private func makePrimaryConfiguration(
         for job: CompressionJob,
+        settings: PrimaryCompressionSettings,
         outputPolicy: OutputPolicy
     ) -> JobConfiguration? {
-        guard let mediaInfo = job.mediaInfo else { return nil }
+        guard job.mode == .automatic,
+              let mediaInfo = job.mediaInfo else {
+            return nil
+        }
         do {
             return JobConfiguration(
                 recipe: try AutomaticCompressionPolicy().recipe(
                     for: mediaInfo,
-                    mode: job.mode
+                    settings: settings
                 ),
                 outputPolicy: outputPolicy
             )
         } catch {
             presentValidationError(
-                String(localized: "The automatic compression settings could not be prepared.")
+                String(localized: "The compression settings could not be prepared.")
             )
             return nil
         }
+    }
+
+    private func makeCompactConfiguration(
+        for job: CompressionJob,
+        audio: AudioPreference,
+        outputPolicy: OutputPolicy
+    ) -> JobConfiguration? {
+        guard job.mode == .compactRetry,
+              let mediaInfo = job.mediaInfo else {
+            return nil
+        }
+        do {
+            return JobConfiguration(
+                recipe: try AutomaticCompressionPolicy().compactRecipe(
+                    for: mediaInfo,
+                    audio: audio
+                ),
+                outputPolicy: outputPolicy
+            )
+        } catch {
+            presentValidationError(
+                String(localized: "The stronger compression could not be prepared.")
+            )
+            return nil
+        }
+    }
+
+    private func retryRecipe(for job: CompressionJob) -> CompressionRecipe? {
+        if let recipe = job.configuration?.recipe {
+            return recipe
+        }
+        guard let mediaInfo = job.mediaInfo else { return nil }
+
+        switch job.mode {
+        case .automatic:
+            guard let settings = try? compressionDraft(
+                for: job.id
+            ).primarySettings() else {
+                return nil
+            }
+            return try? AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                settings: settings
+            )
+        case .compactRetry:
+            guard let audio = compactAudioPreferences[job.id] else {
+                return nil
+            }
+            return try? AutomaticCompressionPolicy().compactRecipe(
+                for: mediaInfo,
+                audio: audio
+            )
+        }
+    }
+
+    private func updateCompressionDraft(
+        jobID: CompressionJob.ID,
+        _ update: (inout CompressionDraftSettings) -> Void
+    ) {
+        guard canEditCompression(jobID: jobID) else { return }
+        var draft = compressionDraft(for: jobID)
+        update(&draft)
+        compressionDrafts[jobID] = draft
     }
 
     private func synchronizeSnapshot() async {
@@ -782,6 +1009,20 @@ final class CompressionFeatureModel: ObservableObject {
         }
         lastConsumedSnapshotRevision = snapshot.revision
         self.snapshot = snapshot
+
+        let knownJobIDs = Set(snapshot.jobs.map(\.id))
+        compressionDrafts = compressionDrafts.filter {
+            knownJobIDs.contains($0.key)
+        }
+        compactAudioPreferences = compactAudioPreferences.filter {
+            knownJobIDs.contains($0.key)
+                || automaticallyQueueingJobIDs.contains($0.key)
+        }
+        for job in snapshot.jobs where job.mode == .automatic {
+            if compressionDrafts[job.id] == nil {
+                compressionDrafts[job.id] = CompressionDraftSettings()
+            }
+        }
 
         let preservesPendingImportedSelection: Bool
         if let pendingImportedSelectionID {

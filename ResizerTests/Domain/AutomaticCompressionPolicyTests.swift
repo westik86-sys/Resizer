@@ -3,14 +3,15 @@ import Testing
 
 @Suite("Automatic compression policy")
 struct AutomaticCompressionPolicyTests {
-    @Test("Automatic mode derives the first-attempt recipe")
-    func automaticMode() throws {
+    @Test("Quick derives the balanced first-attempt recipe")
+    func quickMode() throws {
+        let settings = PrimaryCompressionSettings.quick(audio: .keep)
         let recipe = try AutomaticCompressionPolicy().recipe(
             for: TestFixtures.mediaInfo(),
-            mode: .automatic
+            settings: settings
         )
 
-        expectCommonContract(recipe, mode: .automatic)
+        expectCommonContract(recipe, origin: .primary(settings))
         #expect(recipe.rateControl == .quality(try VideoQuality(0.65)))
         #expect(
             recipe.scalePolicy == .maximum(
@@ -32,14 +33,136 @@ struct AutomaticCompressionPolicyTests {
         )
     }
 
-    @Test("Compact retry derives the fixed secondary recipe")
-    func compactRetryMode() throws {
+    @Test("Quick can remove audio from an input that contains it")
+    func quickAudioRemoval() throws {
+        let settings = PrimaryCompressionSettings.quick(audio: .remove)
+
         let recipe = try AutomaticCompressionPolicy().recipe(
             for: TestFixtures.mediaInfo(),
-            mode: .compactRetry
+            settings: settings
         )
 
-        expectCommonContract(recipe, mode: .compactRetry)
+        #expect(recipe.origin == .primary(settings))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Flexible maps every bounded resolution and frame-rate option")
+    func flexibleOptions() throws {
+        let resolutions: [(FlexibleResolution, ScalePolicy)] = [
+            (FlexibleResolution.source, ScalePolicy.original),
+            (
+                FlexibleResolution.p1080,
+                ScalePolicy.maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 1_920,
+                        maximumShortEdge: 1_080
+                    )
+                )
+            ),
+            (
+                FlexibleResolution.p720,
+                ScalePolicy.maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 1_280,
+                        maximumShortEdge: 720
+                    )
+                )
+            ),
+            (
+                FlexibleResolution.p480,
+                ScalePolicy.maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 854,
+                        maximumShortEdge: 480
+                    )
+                )
+            ),
+        ]
+        let frameRates: [(FlexibleFrameRate, FrameRatePolicy)] = [
+            (FlexibleFrameRate.source, FrameRatePolicy.original),
+            (
+                FlexibleFrameRate.fps60,
+                FrameRatePolicy.capped(
+                    try FrameRateLimit(framesPerSecond: 60)
+                )
+            ),
+            (
+                FlexibleFrameRate.fps30,
+                FrameRatePolicy.capped(
+                    try FrameRateLimit(framesPerSecond: 30)
+                )
+            ),
+            (
+                FlexibleFrameRate.fps24,
+                FrameRatePolicy.capped(
+                    try FrameRateLimit(framesPerSecond: 24)
+                )
+            ),
+        ]
+
+        for resolution in resolutions {
+            for frameRate in frameRates {
+                let flexible = try FlexibleCompressionSettings(
+                    quality: VideoQuality(0.75),
+                    resolution: resolution.0,
+                    frameRate: frameRate.0,
+                    audioPreference: .keep
+                )
+                let settings = PrimaryCompressionSettings.flexible(flexible)
+
+                let recipe = try AutomaticCompressionPolicy().recipe(
+                    for: TestFixtures.mediaInfo(),
+                    settings: settings
+                )
+
+                expectCommonContract(recipe, origin: .primary(settings))
+                #expect(recipe.rateControl == .quality(try VideoQuality(0.75)))
+                #expect(recipe.scalePolicy == resolution.1)
+                #expect(recipe.frameRatePolicy == frameRate.1)
+                #expect(
+                    recipe.audioPolicy == .aac(
+                        try AudioBitRate(bitsPerSecond: 128_000)
+                    )
+                )
+            }
+        }
+    }
+
+    @Test("Flexible rejects quality outside its product bounds")
+    func flexibleQualityBounds() throws {
+        for quality in [0.29, 0.91] {
+            #expect(
+                throws: CompressionRecipeValidationError
+                    .invalidFlexibleVideoQuality
+            ) {
+                _ = try FlexibleCompressionSettings(
+                    quality: VideoQuality(quality),
+                    resolution: .source,
+                    frameRate: .source,
+                    audioPreference: .keep
+                )
+            }
+        }
+
+        for quality in [0.30, 0.90] {
+            let settings = try FlexibleCompressionSettings(
+                quality: VideoQuality(quality),
+                resolution: .source,
+                frameRate: .source,
+                audioPreference: .remove
+            )
+            #expect(settings.quality == (try VideoQuality(quality)))
+        }
+    }
+
+    @Test("Compact retry derives the fixed secondary recipe")
+    func compactRetryMode() throws {
+        let recipe = try AutomaticCompressionPolicy().compactRecipe(
+            for: TestFixtures.mediaInfo(),
+            audio: .keep
+        )
+
+        expectCommonContract(recipe, origin: .compactRetry(audio: .keep))
         #expect(recipe.rateControl == .quality(try VideoQuality(0.45)))
         #expect(
             recipe.scalePolicy == .maximum(
@@ -61,17 +184,34 @@ struct AutomaticCompressionPolicyTests {
         )
     }
 
-    @Test("Both modes remove audio when the source has no audio stream")
+    @Test("Compact retry inherits the Quick remove-audio choice")
+    func compactRetryAudioRemoval() throws {
+        let recipe = try AutomaticCompressionPolicy().compactRecipe(
+            for: TestFixtures.mediaInfo(),
+            audio: .remove
+        )
+
+        #expect(recipe.origin == .compactRetry(audio: .remove))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Every recipe removes audio when the source has no audio stream")
     func sourceWithoutAudio() throws {
         let mediaInfo = try TestFixtures.mediaInfo(includeAudio: false)
         let policy = AutomaticCompressionPolicy()
 
         #expect(
-            try policy.recipe(for: mediaInfo, mode: .automatic).audioPolicy
+            try policy.recipe(
+                for: mediaInfo,
+                settings: .quick(audio: .keep)
+            ).audioPolicy
                 == .remove
         )
         #expect(
-            try policy.recipe(for: mediaInfo, mode: .compactRetry).audioPolicy
+            try policy.compactRecipe(
+                for: mediaInfo,
+                audio: .keep
+            ).audioPolicy
                 == .remove
         )
     }
@@ -89,9 +229,9 @@ struct AutomaticCompressionPolicyTests {
 
     private func expectCommonContract(
         _ recipe: CompressionRecipe,
-        mode: CompressionMode
+        origin: RecipeOrigin
     ) {
-        #expect(recipe.origin == .mode(mode))
+        #expect(recipe.origin == origin)
         #expect(recipe.container == .mp4)
         #expect(recipe.videoCodec == .h264VideoToolbox)
         #expect(recipe.metadataPolicy == .preserveCommon)

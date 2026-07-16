@@ -4,6 +4,41 @@ import Testing
 
 @Suite("Headless compression workflow")
 struct CompressionWorkflowTests {
+    @Test("Preparation admits video-only while preflight checks captured audio")
+    func audioCapabilityIsDeferredToCapturedRecipePreflight() async throws {
+        let harness = try await WorkflowHarness.make()
+
+        let ready = try await harness.coordinator.prepare(
+            jobID: harness.jobID
+        )
+
+        #expect(ready.state == .ready)
+        let admissionRecipes = await harness.transcoder
+            .observedCapabilityRecipes()
+        let admissionRecipe = try #require(admissionRecipes.first)
+        #expect(admissionRecipes.count == 1)
+        #expect(
+            admissionRecipe.origin == .primary(.quick(audio: .remove))
+        )
+        #expect(admissionRecipe.audioPolicy == .remove)
+
+        _ = try await harness.coordinator.startPrepared(
+            jobID: harness.jobID,
+            configuration: harness.configuration
+        )
+
+        let preflightRequests = await harness.transcoder
+            .observedPreflightRequests()
+        let preflightRecipe = try #require(preflightRequests.first?.recipe)
+        #expect(preflightRequests.count == 1)
+        #expect(preflightRecipe == harness.configuration.recipe)
+        #expect(
+            preflightRecipe.audioPolicy == .aac(
+                try AudioBitRate(bitsPerSecond: 128_000)
+            )
+        )
+    }
+
     @Test("Coordinator runs probe through atomic commit in order")
     func successfulWorkflow() async throws {
         let harness = try await WorkflowHarness.make()
@@ -1258,6 +1293,8 @@ private actor WorkflowTranscoder: Transcoding {
     private let started: WorkflowGate?
     private let release: WorkflowGate?
     private let events: WorkflowEventLog
+    private var capabilityRecipes: [CompressionRecipe] = []
+    private var preflightRequests: [TranscodeRequest] = []
     private var transcodeRequests: [TranscodeRequest] = []
     private var cancellations = 0
 
@@ -1289,8 +1326,16 @@ private actor WorkflowTranscoder: Transcoding {
         self.events = events
     }
 
+    func validateCapabilities(
+        for mediaInfo: MediaInfo,
+        recipe: CompressionRecipe
+    ) async throws {
+        _ = mediaInfo
+        capabilityRecipes.append(recipe)
+    }
+
     func preflight(_ request: TranscodeRequest) async throws {
-        _ = request
+        preflightRequests.append(request)
         events.append("transcode.preflight")
         await preflightStarted?.open()
         try await preflightRelease?.wait()
@@ -1344,6 +1389,14 @@ private actor WorkflowTranscoder: Transcoding {
 
     func observedTranscodeRequests() -> [TranscodeRequest] {
         transcodeRequests
+    }
+
+    func observedCapabilityRecipes() -> [CompressionRecipe] {
+        capabilityRecipes
+    }
+
+    func observedPreflightRequests() -> [TranscodeRequest] {
+        preflightRequests
     }
 
     func cancelCount() -> Int {

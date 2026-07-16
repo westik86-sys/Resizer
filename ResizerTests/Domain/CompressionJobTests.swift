@@ -78,7 +78,9 @@ struct CompressionJobTests {
 
         #expect(job.mode == .compactRetry)
         #expect(job.configuration == compactConfiguration)
-        #expect(job.configuration?.recipe.origin == .mode(.compactRetry))
+        #expect(
+            job.configuration?.recipe.origin == .compactRetry(audio: .keep)
+        )
     }
 
     @Test("A matching mode cannot disguise a non-policy recipe")
@@ -95,7 +97,7 @@ struct CompressionJobTests {
             mode: .compactRetry
         )
         let disguisedRecipe = CompressionRecipe(
-            origin: .mode(.automatic),
+            origin: .primary(.quick(audio: .keep)),
             container: compact.container,
             videoCodec: compact.videoCodec,
             rateControl: compact.rateControl,
@@ -115,6 +117,38 @@ struct CompressionJobTests {
             try job.configure(configuration)
         }
         #expect(job.configuration == nil)
+    }
+
+    @Test("A primary job captures an exact Flexible recipe")
+    func flexibleRecipeIsAdmittedExactly() throws {
+        let mediaInfo = try TestFixtures.mediaInfo()
+        var job = try CompressionJob(
+            inputURL: URL(fileURLWithPath: "/tmp/flexible.mov")
+        )
+        try job.transition(to: .probing)
+        try job.recordMediaInfo(mediaInfo)
+        try job.transition(to: .ready)
+        let settings = PrimaryCompressionSettings.flexible(
+            try FlexibleCompressionSettings(
+                quality: VideoQuality(0.80),
+                resolution: .p720,
+                frameRate: .fps24,
+                audioPreference: .remove
+            )
+        )
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: settings
+        )
+        let configuration = JobConfiguration(
+            recipe: recipe,
+            outputPolicy: try TestFixtures.configuration().outputPolicy
+        )
+
+        try job.configure(configuration)
+
+        #expect(job.configuration == configuration)
+        #expect(job.configuration?.recipe.origin == .primary(settings))
     }
 
     @Test("Ready requires probed media")

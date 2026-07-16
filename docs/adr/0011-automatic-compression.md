@@ -1,12 +1,17 @@
 # ADR 0011: Automatic compression and no-benefit outcomes
 
-- Status: Implemented
+- Status: Implemented; superseded in part by ADR 0012
 - Date: 2026-07-16
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 - Supersedes: the preset-selection, default-preset, and custom-recipe product
   portions of [`ADR 0006`](0006-presets-command-builder.md)
 - Amends: the post-validation outcome branch of
   [`ADR 0007`](0007-headless-transcoding-core.md)
+- Superseded in part: the single-visible-mode, fixed-first-attempt-audio, and
+  initial UI decisions are superseded by
+  [`ADR 0012`](0012-quick-flexible-compression.md). The base Quick and compact
+  numeric policies plus `noBenefit` semantics remain authoritative; ADR 0012
+  governs audio choice, Flexible settings, and compact-action availability.
 
 ## Context
 
@@ -26,6 +31,10 @@ descriptor ownership, validation, cleanup, collision, or publication safety
 boundaries.
 
 ## Decision
+
+The initial-mode and UI statements in this section record the decision as it
+was implemented before ADR 0012. They are historical where they conflict with
+ADR 0012; the validation and `noBenefit` decision remains current.
 
 ### Closed compression modes
 

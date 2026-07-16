@@ -49,14 +49,28 @@ nonisolated struct CompressionJob: Identifiable, Sendable, Equatable {
         guard state.phase == .ready else {
             throw CompressionJobMutationError.operationRequires(.ready)
         }
-        guard configuration.recipe.origin == .mode(mode) else {
+        guard configuration.recipe.origin.mode == mode else {
             throw CompressionJobMutationError.configurationModeMismatch
         }
-        guard let mediaInfo,
-              let expectedRecipe = try? AutomaticCompressionPolicy().recipe(
+        guard let mediaInfo else {
+            throw CompressionJobMutationError.configurationRecipeMismatch
+        }
+
+        let expectedRecipe: CompressionRecipe?
+        switch configuration.recipe.origin {
+        case .primary(let settings):
+            expectedRecipe = try? AutomaticCompressionPolicy().recipe(
                 for: mediaInfo,
-                mode: mode
-              ),
+                settings: settings
+            )
+        case .compactRetry(let audio):
+            expectedRecipe = try? AutomaticCompressionPolicy().compactRecipe(
+                for: mediaInfo,
+                audio: audio
+            )
+        }
+
+        guard let expectedRecipe,
               configuration.recipe == expectedRecipe else {
             throw CompressionJobMutationError.configurationRecipeMismatch
         }

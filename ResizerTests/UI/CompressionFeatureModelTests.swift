@@ -112,6 +112,125 @@ struct CompressionFeatureModelTests {
         #expect(model.snapshot.queuedJobIDs == [model.jobs[1].id])
     }
 
+    @Test("Compression drafts default to Quick and stay isolated per video")
+    func compressionDraftsArePerJob() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/quick.mp4"),
+            URL(fileURLWithPath: "/tmp/flexible.mp4"),
+        ])
+        let quickID = model.jobs[0].id
+        let flexibleID = model.jobs[1].id
+
+        #expect(model.compressionDraft(for: quickID) == CompressionDraftSettings())
+        #expect(model.compressionDraft(for: flexibleID) == CompressionDraftSettings())
+
+        model.setCompressionControlMode(.flexible, jobID: flexibleID)
+        model.setFlexibleQuality(0.80, jobID: flexibleID)
+        model.setFlexibleResolution(.p720, jobID: flexibleID)
+        model.setFlexibleFrameRate(.fps24, jobID: flexibleID)
+        model.setKeepsAudio(false, jobID: flexibleID)
+
+        #expect(model.compressionDraft(for: quickID) == CompressionDraftSettings())
+        #expect(
+            model.compressionDraft(for: flexibleID) == CompressionDraftSettings(
+                controlMode: .flexible,
+                quality: 0.80,
+                resolution: .p720,
+                frameRate: .fps24,
+                audioPreference: .remove
+            )
+        )
+    }
+
+    @Test("Quick captures the user's remove-audio choice")
+    func quickCanRemoveAudio() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/with-audio.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        model.setKeepsAudio(false, jobID: jobID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+
+        await model.start()
+
+        let recipe = try #require(
+            (await coordinator.recordedCalls()).configurations[jobID]?.recipe
+        )
+        #expect(recipe.origin == .primary(.quick(audio: .remove)))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Flexible captures bounded settings while Quick keeps its defaults")
+    func flexibleSettingsAreCapturedPerJob() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/flexible.mp4"),
+            URL(fileURLWithPath: "/tmp/quick.mp4"),
+        ])
+        let flexibleID = model.jobs[0].id
+        let quickID = model.jobs[1].id
+        model.setCompressionControlMode(.flexible, jobID: flexibleID)
+        model.setFlexibleQuality(1, jobID: flexibleID)
+        model.setFlexibleResolution(.p480, jobID: flexibleID)
+        model.setFlexibleFrameRate(.fps60, jobID: flexibleID)
+        model.setKeepsAudio(false, jobID: flexibleID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+
+        await model.start()
+
+        model.setCompressionControlMode(.quick, jobID: flexibleID)
+        model.setFlexibleQuality(0.30, jobID: flexibleID)
+        model.setKeepsAudio(true, jobID: flexibleID)
+
+        let configurations = await coordinator.recordedCalls().configurations
+        let flexibleRecipe = try #require(configurations[flexibleID]?.recipe)
+        let expectedSettings = PrimaryCompressionSettings.flexible(
+            try FlexibleCompressionSettings(
+                quality: VideoQuality(0.90),
+                resolution: .p480,
+                frameRate: .fps60,
+                audioPreference: .remove
+            )
+        )
+        #expect(flexibleRecipe.origin == .primary(expectedSettings))
+        #expect(flexibleRecipe.rateControl == .quality(try VideoQuality(0.90)))
+        #expect(
+            flexibleRecipe.scalePolicy == .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: 854,
+                    maximumShortEdge: 480
+                )
+            )
+        )
+        #expect(
+            flexibleRecipe.frameRatePolicy == .capped(
+                try FrameRateLimit(framesPerSecond: 60)
+            )
+        )
+        #expect(flexibleRecipe.audioPolicy == .remove)
+        #expect(
+            model.compressionDraft(for: flexibleID).controlMode == .flexible
+        )
+        #expect(model.compressionDraft(for: flexibleID).quality == 0.90)
+        #expect(
+            model.compressionDraft(for: flexibleID).audioPreference == .remove
+        )
+        #expect(
+            configurations[quickID]?.recipe.origin
+                == .primary(.quick(audio: .keep))
+        )
+    }
+
     @Test("Automatic recipes are derived independently for mixed-audio batches")
     func automaticRecipesUseEachJobsMediaInfo() async throws {
         let coordinator = QueueFeatureCoordinatorFake()
@@ -172,13 +291,143 @@ struct CompressionFeatureModelTests {
         #expect(compactJob.mode == .compactRetry)
         #expect(compactJob.inputURL == inputURL)
         #expect(compactJob.inputURL != outputURL)
-        #expect(compactJob.configuration?.recipe.origin == .mode(.compactRetry))
+        #expect(
+            compactJob.configuration?.recipe.origin
+                == .compactRetry(audio: .keep)
+        )
         #expect(
             compactJob.configuration?.outputPolicy.filenameSuffix
                 == "-web-smaller"
         )
         #expect(!model.canCompressMore(jobID: compactJob.id))
         #expect(model.job(id: sourceID)?.state.phase == .completed)
+    }
+
+    @Test("Compress More inherits the Quick remove-audio choice")
+    func compressMoreInheritsAudioRemoval() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/original.mp4"))
+        let sourceID = try #require(model.selectedJobID)
+        model.setKeepsAudio(false, jobID: sourceID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        try await coordinator.replaceWithCompletedJob(
+            jobID: sourceID,
+            outputURL: URL(fileURLWithPath: "/tmp/export/result.mp4")
+        )
+        #expect(await eventually { model.canCompressMore(jobID: sourceID) })
+
+        await model.compressMore(jobID: sourceID)
+
+        let compactJob = try #require(model.jobs.last)
+        #expect(compactJob.mode == .compactRetry)
+        #expect(
+            compactJob.configuration?.recipe.origin
+                == .compactRetry(audio: .remove)
+        )
+        #expect(compactJob.configuration?.recipe.audioPolicy == .remove)
+    }
+
+    @Test("Flexible results do not offer the fixed Quick compact retry")
+    func flexibleResultDoesNotOfferCompressMore() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/flexible.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        model.setCompressionControlMode(.flexible, jobID: jobID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        try await coordinator.replaceWithCompletedJob(
+            jobID: jobID,
+            outputURL: URL(fileURLWithPath: "/tmp/export/result.mp4")
+        )
+
+        #expect(await eventually {
+            model.job(id: jobID)?.state.phase == .completed
+        })
+        #expect(!model.canCompressMore(jobID: jobID))
+    }
+
+    @Test("Compact probe retry preserves removed audio for a later Start")
+    func compactProbeRetryCanBeStartedWithInheritedAudio() async throws {
+        let (model, coordinator, compactID) = try await
+            makeReadyCompactJobAfterProbeFailure(audio: .remove)
+
+        await model.start()
+
+        let calls = await coordinator.recordedCalls()
+        let recipe = try #require(calls.configurations[compactID]?.recipe)
+        #expect(calls.enqueuedJobIDs.last == compactID)
+        #expect(recipe.origin == .compactRetry(audio: .remove))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Cancelled unconfigured primary job derives its current draft recipe")
+    func cancelledPrimaryWithoutConfigurationCanRetry() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/cancelled.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        model.setCompressionControlMode(.flexible, jobID: jobID)
+        model.setFlexibleQuality(0.40, jobID: jobID)
+        model.setFlexibleResolution(.p720, jobID: jobID)
+        model.setFlexibleFrameRate(.fps24, jobID: jobID)
+        model.setKeepsAudio(false, jobID: jobID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        try await coordinator.replaceWithUnconfiguredCancelledJob(
+            jobID: jobID
+        )
+        #expect(await eventually {
+            model.job(id: jobID)?.state == .cancelled
+        })
+        #expect(model.job(id: jobID)?.configuration == nil)
+
+        await model.retry(jobID: jobID)
+
+        let recipe = try #require(
+            (await coordinator.recordedCalls()).configurations[jobID]?.recipe
+        )
+        let expectedSettings = PrimaryCompressionSettings.flexible(
+            try FlexibleCompressionSettings(
+                quality: VideoQuality(0.40),
+                resolution: .p720,
+                frameRate: .fps24,
+                audioPreference: .remove
+            )
+        )
+        #expect(recipe.origin == .primary(expectedSettings))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Cancelled unconfigured compact job derives its inherited recipe")
+    func cancelledCompactWithoutConfigurationCanRetry() async throws {
+        let (model, coordinator, compactID) = try await
+            makeReadyCompactJobAfterProbeFailure(audio: .remove)
+        try await coordinator.replaceWithUnconfiguredCancelledJob(
+            jobID: compactID
+        )
+        #expect(await eventually {
+            model.job(id: compactID)?.state == .cancelled
+        })
+        #expect(model.job(id: compactID)?.configuration == nil)
+
+        await model.retry(jobID: compactID)
+
+        let recipe = try #require(
+            (await coordinator.recordedCalls()).configurations[compactID]?.recipe
+        )
+        #expect(recipe.origin == .compactRetry(audio: .remove))
+        #expect(recipe.audioPolicy == .remove)
     }
 
     @Test("Compact preparation cannot be admitted by the general Start action")
@@ -505,12 +754,59 @@ struct CompressionFeatureModelTests {
         await model.moveSelectedUp()
         #expect(model.snapshot.queuedJobIDs == [thirdID, secondID])
 
-        await model.removeSelectedQueuedJob()
+        await model.removeSelectedJob()
         #expect(model.job(id: thirdID) == nil)
         #expect(model.snapshot.queuedJobIDs == [secondID])
         #expect(model.selectedJobID == activeID)
         let calls = await coordinator.recordedCalls()
         #expect(calls.removedJobIDs == [thirdID])
+    }
+
+    @Test("A ready attached video can be removed and selection falls back")
+    func readyVideoCanBeRemoved() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/keep.mp4"),
+            URL(fileURLWithPath: "/tmp/remove.mp4"),
+        ])
+        let fallbackID = model.jobs[0].id
+        let removedID = model.jobs[1].id
+        model.selectJob(removedID)
+
+        #expect(model.canRemove(jobID: removedID))
+        await model.removeSelectedJob()
+
+        #expect(model.job(id: removedID) == nil)
+        #expect(model.selectedJobID == fallbackID)
+        #expect(model.compressionDrafts[removedID] == nil)
+        #expect((await coordinator.recordedCalls()).removedJobIDs == [removedID])
+    }
+
+    @Test("Overlapping remove actions mutate the coordinator only once")
+    func overlappingRemoveIsIdempotent() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/remove-once.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        let gate = SynchronousCallGate()
+        await coordinator.gateNextRemove(gate)
+
+        let firstRemove = Task { @MainActor in
+            await model.removeJob(jobID: jobID)
+        }
+        await gate.waitUntilEntered()
+        #expect(model.pendingActionJobIDs.contains(jobID))
+
+        await model.removeJob(jobID: jobID)
+        gate.release()
+        await firstRemove.value
+
+        #expect((await coordinator.recordedCalls()).removedJobIDs == [jobID])
+        #expect(model.job(id: jobID) == nil)
+        #expect(model.validationMessage == nil)
     }
 
     @Test("Retry preserves identity and copies only bounded diagnostics")
@@ -552,6 +848,44 @@ struct CompressionFeatureModelTests {
         #expect(calls.configurations[jobID]?.outputPolicy.filenameSuffix == "-retry")
         #expect(model.job(id: jobID) != nil)
         #expect(model.snapshot.activeJobID == jobID)
+    }
+
+    @Test("Retry reuses the recipe captured before Flexible encoding")
+    func retryPreservesCapturedFlexibleRecipe() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/flexible.mp4"))
+        let jobID = try #require(model.selectedJobID)
+        model.setCompressionControlMode(.flexible, jobID: jobID)
+        model.setFlexibleQuality(0.35, jobID: jobID)
+        model.setFlexibleResolution(.source, jobID: jobID)
+        model.setFlexibleFrameRate(.source, jobID: jobID)
+        model.setKeepsAudio(false, jobID: jobID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        let capturedRecipe = try #require(
+            (await coordinator.recordedCalls()).configurations[jobID]?.recipe
+        )
+        try await coordinator.replaceWithEncodeFailure(
+            jobID: jobID,
+            diagnostic: BoundedDiagnostic(
+                text: "encode failed",
+                utf8ByteLimit: 64,
+                wasTruncated: false
+            )
+        )
+        #expect(await eventually { model.canRetry(jobID: jobID) })
+
+        await model.retry(jobID: jobID, filenameSuffix: "-retry")
+
+        let retried = try #require(
+            (await coordinator.recordedCalls()).configurations[jobID]
+        )
+        #expect(retried.recipe == capturedRecipe)
+        #expect(retried.outputPolicy.filenameSuffix == "-retry")
     }
 
     @Test("Probe failure retries preparation without requiring an output folder")
@@ -713,6 +1047,49 @@ struct CompressionFeatureModelTests {
         }
         return condition()
     }
+
+    private func makeReadyCompactJobAfterProbeFailure(
+        audio: AudioPreference
+    ) async throws -> (
+        CompressionFeatureModel,
+        QueueFeatureCoordinatorFake,
+        CompressionJob.ID
+    ) {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let model = CompressionFeatureModel(coordinator: coordinator)
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/original.mp4"))
+        let sourceID = try #require(model.selectedJobID)
+        model.setKeepsAudio(audio == .keep, jobID: sourceID)
+        model.selectOutputDirectory(
+            URL(fileURLWithPath: "/tmp/export", isDirectory: true)
+        )
+        await model.start()
+        try await coordinator.replaceWithCompletedJob(
+            jobID: sourceID,
+            outputURL: URL(fileURLWithPath: "/tmp/export/result.mp4")
+        )
+        #expect(await eventually { model.canCompressMore(jobID: sourceID) })
+        await coordinator.failNextCompactPreparation()
+
+        await model.compressMore(jobID: sourceID)
+
+        let compactID = try #require(model.selectedJobID)
+        #expect(await eventually {
+            guard let job = model.job(id: compactID),
+                  case .failed(let failure) = job.state else {
+                return false
+            }
+            return job.mode == .compactRetry && failure.stage == .probe
+        })
+        #expect(model.compactAudioPreference(for: compactID) == audio)
+
+        await model.retry(jobID: compactID)
+
+        #expect(model.job(id: compactID)?.state == .ready)
+        #expect(model.job(id: compactID)?.configuration == nil)
+        return (model, coordinator, compactID)
+    }
 }
 
 private extension CompressionFeatureModel {
@@ -848,6 +1225,8 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
     private var nextPrepareAfterProbingGate: AsyncCallGate<CompressionJob.ID>?
     private var nextPrepareAfterReadyGate: AsyncCallGate<CompressionJob.ID>?
     private var nextAddBeforeCreateGate: AsyncCallGate<[CompressionJob.ID]>?
+    private var nextRemoveGate: SynchronousCallGate?
+    private var failsNextCompactPreparation = false
 
     @discardableResult
     func add(
@@ -897,6 +1276,18 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         try job.transition(to: .probing)
         jobsByID[jobID] = job
         publish()
+        if failsNextCompactPreparation, job.mode == .compactRetry {
+            failsNextCompactPreparation = false
+            let failure = TranscodeFailure(
+                stage: .probe,
+                reason: .invalidMedia,
+                diagnosticTail: nil
+            )
+            try job.transition(to: .failed(failure))
+            jobsByID[jobID] = job
+            publish()
+            throw failure
+        }
         if let gate = nextPrepareAfterProbingGate {
             nextPrepareAfterProbingGate = nil
             await gate.enterAndWait(jobID)
@@ -1021,8 +1412,21 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         publish()
     }
 
-    func removeQueued(jobID: CompressionJob.ID) throws {
-        try requireWaiting(jobID)
+    func removeJob(jobID: CompressionJob.ID) throws {
+        let job = try requireJob(jobID)
+        if let gate = nextRemoveGate {
+            nextRemoveGate = nil
+            gate.enterAndWait()
+        }
+        guard jobID != activeJobID else {
+            throw CompressionCoordinatorError.activeQueueJob(jobID)
+        }
+        switch job.state {
+        case .ready, .queued, .cancelled, .completed, .noBenefit, .failed:
+            break
+        case .draft, .probing, .running, .finishing, .cancelling:
+            throw CompressionCoordinatorError.jobNotRemovable(jobID)
+        }
         jobsByID.removeValue(forKey: jobID)
         jobOrder.removeAll { $0 == jobID }
         calls.removedJobIDs.append(jobID)
@@ -1126,6 +1530,14 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         nextAddBeforeCreateGate = gate
     }
 
+    func gateNextRemove(_ gate: SynchronousCallGate) {
+        nextRemoveGate = gate
+    }
+
+    func failNextCompactPreparation() {
+        failsNextCompactPreparation = true
+    }
+
     func replaceWithRunningJob(jobID: CompressionJob.ID) throws {
         var job = try makeReadyJob(jobID: jobID)
         try job.configure(configuration(for: job))
@@ -1141,7 +1553,9 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         diagnostic: BoundedDiagnostic
     ) throws {
         var job = try makeReadyJob(jobID: jobID)
-        try job.configure(configuration(for: job))
+        try job.configure(
+            calls.configurations[jobID] ?? configuration(for: job)
+        )
         try job.transition(to: .queued)
         try job.transition(to: .running(progress: nil))
         try job.transition(
@@ -1181,12 +1595,31 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         publish()
     }
 
+    func replaceWithUnconfiguredCancelledJob(
+        jobID: CompressionJob.ID
+    ) throws {
+        var job = try requireJob(jobID)
+        guard case .ready = job.state,
+              job.mediaInfo != nil,
+              job.configuration == nil else {
+            throw CompressionWorkflowError.workflowStateChanged(
+                job.state.phase
+            )
+        }
+        try job.transition(to: .cancelled)
+        jobsByID[jobID] = job
+        if activeJobID == jobID { activeJobID = nil }
+        publish()
+    }
+
     func replaceWithCompletedJob(
         jobID: CompressionJob.ID,
         outputURL: URL
     ) throws {
         var job = try makeReadyJob(jobID: jobID)
-        try job.configure(configuration(for: job))
+        try job.configure(
+            calls.configurations[jobID] ?? configuration(for: job)
+        )
         try job.transition(to: .queued)
         try job.transition(to: .running(progress: nil))
         try job.transition(to: .finishing(.validating))
@@ -1208,7 +1641,9 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
 
     func replaceWithNoBenefitJob(jobID: CompressionJob.ID) throws {
         var job = try makeReadyJob(jobID: jobID)
-        try job.configure(configuration(for: job))
+        try job.configure(
+            calls.configurations[jobID] ?? configuration(for: job)
+        )
         try job.transition(to: .queued)
         try job.transition(to: .running(progress: nil))
         try job.transition(to: .finishing(.validating))

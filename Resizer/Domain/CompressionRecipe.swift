@@ -12,12 +12,106 @@ nonisolated struct CompressionRecipe: Sendable, Equatable {
 }
 
 nonisolated enum RecipeOrigin: Sendable, Equatable {
-    case mode(CompressionMode)
+    case primary(PrimaryCompressionSettings)
+    case compactRetry(audio: AudioPreference)
+
+    var mode: CompressionMode {
+        switch self {
+        case .primary:
+            .automatic
+        case .compactRetry:
+            .compactRetry
+        }
+    }
+
+    var audioPreference: AudioPreference {
+        switch self {
+        case .primary(let settings):
+            settings.audioPreference
+        case .compactRetry(let audio):
+            audio
+        }
+    }
 }
 
 nonisolated enum CompressionMode: Sendable, Equatable {
     case automatic
     case compactRetry
+}
+
+nonisolated enum CompressionControlMode: Sendable, Equatable, CaseIterable {
+    case quick
+    case flexible
+}
+
+nonisolated enum AudioPreference: Sendable, Equatable {
+    case keep
+    case remove
+}
+
+nonisolated enum FlexibleResolution: Sendable, Equatable, CaseIterable {
+    case source
+    case p1080
+    case p720
+    case p480
+}
+
+nonisolated enum FlexibleFrameRate: Sendable, Equatable, CaseIterable {
+    case source
+    case fps60
+    case fps30
+    case fps24
+}
+
+nonisolated struct FlexibleCompressionSettings: Sendable, Equatable {
+    static let minimumQuality = 0.30
+    static let maximumQuality = 0.90
+
+    let quality: VideoQuality
+    let resolution: FlexibleResolution
+    let frameRate: FlexibleFrameRate
+    let audioPreference: AudioPreference
+
+    init(
+        quality: VideoQuality,
+        resolution: FlexibleResolution,
+        frameRate: FlexibleFrameRate,
+        audioPreference: AudioPreference
+    ) throws {
+        guard (Self.minimumQuality ... Self.maximumQuality).contains(
+            quality.value
+        ) else {
+            throw CompressionRecipeValidationError.invalidFlexibleVideoQuality
+        }
+
+        self.quality = quality
+        self.resolution = resolution
+        self.frameRate = frameRate
+        self.audioPreference = audioPreference
+    }
+}
+
+nonisolated enum PrimaryCompressionSettings: Sendable, Equatable {
+    case quick(audio: AudioPreference)
+    case flexible(FlexibleCompressionSettings)
+
+    var controlMode: CompressionControlMode {
+        switch self {
+        case .quick:
+            .quick
+        case .flexible:
+            .flexible
+        }
+    }
+
+    var audioPreference: AudioPreference {
+        switch self {
+        case .quick(let audio):
+            audio
+        case .flexible(let settings):
+            settings.audioPreference
+        }
+    }
 }
 
 nonisolated enum OutputContainer: Sendable, Equatable {
@@ -104,6 +198,7 @@ nonisolated enum MetadataPolicy: Sendable, Equatable {
 
 nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
     case invalidVideoQuality
+    case invalidFlexibleVideoQuality
     case invalidResolutionLimit
     case invalidFrameRateLimit
     case invalidAudioBitRate
@@ -114,55 +209,147 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
         for mediaInfo: MediaInfo,
         mode: CompressionMode = .automatic
     ) throws -> CompressionRecipe {
-        let audioPolicy: AudioPolicy
-        if mediaInfo.audioStreams.isEmpty {
-            audioPolicy = .remove
-        } else {
-            let bitsPerSecond = switch mode {
-            case .automatic: 128_000
-            case .compactRetry: 96_000
-            }
-            audioPolicy = .aac(
-                try AudioBitRate(bitsPerSecond: bitsPerSecond)
-            )
-        }
-
-        let values = switch mode {
+        switch mode {
         case .automatic:
-            (
-                quality: 0.65,
-                maximumLongEdge: 1_920,
-                maximumShortEdge: 1_080,
-                framesPerSecond: 30.0
+            try recipe(
+                for: mediaInfo,
+                settings: .quick(audio: .keep)
             )
         case .compactRetry:
-            (
-                quality: 0.45,
-                maximumLongEdge: 1_280,
-                maximumShortEdge: 720,
-                framesPerSecond: 24.0
+            try compactRecipe(for: mediaInfo, audio: .keep)
+        }
+    }
+
+    func recipe(
+        for mediaInfo: MediaInfo,
+        settings: PrimaryCompressionSettings
+    ) throws -> CompressionRecipe {
+        switch settings {
+        case .quick(let audio):
+            try makeRecipe(
+                for: mediaInfo,
+                origin: .primary(settings),
+                quality: try VideoQuality(0.65),
+                scalePolicy: .maximum(
+                    try ResolutionLimit(
+                        maximumLongEdge: 1_920,
+                        maximumShortEdge: 1_080
+                    )
+                ),
+                frameRatePolicy: .capped(
+                    try FrameRateLimit(framesPerSecond: 30)
+                ),
+                audioPreference: audio,
+                audioBitsPerSecond: 128_000
+            )
+        case .flexible(let flexible):
+            try makeRecipe(
+                for: mediaInfo,
+                origin: .primary(settings),
+                quality: flexible.quality,
+                scalePolicy: try scalePolicy(for: flexible.resolution),
+                frameRatePolicy: try frameRatePolicy(for: flexible.frameRate),
+                audioPreference: flexible.audioPreference,
+                audioBitsPerSecond: 128_000
+            )
+        }
+    }
+
+    func compactRecipe(
+        for mediaInfo: MediaInfo,
+        audio: AudioPreference
+    ) throws -> CompressionRecipe {
+        try makeRecipe(
+            for: mediaInfo,
+            origin: .compactRetry(audio: audio),
+            quality: try VideoQuality(0.45),
+            scalePolicy: .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: 1_280,
+                    maximumShortEdge: 720
+                )
+            ),
+            frameRatePolicy: .capped(
+                try FrameRateLimit(framesPerSecond: 24)
+            ),
+            audioPreference: audio,
+            audioBitsPerSecond: 96_000
+        )
+    }
+
+    private func makeRecipe(
+        for mediaInfo: MediaInfo,
+        origin: RecipeOrigin,
+        quality: VideoQuality,
+        scalePolicy: ScalePolicy,
+        frameRatePolicy: FrameRatePolicy,
+        audioPreference: AudioPreference,
+        audioBitsPerSecond: Int
+    ) throws -> CompressionRecipe {
+        let audioPolicy: AudioPolicy
+        if audioPreference == .remove || mediaInfo.audioStreams.isEmpty {
+            audioPolicy = .remove
+        } else {
+            audioPolicy = .aac(
+                try AudioBitRate(bitsPerSecond: audioBitsPerSecond)
             )
         }
 
         return CompressionRecipe(
-            origin: .mode(mode),
+            origin: origin,
             container: .mp4,
             videoCodec: .h264VideoToolbox,
-            rateControl: .quality(try VideoQuality(values.quality)),
-            scalePolicy: .maximum(
-                try ResolutionLimit(
-                    maximumLongEdge: values.maximumLongEdge,
-                    maximumShortEdge: values.maximumShortEdge
-                )
-            ),
-            frameRatePolicy: .capped(
-                try FrameRateLimit(
-                    framesPerSecond: values.framesPerSecond
-                )
-            ),
+            rateControl: .quality(quality),
+            scalePolicy: scalePolicy,
+            frameRatePolicy: frameRatePolicy,
             audioPolicy: audioPolicy,
             metadataPolicy: .preserveCommon
         )
+    }
+
+    private func scalePolicy(
+        for resolution: FlexibleResolution
+    ) throws -> ScalePolicy {
+        switch resolution {
+        case .source:
+            .original
+        case .p1080:
+            .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: 1_920,
+                    maximumShortEdge: 1_080
+                )
+            )
+        case .p720:
+            .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: 1_280,
+                    maximumShortEdge: 720
+                )
+            )
+        case .p480:
+            .maximum(
+                try ResolutionLimit(
+                    maximumLongEdge: 854,
+                    maximumShortEdge: 480
+                )
+            )
+        }
+    }
+
+    private func frameRatePolicy(
+        for frameRate: FlexibleFrameRate
+    ) throws -> FrameRatePolicy {
+        switch frameRate {
+        case .source:
+            .original
+        case .fps60:
+            .capped(try FrameRateLimit(framesPerSecond: 60))
+        case .fps30:
+            .capped(try FrameRateLimit(framesPerSecond: 30))
+        case .fps24:
+            .capped(try FrameRateLimit(framesPerSecond: 24))
+        }
     }
 }
 

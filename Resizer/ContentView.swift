@@ -83,7 +83,7 @@ struct ContentView: View {
                         }
                     } label: {
                         Label(
-                            "Start \(model.readyJobs.count)",
+                            "Start \(model.startableReadyJobCount)",
                             systemImage: "play.fill"
                         )
                     }
@@ -269,15 +269,15 @@ struct ContentView: View {
 
                 Button(role: .destructive) {
                     guard let jobID = model.selectedJobID else { return }
-                    Task { await model.removeQueued(jobID: jobID) }
+                    Task { await model.removeJob(jobID: jobID) }
                 } label: {
                     Image(systemName: "trash")
                 }
                 .disabled(!model.canRemoveSelected)
-                .accessibilityLabel("Remove selected waiting job")
+                .accessibilityLabel("Remove selected video from the queue")
                 .accessibilityIdentifier("remove-queue-job")
                 .keyboardShortcut(.delete, modifiers: [])
-                .help("Remove selected waiting job (Delete)")
+                .help("Remove selected video from this session (Delete)")
 
                 Spacer()
 
@@ -441,17 +441,17 @@ struct ContentView: View {
 
             HStack {
                 Text(
-                    model.readyJobs.count == 1
+                    model.startableReadyJobCount == 1
                         ? "A unique temporary file is validated before the final copy appears."
-                        : "Each prepared video gets its own automatic settings."
+                        : "Each prepared video keeps its own compression settings."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(
-                    model.readyJobs.count == 1
+                    model.startableReadyJobCount == 1
                         ? "Start Compression"
-                        : "Start \(model.readyJobs.count) Videos"
+                        : "Start \(model.startableReadyJobCount) Videos"
                 ) {
                     Task {
                         await model.start(
@@ -499,55 +499,189 @@ struct ContentView: View {
     }
 
     private func settingsCard(_ job: CompressionJob) -> some View {
-        return GroupBox {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "sparkles")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(
-                        job.mode == .automatic
-                            ? String(localized: "Automatic")
-                            : String(localized: "Stronger compression")
-                    )
-                        .font(.headline)
-                    Text(recipeSummary(for: job))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier(
-                            "automatic-compression-summary"
-                        )
-                    Text(
-                        job.mode == .automatic
-                            ? String(
-                                localized: "Resizer chooses a balanced size and quality automatically."
-                              )
-                            : String(
-                                localized: "Stronger compression prioritizes a smaller file over maximum quality."
-                              )
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
+        GroupBox {
+            if model.canEditCompression(jobID: job.id) {
+                editableCompressionSettings(job)
+            } else {
+                capturedCompressionSettings(job)
             }
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
             Text("Compression")
                 .font(.headline)
         }
-        .accessibilityIdentifier("automatic-mode")
+        .accessibilityIdentifier("compression-settings")
+    }
+
+    private func editableCompressionSettings(
+        _ job: CompressionJob
+    ) -> some View {
+        let draft = model.compressionDraft(for: job.id)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            Picker(
+                "Compression mode",
+                selection: compressionModeBinding(for: job.id)
+            ) {
+                Label("Quick", systemImage: "bolt.fill")
+                    .tag(CompressionControlMode.quick)
+                Label("Flexible", systemImage: "slider.horizontal.3")
+                    .tag(CompressionControlMode.flexible)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.large)
+            .accessibilityIdentifier("compression-mode-selector")
+
+            Divider()
+
+            switch draft.controlMode {
+            case .quick:
+                VStack(alignment: .leading, spacing: 12) {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Ready with balanced settings")
+                                .font(.headline)
+                            Text(draftRecipeSummary(for: job))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    audioToggle(for: job)
+                }
+                .accessibilityIdentifier("quick-compression-settings")
+
+            case .flexible:
+                flexibleCompressionSettings(job, draft: draft)
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func flexibleCompressionSettings(
+        _ job: CompressionJob,
+        draft: CompressionDraftSettings
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            LabeledContent("Quality") {
+                HStack(spacing: 10) {
+                    Slider(
+                        value: qualityBinding(for: job.id),
+                        in: FlexibleCompressionSettings.minimumQuality ...
+                            FlexibleCompressionSettings.maximumQuality,
+                        step: 0.05
+                    )
+                    .frame(minWidth: 220)
+                    .accessibilityIdentifier("flexible-quality")
+
+                    Text("\(Int((draft.quality * 100).rounded()))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 42, alignment: .trailing)
+                }
+            }
+
+            HStack {
+                Text("Smaller file")
+                Spacer()
+                Text("Higher quality")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 125)
+
+            LabeledContent("Resolution") {
+                Picker(
+                    "Resolution",
+                    selection: resolutionBinding(for: job.id)
+                ) {
+                    ForEach(FlexibleResolution.allCases, id: \.self) {
+                        Text(resolutionTitle($0)).tag($0)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 190)
+                .accessibilityIdentifier("flexible-resolution")
+            }
+
+            LabeledContent("Frame Rate") {
+                Picker(
+                    "Frame Rate",
+                    selection: frameRateBinding(for: job.id)
+                ) {
+                    ForEach(FlexibleFrameRate.allCases, id: \.self) {
+                        Text(frameRateTitle($0)).tag($0)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 190)
+                .accessibilityIdentifier("flexible-frame-rate")
+            }
+
+            audioToggle(for: job)
+
+            Text(draftRecipeSummary(for: job))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("flexible-compression-summary")
+        }
+        .accessibilityIdentifier("flexible-compression-settings")
+    }
+
+    private func audioToggle(for job: CompressionJob) -> some View {
+        let hasAudio = job.mediaInfo?.audioStreams.isEmpty == false
+        return VStack(alignment: .leading, spacing: 4) {
+            Toggle(
+                "Keep Audio",
+                isOn: keepsAudioBinding(for: job)
+            )
+            .toggleStyle(.switch)
+            .disabled(!hasAudio)
+            .accessibilityIdentifier("keep-audio")
+
+            if !hasAudio {
+                Text("This video has no audio track.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func capturedCompressionSettings(
+        _ job: CompressionJob
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: capturedCompressionSymbol(for: job))
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(capturedCompressionTitle(for: job))
+                    .font(.headline)
+                Text(recipeSummary(for: job))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("compression-summary")
+                Text(capturedCompressionDetail(for: job))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func outputCard(_ job: CompressionJob) -> some View {
-        let outputSuffix = job.configuration?.outputPolicy.filenameSuffix
-            ?? (job.mode == .automatic
-                ? validatedFilenameSuffix
-                : validatedFilenameSuffix + "-smaller")
+        let outputSuffix = job.mode == .automatic
+            ? validatedFilenameSuffix
+            : validatedFilenameSuffix + "-smaller"
 
         return GroupBox {
             HStack(spacing: 14) {
@@ -1252,17 +1386,46 @@ struct ContentView: View {
     }
 
     private func recipeSummary(for job: CompressionJob) -> String {
-        let recipe = job.configuration?.recipe
-            ?? job.mediaInfo.flatMap {
+        let recipe: CompressionRecipe?
+        if let captured = job.configuration?.recipe {
+            recipe = captured
+        } else if let mediaInfo = job.mediaInfo,
+                  job.mode == .compactRetry,
+                  let audio = model.compactAudioPreference(for: job.id) {
+            recipe = try? AutomaticCompressionPolicy().compactRecipe(
+                for: mediaInfo,
+                audio: audio
+            )
+        } else {
+            recipe = job.mediaInfo.flatMap {
                 try? AutomaticCompressionPolicy().recipe(
                     for: $0,
                     mode: job.mode
                 )
             }
+        }
         guard let recipe else {
-            return String(localized: "Automatic compression")
+            return String(localized: "Compression settings")
         }
 
+        return recipeSummary(recipe)
+    }
+
+    private func draftRecipeSummary(for job: CompressionJob) -> String {
+        guard let mediaInfo = job.mediaInfo,
+              let settings = try? model.compressionDraft(
+                for: job.id
+              ).primarySettings(),
+              let recipe = try? AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                settings: settings
+              ) else {
+            return String(localized: "Compression settings")
+        }
+        return recipeSummary(recipe)
+    }
+
+    private func recipeSummary(_ recipe: CompressionRecipe) -> String {
         let resolution = switch recipe.scalePolicy {
         case .original:
             String(localized: "Original resolution")
@@ -1289,6 +1452,128 @@ struct ContentView: View {
         }
         return ["MP4", "H.264", resolution, frameRate, audio]
             .joined(separator: " · ")
+    }
+
+    private func capturedCompressionTitle(for job: CompressionJob) -> String {
+        switch job.configuration?.recipe.origin {
+        case .primary(.quick(audio: _)):
+            String(localized: "Quick")
+        case .primary(.flexible):
+            String(localized: "Flexible")
+        case .compactRetry:
+            String(localized: "Stronger compression")
+        case nil:
+            job.mode == .compactRetry
+                ? String(localized: "Stronger compression")
+                : String(localized: "Quick")
+        }
+    }
+
+    private func capturedCompressionSymbol(for job: CompressionJob) -> String {
+        switch job.configuration?.recipe.origin {
+        case .primary(.flexible):
+            "slider.horizontal.3"
+        case .primary(.quick):
+            "bolt.fill"
+        case .compactRetry:
+            "sparkles"
+        case nil:
+            job.mode == .compactRetry ? "sparkles" : "bolt.fill"
+        }
+    }
+
+    private func capturedCompressionDetail(for job: CompressionJob) -> String {
+        switch job.configuration?.recipe.origin {
+        case .primary(.flexible):
+            String(localized: "This job captured your flexible settings.")
+        case .primary(.quick):
+            String(localized: "Quick mode uses a balanced size and quality.")
+        case .compactRetry:
+            String(
+                localized: "Stronger compression prioritizes a smaller file over maximum quality."
+            )
+        case nil:
+            job.mode == .compactRetry
+                ? String(
+                    localized: "Stronger compression prioritizes a smaller file over maximum quality."
+                )
+                : String(
+                    localized: "Quick mode uses a balanced size and quality."
+                )
+        }
+    }
+
+    private func compressionModeBinding(
+        for jobID: CompressionJob.ID
+    ) -> Binding<CompressionControlMode> {
+        Binding(
+            get: { model.compressionDraft(for: jobID).controlMode },
+            set: { model.setCompressionControlMode($0, jobID: jobID) }
+        )
+    }
+
+    private func qualityBinding(
+        for jobID: CompressionJob.ID
+    ) -> Binding<Double> {
+        Binding(
+            get: { model.compressionDraft(for: jobID).quality },
+            set: { model.setFlexibleQuality($0, jobID: jobID) }
+        )
+    }
+
+    private func resolutionBinding(
+        for jobID: CompressionJob.ID
+    ) -> Binding<FlexibleResolution> {
+        Binding(
+            get: { model.compressionDraft(for: jobID).resolution },
+            set: { model.setFlexibleResolution($0, jobID: jobID) }
+        )
+    }
+
+    private func frameRateBinding(
+        for jobID: CompressionJob.ID
+    ) -> Binding<FlexibleFrameRate> {
+        Binding(
+            get: { model.compressionDraft(for: jobID).frameRate },
+            set: { model.setFlexibleFrameRate($0, jobID: jobID) }
+        )
+    }
+
+    private func keepsAudioBinding(for job: CompressionJob) -> Binding<Bool> {
+        Binding(
+            get: {
+                job.mediaInfo?.audioStreams.isEmpty == false
+                    && model.compressionDraft(for: job.id).audioPreference
+                        == .keep
+            },
+            set: { model.setKeepsAudio($0, jobID: job.id) }
+        )
+    }
+
+    private func resolutionTitle(_ resolution: FlexibleResolution) -> String {
+        switch resolution {
+        case .source:
+            String(localized: "Source")
+        case .p1080:
+            String(localized: "Up to 1080p")
+        case .p720:
+            String(localized: "Up to 720p")
+        case .p480:
+            String(localized: "Up to 480p")
+        }
+    }
+
+    private func frameRateTitle(_ frameRate: FlexibleFrameRate) -> String {
+        switch frameRate {
+        case .source:
+            String(localized: "Source")
+        case .fps60:
+            String(localized: "Up to 60 FPS")
+        case .fps30:
+            String(localized: "Up to 30 FPS")
+        case .fps24:
+            String(localized: "Up to 24 FPS")
+        }
     }
 
     private var validatedFilenameSuffix: String {

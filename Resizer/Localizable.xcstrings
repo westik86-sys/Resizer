@@ -149,6 +149,22 @@
         }
       }
     },
+    "%lld%%" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%%"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%%"
+          }
+        }
+      }
+    },
     "A single or double period cannot be used as the filename suffix." : {
       "localizations" : {
         "en" : {
@@ -593,6 +609,7 @@
       }
     },
     "Automatic" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -609,6 +626,7 @@
       }
     },
     "Automatic compression" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1220,6 +1238,38 @@
         }
       }
     },
+    "Compression mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compression mode"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Режим сжатия"
+          }
+        }
+      }
+    },
+    "Compression settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compression settings"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настройки сжатия"
+          }
+        }
+      }
+    },
     "Copy Diagnostics" : {
       "localizations" : {
         "en" : {
@@ -1478,6 +1528,7 @@
       }
     },
     "Each prepared video gets its own automatic settings." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1489,6 +1540,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Для каждого подготовленного видео параметры выбираются автоматически."
+          }
+        }
+      }
+    },
+    "Each prepared video keeps its own compression settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each prepared video keeps its own compression settings."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Каждое подготовленное видео сохраняет собственные настройки сжатия."
           }
         }
       }
@@ -1685,12 +1752,44 @@
         }
       }
     },
+    "Flexible" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flexible"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Гибкий"
+          }
+        }
+      }
+    },
     "Frame rate" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Frame rate"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Частота кадров"
+          }
+        }
+      }
+    },
+    "Frame Rate" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frame Rate"
           }
         },
         "ru" : {
@@ -1733,6 +1832,22 @@
         }
       }
     },
+    "Higher quality" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Higher quality"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выше качество"
+          }
+        }
+      }
+    },
     "If a file already exists" : {
       "localizations" : {
         "en" : {
@@ -1761,6 +1876,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Выполняется"
+          }
+        }
+      }
+    },
+    "Keep Audio" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Audio"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить звук"
           }
         }
       }
@@ -2043,6 +2174,7 @@
       }
     },
     "Only waiting jobs can be removed." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2334,6 +2466,22 @@
         }
       }
     },
+    "Quality" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quality"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Качество"
+          }
+        }
+      }
+    },
     "Quality must be between 0 and 1." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2363,6 +2511,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Очередь"
+          }
+        }
+      }
+    },
+    "Quick" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quick"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Быстрый"
+          }
+        }
+      }
+    },
+    "Quick mode uses a balanced size and quality." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quick mode uses a balanced size and quality."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Быстрый режим использует сбалансированное соотношение размера и качества."
           }
         }
       }
@@ -2415,6 +2595,22 @@
         }
       }
     },
+    "Ready with balanced settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready with balanced settings"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Готово со сбалансированными настройками"
+          }
+        }
+      }
+    },
     "Remove metadata" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2432,7 +2628,40 @@
         }
       }
     },
+    "Remove selected video from the queue" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove selected video from the queue"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить выбранное видео из очереди"
+          }
+        }
+      }
+    },
+    "Remove selected video from this session (Delete)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove selected video from this session (Delete)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить выбранное видео из текущего сеанса (Delete)"
+          }
+        }
+      }
+    },
     "Remove selected waiting job" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2449,6 +2678,7 @@
       }
     },
     "Remove selected waiting job (Delete)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2497,6 +2727,7 @@
       }
     },
     "Resizer chooses a balanced size and quality automatically." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2673,7 +2904,6 @@
       }
     },
     "Smaller file" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2951,6 +3181,7 @@
       }
     },
     "The automatic compression settings could not be prepared." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3060,6 +3291,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Результат сжатия не был бы меньше, поэтому новая копия не сохранена."
+          }
+        }
+      }
+    },
+    "The compression settings could not be prepared." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The compression settings could not be prepared."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подготовить настройки сжатия."
           }
         }
       }
@@ -3368,6 +3615,22 @@
         }
       }
     },
+    "This job captured your flexible settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This job captured your flexible settings."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для этого задания сохранены настройки гибкого режима."
+          }
+        }
+      }
+    },
     "This output disk cannot publish files safely. Choose another folder." : {
       "localizations" : {
         "en" : {
@@ -3380,6 +3643,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "На выбранном диске невозможно безопасно сохранить итоговый файл. Выберите другую папку."
+          }
+        }
+      }
+    },
+    "This video cannot be removed while it is being processed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This video cannot be removed while it is being processed."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нельзя удалить это видео во время обработки."
+          }
+        }
+      }
+    },
+    "This video has no audio track." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This video has no audio track."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В этом видео нет звуковой дорожки."
           }
         }
       }
@@ -3498,6 +3793,22 @@
         }
       }
     },
+    "Up to 24 FPS" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to 24 FPS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До 24 кадр/с"
+          }
+        }
+      }
+    },
     "up to 30 FPS" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3522,6 +3833,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Up to 30 fps"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До 30 кадр/с"
+          }
+        }
+      }
+    },
+    "Up to 30 FPS" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to 30 FPS"
           }
         },
         "ru" : {
@@ -3566,8 +3893,23 @@
         }
       }
     },
+    "Up to 60 FPS" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to 60 FPS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До 60 кадр/с"
+          }
+        }
+      }
+    },
     "Up to 480p" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3584,7 +3926,6 @@
       }
     },
     "Up to 720p" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3601,7 +3942,6 @@
       }
     },
     "Up to 1080p" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

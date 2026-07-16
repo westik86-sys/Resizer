@@ -1,11 +1,13 @@
 # Resizer architecture
 
 This document describes the production architecture through stage 10 and the
-implemented automatic-compression contract:
+accepted Quick/Flexible compression contract:
 domain and service contracts, process and FFmpeg boundaries, the transactional
 commit/no-benefit workflow, the session FIFO queue, the SwiftUI feature model,
 and hardening for shutdown, publication, diagnostics, accessibility, and
-localization. Automatic recipe selection and `noBenefit` are defined by
+localization. Quick/Flexible selection is defined by
+[ADR 0012](adr/0012-quick-flexible-compression.md); the compact retry and
+`noBenefit` contracts remain defined by
 [ADR 0011](adr/0011-automatic-compression.md).
 
 ## Dependency direction
@@ -193,22 +195,24 @@ while missing, negative, or duplicate stream indices invalidate the metadata.
 Chapters are requested and decoded for forward compatibility but are not yet
 part of the domain model.
 
-## Automatic recipe and FFmpeg command contract
+## Compression recipe and FFmpeg command contract
 
 `AutomaticCompressionPolicy` deterministically derives an immutable,
-validated `CompressionRecipe` from probed `MediaInfo` and a closed
-`CompressionMode`. `automatic` is the only first-run mode: quality `0.65`, a
-1920x1080 maximum, 30 FPS maximum, and AAC at 128 kbit/s. `compactRetry` is an
-explicit secondary action: quality `0.45`, a 1280x720 maximum, 24 FPS maximum,
-and AAC at 96 kbit/s. Both produce MP4 through `h264_videotoolbox`, preserve
-common input metadata, preserve aspect ratio, and never increase source
-resolution or frame rate. Missing source audio produces a no-audio recipe.
+validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
+origin. A primary origin is either Quick or bounded Flexible settings. Quick
+uses quality `0.65`, a 1920x1080 maximum, 30 FPS maximum, and optional AAC at
+128 kbit/s. Flexible accepts only quality `0.30...0.90`, source/1080p/720p/480p,
+source/60/30/24 FPS, and keep/remove audio. `compactRetry` remains an explicit
+secondary action with quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and
+AAC at 96 kbit/s when the Quick origin kept audio.
 
-The MVP has no preset selector, manual encoding settings, or custom recipe
-path. `compactRetry` is never an alternative initial preset and always creates
-a fresh attempt from the immutable original rather than the first encoded
-result. Equal `MediaInfo` and mode values must produce the same recipe; content
-classification, trial encodes, and target-size search remain outside the MVP.
+All origins produce MP4 through `h264_videotoolbox`, preserve common input
+metadata, preserve aspect ratio, and never increase source resolution or frame
+rate. Missing source audio produces a no-audio recipe. The UI exposes no raw
+encoder values, bitrate, codec/container selection, metadata policy, or custom
+FFmpeg flags. Equal `MediaInfo` and typed settings produce the same recipe;
+content classification, trial encodes, and target-size search remain outside
+the MVP.
 
 `FFmpegCommandBuilder` is pure and stateless. It returns an ordered `[String]`
 and never creates a shell command. It selects one non-attached video stream and
@@ -246,8 +250,9 @@ available for stage-7 graceful `q\n` cancellation. Preserve metadata maps only
 global data, selected stream data, and chapters; remove metadata disables those
 input mappings. The retained command decisions are recorded in
 [`adr/0006-presets-command-builder.md`](adr/0006-presets-command-builder.md),
-and the automatic product policy is recorded in
-[`adr/0011-automatic-compression.md`](adr/0011-automatic-compression.md).
+and the product policies are recorded in
+[`adr/0011-automatic-compression.md`](adr/0011-automatic-compression.md) and
+[`adr/0012-quick-flexible-compression.md`](adr/0012-quick-flexible-compression.md).
 
 ## Safe output planning contract
 
@@ -272,16 +277,17 @@ steps.
 ## Headless transcoding workflow
 
 `CompressionCoordinator` owns the complete non-UI transaction. Each admitted
-`CompressionJob` owns a closed mode. After probing, its `JobConfiguration`
-captures the exact policy-derived recipe and output policy; the job rejects any
-recipe that differs from `AutomaticCompressionPolicy` for its media and mode. The
+`CompressionJob` owns a closed attempt mode. After probing, its
+`JobConfiguration` captures the exact policy-derived recipe origin and output
+policy; the job re-derives and rejects any recipe that differs from
+`AutomaticCompressionPolicy` for its media and typed settings. The
 coordinator keeps security-scoped access to the selected input and output
 directory alive across this ordered sequence:
 
 ```text
 probe input
-    -> record MediaInfo and derive automatic or compactRetry recipe
-    -> capture immutable mode and output policy
+    -> record MediaInfo and derive Quick, Flexible, or compactRetry recipe
+    -> capture immutable typed recipe and output policy
     -> plan unique temporary and final paths
     -> file and bundled-capability preflight
     -> verify clone publication on the held output-directory fd
@@ -326,10 +332,13 @@ overall deadline, and is cached only after a complete successful result. A
 sole cancelled waiter tears down discovery; cancellation of one of several
 waiters does not poison their shared task. Each query has bounded stdout and
 diagnostics. `FFmpegPreflightValidator` then requires the selected input
-demuxer and decoder. The bundled profile provides native H.264, HEVC, and AAC
-decoders; output preflight still requires `h264_videotoolbox`, MP4, scale,
-AAC/aresample when audio is selected, and the file/fd/pipe protocols used by
-the command. Missing capabilities fail before the job enters `running`.
+demuxer and video decoder. Preparation validates this common video-only
+admission path so an unsupported source audio stream can still reach the
+`Keep Audio` decision and be intentionally removed. The immutable selected
+recipe is validated again before encode; that preflight requires
+`h264_videotoolbox`, MP4, scale, AAC/aresample only when audio is kept, and the
+file/fd/pipe protocols used by the command. Missing selected capabilities fail
+before the job enters `running`.
 
 `FFmpegTranscodingService` owns one active execution identity per job. It uses
 the command builder and process runner, retains an additional narrow input and
@@ -407,14 +416,24 @@ waiter. Monotonic snapshot revisions prevent a delayed observation from
 replacing newer UI state.
 
 `CompressionFeatureModel` is `MainActor`-isolated and consumes immutable
-snapshots. It owns only transient presentation state: selection, import and
-button activity, output selection, validation messages, and smoothed ETA.
+snapshots. It owns only transient presentation state: selection, per-ready-job
+Quick/Flexible drafts, import and button activity, output selection, validation
+messages, compact-attempt audio intent, and smoothed ETA. Compact intent is
+retained through a probe retry so a silent Quick result cannot regain audio.
 SwiftUI views never launch or retain a process. Every queue job owns an
 immutable mode, and every queued attempt captures the validated policy recipe
 and output policy derived for that job's probed media. Output-location edits
-affect only future admissions. The initial
-UI exposes only `automatic`; `compactRetry` is a secondary action after an
-automatic completed or `noBenefit` outcome and always targets the original.
+affect only future admissions. The ready UI uses a native segmented Quick /
+Flexible picker. Quick shows only its summary and audio toggle; Flexible shows
+bounded quality, resolution, FPS, and audio controls. `compactRetry` is a
+secondary action after a Quick completed or `noBenefit` outcome, inherits its
+audio choice, and always targets the original.
+
+The trash action removes only an inactive entry from the in-memory session. It
+is allowed for ready, waiting queued, cancelled, completed, no-benefit, and
+failed jobs. It is rejected for probing, active queued, running, finishing, and
+cancelling jobs. Neither source media nor an already published output is ever
+deleted by this action.
 
 Typed `FailureReason` values provide actionable primary messages. Process exit
 status is confined to `DiagnosticReportBuilder`, which adds app/tool versions,
@@ -464,7 +483,7 @@ to `probing`. Post-probe failures return to `ready`.
 - the input URL, job ID, and creation date never change;
 - `ready` requires probed media information;
 - `queued` and post-probe processing/final states require media information, an
-  immutable automatic/compact job mode, and its matching recipe/output policy;
+  immutable typed Quick/Flexible/compact recipe and its matching output policy;
   cancellation from
   `probing` or pre-configuration `ready` is the explicit exception;
 - the coordinator permits at most one `running`, `finishing`, or `cancelling`
@@ -521,7 +540,7 @@ through `probing`; later cancellation can reuse `ready`.
 
 The production runner implements pipe draining, bounded diagnostics, and direct
 child cancellation. The FFprobe adapter resolves and interprets bundled probe
-output. The implementation adds deterministic automatic/compact policy
+output. The implementation adds deterministic Quick/Flexible/compact policy
 selection and no-benefit branching to the existing deterministic FFmpeg
 command construction, safe output naming, capability-aware preflight,
 process-level progress, cancellation, temporary validation, exact cleanup, and
@@ -532,7 +551,7 @@ no-replace publication.
 `./Scripts/test.sh` covers the architecture scaffold; real child-process
 success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
 cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
-automatic and `compactRetry` argument vectors; stream, HDR, audio, scaling,
+Quick, Flexible, and `compactRetry` argument vectors; stream, HDR, audio removal, scaling,
 metadata, and path behavior; output-name collisions; capability discovery;
 incremental progress; headless success/failure/no-benefit/cancellation races;
 output validation; and guarded publication and cleanup. Signed targeted

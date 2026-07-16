@@ -170,7 +170,7 @@ struct JobQueueCoordinatorTests {
         #expect(await harness.transcoder.maximumConcurrentCount() == 1)
     }
 
-    @Test("Only waiting jobs can be reordered or removed")
+    @Test("Only waiting jobs reorder while ready, waiting and finished jobs remove")
     func reorderRemoveAndMutationGuards() async throws {
         let harness = try await QueueHarness.make()
         let ids = [UUID(), UUID(), UUID(), UUID()]
@@ -182,7 +182,7 @@ struct JobQueueCoordinatorTests {
             jobID: ids[3],
             before: ids[1]
         )
-        try await harness.coordinator.removeQueued(jobID: ids[2])
+        try await harness.coordinator.removeJob(jobID: ids[2])
 
         let mutated = await harness.coordinator.snapshot()
         #expect(mutated.queuedJobIDs == [ids[3], ids[1]])
@@ -194,8 +194,8 @@ struct JobQueueCoordinatorTests {
                 before: ids[1]
             )
         }
-        await expectCoordinatorError(.queueMutationRequiresQueued(ids[0])) {
-            try await harness.coordinator.removeQueued(jobID: ids[0])
+        await expectCoordinatorError(.activeQueueJob(ids[0])) {
+            try await harness.coordinator.removeJob(jobID: ids[0])
         }
 
         try await harness.transcoder.succeed(ids[0])
@@ -209,11 +209,81 @@ struct JobQueueCoordinatorTests {
             await harness.transcoder.startedJobIDs()
                 == [ids[0], ids[3], ids[1]]
         )
-        await expectCoordinatorError(
-            .queueMutationRequiresQueued(ids[0])
-        ) {
-            try await harness.coordinator.removeQueued(jobID: ids[0])
+        let completedJob = try #require(
+            await harness.coordinator.snapshot().job(id: ids[0])
+        )
+        guard case .completed(let result) = completedJob.state else {
+            Issue.record("Expected a completed job")
+            return
         }
+        try await harness.coordinator.removeJob(jobID: ids[0])
+        #expect(await harness.coordinator.snapshot().job(id: ids[0]) == nil)
+        #expect(await harness.fileAccess.metadata(at: result.outputURL) != nil)
+        #expect(
+            await harness.fileAccess.metadata(
+                at: QueueHarness.inputURL(for: ids[0])
+            ) != nil
+        )
+    }
+
+    @Test("A prepared video can be removed before compression")
+    func readyJobCanBeRemoved() async throws {
+        let harness = try await QueueHarness.make()
+        let id = UUID()
+        _ = try await harness.coordinator.add([
+            JobQueueImport(inputURL: QueueHarness.inputURL(for: id), id: id),
+        ])
+
+        #expect(await harness.coordinator.snapshot().job(id: id)?.state == .ready)
+
+        try await harness.coordinator.removeJob(jobID: id)
+
+        #expect(await harness.coordinator.snapshot().job(id: id) == nil)
+        #expect(await harness.transcoder.startedJobIDs().isEmpty)
+    }
+
+    @Test("Cancelled, failed and no-benefit session entries can be removed")
+    func terminalSessionEntriesCanBeRemoved() async throws {
+        let cancelledHarness = try await QueueHarness.make()
+        let cancelledID = UUID()
+        try await cancelledHarness.addAndEnqueue([cancelledID])
+        await cancelledHarness.coordinator.cancel(jobID: cancelledID)
+        try await cancelledHarness.coordinator.removeJob(jobID: cancelledID)
+        #expect(
+            await cancelledHarness.coordinator.snapshot().job(
+                id: cancelledID
+            ) == nil
+        )
+
+        let failedHarness = try await QueueHarness.make()
+        let failedID = UUID()
+        try await failedHarness.addAndEnqueue([failedID])
+        await failedHarness.coordinator.startQueue()
+        try await failedHarness.transcoder.waitUntilStarted(failedID)
+        try await failedHarness.transcoder.fail(failedID)
+        try await failedHarness.waitUntilIdle()
+        try await failedHarness.coordinator.removeJob(jobID: failedID)
+        #expect(
+            await failedHarness.coordinator.snapshot().job(id: failedID) == nil
+        )
+
+        let noBenefitID = UUID()
+        let noBenefitHarness = try await QueueHarness.make(
+            candidateByteCounts: [
+                noBenefitID: QueueHarness.sourceByteCount,
+            ]
+        )
+        try await noBenefitHarness.addAndEnqueue([noBenefitID])
+        await noBenefitHarness.coordinator.startQueue()
+        try await noBenefitHarness.transcoder.waitUntilStarted(noBenefitID)
+        try await noBenefitHarness.transcoder.succeed(noBenefitID)
+        try await noBenefitHarness.waitUntilIdle()
+        try await noBenefitHarness.coordinator.removeJob(jobID: noBenefitID)
+        #expect(
+            await noBenefitHarness.coordinator.snapshot().job(
+                id: noBenefitID
+            ) == nil
+        )
     }
 
     @Test("Retrying a failed job appends one attempt to the tail")
@@ -529,6 +599,7 @@ private struct QueueHarness: Sendable {
 
     let coordinator: JobQueueCoordinator
     let transcoder: ControlledQueueTranscoder
+    let fileAccess: QueueFileAccess
     let configuration: JobConfiguration
 
     static func make(
@@ -597,6 +668,7 @@ private struct QueueHarness: Sendable {
         return QueueHarness(
             coordinator: coordinator,
             transcoder: transcoder,
+            fileAccess: fileAccess,
             configuration: configuration
         )
     }
