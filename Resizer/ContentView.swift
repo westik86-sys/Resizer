@@ -974,14 +974,14 @@ struct ContentView: View {
                         .accessibilityHidden(true)
 
                     VStack(spacing: 5) {
-                        Text("Video is already compact")
+                        Text("Quick couldn’t make this video smaller")
                             .font(.title2.weight(.semibold))
                             .accessibilityFocused(
                                 $accessibilityFocus,
                                 equals: .noBenefit
                             )
                             .accessibilityAddTraits(.isHeader)
-                        Text("The compressed result would not be smaller, so no new copy was saved.")
+                        Text("The Quick result was larger than the original, so no new copy was saved.")
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
@@ -1373,7 +1373,7 @@ struct ContentView: View {
         case .completed:
             String(localized: "Completed")
         case .noBenefit:
-            String(localized: "Already compact")
+            String(localized: "Quick wasn’t smaller")
         case .failed:
             String(localized: "Failed")
         }

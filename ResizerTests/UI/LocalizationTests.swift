@@ -62,12 +62,20 @@ struct LocalizationTests {
         )
         #expect(localized("Open", localization: "ru") == "Открыть")
         #expect(
-            localized("Video is already compact", localization: "ru")
-                == "Видео уже достаточно компактно"
+            localized(
+                "Quick couldn’t make this video smaller",
+                localization: "ru"
+            ) == "Быстрый режим не уменьшил файл"
         )
         #expect(
-            localized("Already compact", localization: "ru")
-                == "Уже компактно"
+            localized("Quick wasn’t smaller", localization: "ru")
+                == "Размер не уменьшился"
+        )
+        #expect(
+            localized(
+                "The Quick result was larger than the original, so no new copy was saved.",
+                localization: "ru"
+            ) == "Результат быстрого сжатия оказался больше оригинала, поэтому новая копия не сохранена."
         )
         #expect(
             localized(

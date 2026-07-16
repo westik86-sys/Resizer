@@ -559,18 +559,18 @@
         }
       }
     },
-    "Already compact" : {
+    "Quick wasn’t smaller" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Already compact"
+            "value" : "Quick wasn’t smaller"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Уже компактно"
+            "value" : "Размер не уменьшился"
           }
         }
       }
@@ -3295,18 +3295,18 @@
         }
       }
     },
-    "The compressed result would not be smaller, so no new copy was saved." : {
+    "The Quick result was larger than the original, so no new copy was saved." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The compressed result would not be smaller, so no new copy was saved."
+            "value" : "The Quick result was larger than the original, so no new copy was saved."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Результат сжатия не был бы меньше, поэтому новая копия не сохранена."
+            "value" : "Результат быстрого сжатия оказался больше оригинала, поэтому новая копия не сохранена."
           }
         }
       }
@@ -4106,18 +4106,18 @@
         }
       }
     },
-    "Video is already compact" : {
+    "Quick couldn’t make this video smaller" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Video is already compact"
+            "value" : "Quick couldn’t make this video smaller"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видео уже достаточно компактно"
+            "value" : "Быстрый режим не уменьшил файл"
           }
         }
       }
