@@ -53,7 +53,7 @@ struct AutomaticCompressionPolicyTests {
             origin: .primary(settings),
             videoCodec: .hevcMain10VideoToolbox
         )
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.80)))
+        #expect(recipe.rateControl == .quality(try VideoQuality(0.70)))
     }
 
     @Test("Unknown-range ten-bit input does not enter the Main10 SDR path")

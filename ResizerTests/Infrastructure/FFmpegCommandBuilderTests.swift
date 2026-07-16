@@ -85,7 +85,7 @@ struct FFmpegCommandBuilderTests {
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
         #expect(optionValues("-c:v:0", in: arguments) == ["hevc_videotoolbox"])
-        #expect(optionValues("-global_quality:v:0", in: arguments) == ["80"])
+        #expect(optionValues("-global_quality:v:0", in: arguments) == ["70"])
         #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["p010le"])
         #expect(optionValues("-profile:v:0", in: arguments) == ["main10"])
         #expect(optionValues("-allow_sw:v:0", in: arguments) == ["1"])

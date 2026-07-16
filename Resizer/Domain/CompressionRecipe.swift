@@ -233,7 +233,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 origin: .primary(settings),
                 videoCodec: videoCodec,
                 quality: try VideoQuality(
-                    videoCodec == .hevcMain10VideoToolbox ? 0.80 : 0.75
+                    videoCodec == .hevcMain10VideoToolbox ? 0.70 : 0.75
                 ),
                 scalePolicy: .maximum(
                     try ResolutionLimit(

@@ -27,7 +27,7 @@ and output paths remain outside the UI.
 The ready screen presents a native segmented picker with two choices:
 
 - **Quick** is the default. Its amended balanced recipe uses H.264 VideoToolbox
-  quality `0.75` for ordinary sources or HEVC Main10 quality `0.80` for
+  quality `0.75` for ordinary sources or HEVC Main10 quality `0.70` for
   confirmed SDR sources above eight bits, at most 1920x1080 and 30 FPS, and AAC
   at 128 kbit/s when the source has audio. A single `Keep Audio` toggle may
   replace AAC with `.remove`.

@@ -27,7 +27,7 @@ selected source stream:
 - HDR and unknown-range inputs whose bit depth is not proven safe remain
   rejected; this decision does not add tone mapping.
 
-Quick uses normalized VideoToolbox quality `0.80` for Main10 and `0.75` for
+Quick uses normalized VideoToolbox quality `0.70` for Main10 and `0.75` for
 H.264. Flexible retains its bounded user quality and the same source-derived
 codec policy. Compact retry uses `0.60` for Main10 and `0.45` for H.264.
 

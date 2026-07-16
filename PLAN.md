@@ -121,7 +121,7 @@
 
 - MP4 и `faststart`;
 - для подтверждённого SDR-источника глубже 8 бит — HEVC через
-  `hevc_videotoolbox`, профиль Main10, `p010le`, тег `hvc1` и качество `0,80`;
+  `hevc_videotoolbox`, профиль Main10, `p010le`, тег `hvc1` и качество `0,70`;
 - для остальных поддерживаемых источников — H.264 через
   `h264_videotoolbox`, limited-range `yuv420p` и качество `0,75`;
 - при вынужденном уменьшении глубины используется error-diffusion dithering;
@@ -992,7 +992,7 @@ MVP:
 - hevc_videotoolbox Main10 для подтверждённых 10-bit SDR источников;
 - AAC;
 - native selector Quick/Flexible;
-- quick recipe: H.264 quality 0.75 либо HEVC Main10 quality 0.80, максимум
+- quick recipe: H.264 quality 0.75 либо HEVC Main10 quality 0.70, максимум
   1080p/30 FPS, AAC 128 кбит/с либо удаление audio;
 - flexible: quality 0.30...0.90, source/1080p/720p/480p,
   source/60/30/24 FPS, keep/remove audio;

@@ -200,7 +200,7 @@ part of the domain model.
 `AutomaticCompressionPolicy` deterministically derives an immutable,
 validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
 origin. A primary origin is either Quick or bounded Flexible settings. For a
-confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.80`;
+confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.70`;
 ordinary inputs use H.264 quality `0.75`. Both keep the 1920x1080 and 30 FPS
 maximums and optional AAC at 128 kbit/s. Flexible accepts only quality
 `0.30...0.90`, source/1080p/720p/480p, source/60/30/24 FPS, and keep/remove
