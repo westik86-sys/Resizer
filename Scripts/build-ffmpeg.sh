@@ -13,7 +13,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 VERSION=8.1.2
-PROFILE_REVISION=7
+PROFILE_REVISION=8
 DEPLOYMENT_TARGET=14.0
 ARCHIVE_NAME="ffmpeg-$VERSION.tar.xz"
 ARCHIVE="$ROOT_DIR/Vendor/FFmpeg/sources/$ARCHIVE_NAME"
@@ -23,7 +23,7 @@ PATCHED_FILE_TARGET="libavformat/file.c"
 PATCHED_FILE_SHA256=a70cd7c73aede2e8af12e8208fc6aa520307310c5b1766ce538042481628b56a
 PATCHED_DOC_TARGET="doc/protocols.texi"
 PATCHED_DOC_SHA256=3605ab85752fdd25b55a5803fc8dbe0974dbfa94923d904b97486f5df6ce650e
-PROFILE_SHA256=06cfc62b57013bc85fe6a43bffee56a9466faf8acf351f7481c1239917279d0a
+PROFILE_SHA256=6637268dee12c863d6e42a9ec02bdc19dc5638c029af3712d5e58d680c0d9088
 CHECKSUM_DIR="$ROOT_DIR/Vendor/FFmpeg/checksums"
 CHECKSUMS="$CHECKSUM_DIR/SHA256SUMS"
 BUILD_CHECKSUMS="$CHECKSUM_DIR/BUILD_SHA256SUMS"
@@ -316,6 +316,7 @@ build_architecture() {
             --enable-parser=hevc \
             --enable-parser=aac \
             --enable-encoder=h264_videotoolbox \
+            --enable-encoder=hevc_videotoolbox \
             --enable-encoder=aac \
             --enable-filter=scale \
             --enable-filter=aresample \
@@ -391,6 +392,10 @@ if ! grep -q 'h264_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
     echo "Required h264_videotoolbox encoder is missing" >&2
     exit 1
 fi
+if ! grep -q 'hevc_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
+    echo "Required hevc_videotoolbox encoder is missing" >&2
+    exit 1
+fi
 if ! grep -q ' aac ' "$STAGED_REPORT_DIR/encoders.txt"; then
     echo "Required native AAC encoder is missing" >&2
     exit 1
@@ -421,7 +426,10 @@ for CONFIG_REPORT in \
         AAC_DECODER \
         H264_PARSER \
         HEVC_PARSER \
-        AAC_PARSER; do
+        AAC_PARSER \
+        H264_VIDEOTOOLBOX_ENCODER \
+        HEVC_VIDEOTOOLBOX_ENCODER \
+        AAC_ENCODER; do
         if ! grep -q "^CONFIG_$REQUIRED_COMPONENT=yes$" "$CONFIG_REPORT"; then
             fail "Required FFmpeg component is missing from $CONFIG_REPORT: $REQUIRED_COMPONENT"
         fi

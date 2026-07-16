@@ -9,4 +9,5 @@ Encoders:
  .....D = Supports direct rendering method 1
  ------
  V....D h264_videotoolbox    VideoToolbox H.264 Encoder (codec h264)
+ V....D hevc_videotoolbox    VideoToolbox H.265 Encoder (codec hevc)
  A....D aac                  AAC (Advanced Audio Coding)

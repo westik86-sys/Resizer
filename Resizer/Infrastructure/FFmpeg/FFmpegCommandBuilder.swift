@@ -24,6 +24,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         let video = try selectedVideo(in: request.mediaInfo)
         let audio = selectedAudio(in: request.mediaInfo)
         try validateSDRConversion(video)
+        try validateVideoCodec(request.recipe.videoCodec, source: video)
 
         var arguments = [
             "-hide_banner",
@@ -45,9 +46,20 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             "-c:v:0", videoCodecArgument(request.recipe.videoCodec),
             "-global_quality:v:0",
             qualityArgument(request.recipe.rateControl),
-            "-pix_fmt:v:0", "yuv420p",
+            "-pix_fmt:v:0",
+            pixelFormatArgument(request.recipe.videoCodec),
             "-color_range:v:0", "tv",
-            "-filter:v:0", scaleFilter(request.recipe.scalePolicy),
+        ])
+        arguments.append(contentsOf: codecArguments(request.recipe.videoCodec))
+        arguments.append(contentsOf: [
+            "-filter:v:0",
+            scaleFilter(
+                request.recipe.scalePolicy,
+                useErrorDiffusion: needsDithering(
+                    sourceBitDepth: video.bitDepth,
+                    codec: request.recipe.videoCodec
+                )
+            ),
         ])
 
         if case .capped(let limit) = request.recipe.frameRatePolicy {
@@ -160,11 +172,66 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         }
     }
 
+    private func validateVideoCodec(
+        _ codec: VideoCodec,
+        source video: VideoStreamInfo
+    ) throws {
+        switch codec {
+        case .h264VideoToolbox:
+            return
+        case .hevcMain10VideoToolbox:
+            guard video.dynamicRange == .sdr,
+                  let bitDepth = video.bitDepth,
+                  bitDepth > 8 else {
+                throw FFmpegCommandBuilderError.unsupportedVideoFormat(
+                    streamIndex: video.index
+                )
+            }
+        }
+    }
+
     private func videoCodecArgument(_ codec: VideoCodec) -> String {
         switch codec {
         case .h264VideoToolbox:
             "h264_videotoolbox"
+        case .hevcMain10VideoToolbox:
+            "hevc_videotoolbox"
         }
+    }
+
+    private func pixelFormatArgument(_ codec: VideoCodec) -> String {
+        switch codec {
+        case .h264VideoToolbox:
+            "yuv420p"
+        case .hevcMain10VideoToolbox:
+            "p010le"
+        }
+    }
+
+    private func codecArguments(_ codec: VideoCodec) -> [String] {
+        switch codec {
+        case .h264VideoToolbox:
+            []
+        case .hevcMain10VideoToolbox:
+            [
+                "-profile:v:0", "main10",
+                "-allow_sw:v:0", "1",
+                "-tag:v:0", "hvc1",
+            ]
+        }
+    }
+
+    private func needsDithering(
+        sourceBitDepth: Int?,
+        codec: VideoCodec
+    ) -> Bool {
+        let outputBitDepth = switch codec {
+        case .h264VideoToolbox:
+            8
+        case .hevcMain10VideoToolbox:
+            10
+        }
+        return sourceBitDepth.map { $0 > outputBitDepth } ?? false
     }
 
     private func qualityArgument(_ rateControl: RateControl) -> String {
@@ -175,14 +242,17 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         }
     }
 
-    private func scaleFilter(_ policy: ScalePolicy) -> String {
-        switch policy {
+    private func scaleFilter(
+        _ policy: ScalePolicy,
+        useErrorDiffusion: Bool
+    ) -> String {
+        let base = switch policy {
         case .original:
-            return "scale=w='max(2,trunc(iw/2)*2)':"
+            "scale=w='max(2,trunc(iw/2)*2)':"
                 + "h='max(2,trunc(ih/2)*2)':"
                 + "flags=lanczos:out_range=tv"
         case .maximum(let limit):
-            return "scale=w='if(gte(iw,ih),"
+            "scale=w='if(gte(iw,ih),"
                 + "min(iw,\(limit.maximumLongEdge)),"
                 + "min(iw,\(limit.maximumShortEdge)))':"
                 + "h='if(gte(iw,ih),"
@@ -192,6 +262,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
                 + "force_divisible_by=2:reset_sar=1:flags=lanczos"
                 + ":out_range=tv"
         }
+        return useErrorDiffusion ? base + ":sws_dither=ed" : base
     }
 
     private func decimalArgument(_ value: Double) -> String {

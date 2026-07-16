@@ -12,7 +12,7 @@ struct AutomaticCompressionPolicyTests {
         )
 
         expectCommonContract(recipe, origin: .primary(settings))
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.65)))
+        #expect(recipe.rateControl == .quality(try VideoQuality(0.75)))
         #expect(
             recipe.scalePolicy == .maximum(
                 try ResolutionLimit(
@@ -31,6 +31,42 @@ struct AutomaticCompressionPolicyTests {
                 try AudioBitRate(bitsPerSecond: 128_000)
             )
         )
+    }
+
+    @Test("Quick preserves confirmed ten-bit SDR through HEVC Main10")
+    func quickMain10Mode() throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            videoCodec: "h264",
+            pixelFormat: "yuv444p10le",
+            bitDepth: 10,
+            dynamicRange: .sdr
+        )
+        let settings = PrimaryCompressionSettings.quick(audio: .keep)
+
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: settings
+        )
+
+        expectCommonContract(
+            recipe,
+            origin: .primary(settings),
+            videoCodec: .hevcMain10VideoToolbox
+        )
+        #expect(recipe.rateControl == .quality(try VideoQuality(0.80)))
+    }
+
+    @Test("Unknown-range ten-bit input does not enter the Main10 SDR path")
+    func unknownRangeTenBitStaysOnCompatibilityPath() throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            pixelFormat: "yuv420p10le",
+            bitDepth: 10,
+            dynamicRange: .unknown
+        )
+
+        let recipe = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
+
+        #expect(recipe.videoCodec == .h264VideoToolbox)
     }
 
     @Test("Quick can remove audio from an input that contains it")
@@ -155,6 +191,33 @@ struct AutomaticCompressionPolicyTests {
         }
     }
 
+    @Test("Flexible keeps its selected quality on the Main10 path")
+    func flexibleMain10Mode() throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            videoCodec: "hevc",
+            pixelFormat: "yuv420p10le",
+            bitDepth: 10,
+            dynamicRange: .sdr
+        )
+        let settings = PrimaryCompressionSettings.flexible(
+            try FlexibleCompressionSettings(
+                quality: VideoQuality(0.85),
+                resolution: .source,
+                frameRate: .source,
+                audioPreference: .remove
+            )
+        )
+
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: settings
+        )
+
+        #expect(recipe.videoCodec == .hevcMain10VideoToolbox)
+        #expect(recipe.rateControl == .quality(try VideoQuality(0.85)))
+        #expect(recipe.audioPolicy == .remove)
+    }
+
     @Test("Compact retry derives the fixed secondary recipe")
     func compactRetryMode() throws {
         let recipe = try AutomaticCompressionPolicy().compactRecipe(
@@ -182,6 +245,24 @@ struct AutomaticCompressionPolicyTests {
                 try AudioBitRate(bitsPerSecond: 96_000)
             )
         )
+    }
+
+    @Test("Compact retry keeps confirmed ten-bit SDR as Main10")
+    func compactRetryMain10Mode() throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            videoCodec: "hevc",
+            pixelFormat: "yuv420p10le",
+            bitDepth: 10,
+            dynamicRange: .sdr
+        )
+
+        let recipe = try AutomaticCompressionPolicy().compactRecipe(
+            for: mediaInfo,
+            audio: .keep
+        )
+
+        #expect(recipe.videoCodec == .hevcMain10VideoToolbox)
+        #expect(recipe.rateControl == .quality(try VideoQuality(0.60)))
     }
 
     @Test("Compact retry inherits the Quick remove-audio choice")
@@ -229,11 +310,12 @@ struct AutomaticCompressionPolicyTests {
 
     private func expectCommonContract(
         _ recipe: CompressionRecipe,
-        origin: RecipeOrigin
+        origin: RecipeOrigin,
+        videoCodec: VideoCodec = .h264VideoToolbox
     ) {
         #expect(recipe.origin == origin)
         #expect(recipe.container == .mp4)
-        #expect(recipe.videoCodec == .h264VideoToolbox)
+        #expect(recipe.videoCodec == videoCodec)
         #expect(recipe.metadataPolicy == .preserveCommon)
     }
 }

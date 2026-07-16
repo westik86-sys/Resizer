@@ -9,7 +9,10 @@ struct FFmpegCapabilitiesTests {
         let value = try parseCapabilities()
 
         #expect(value.decoders == ["h264", "hevc", "aac"])
-        #expect(value.encoders == ["h264_videotoolbox", "aac"])
+        #expect(
+            value.encoders
+                == ["h264_videotoolbox", "hevc_videotoolbox", "aac"]
+        )
         #expect(value.filters == ["scale", "aresample"])
         #expect(value.demuxers == ["mov", "mp4", "m4a"])
         #expect(value.muxers == ["mov", "mp4"])
@@ -72,6 +75,46 @@ struct FFmpegCapabilitiesTests {
             request,
             capabilities: parseCapabilities()
         )
+    }
+
+    @Test("Confirmed ten-bit SDR requires the bundled HEVC encoder")
+    func main10RequiresHEVCEncoder() throws {
+        let mediaInfo = try videoOnlyMediaInfo(
+            codecName: "h264",
+            pixelFormat: "yuv444p10le",
+            bitDepth: 10
+        )
+        let request = try makeRequest(
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
+        )
+        let supported = try parseCapabilities()
+
+        try FFmpegPreflightValidator().validate(
+            request,
+            capabilities: supported
+        )
+
+        let missingHEVC = FFmpegCapabilities(
+            decoders: supported.decoders,
+            encoders: supported.encoders.subtracting(["hevc_videotoolbox"]),
+            filters: supported.filters,
+            demuxers: supported.demuxers,
+            muxers: supported.muxers,
+            inputProtocols: supported.inputProtocols,
+            outputProtocols: supported.outputProtocols
+        )
+        #expect(
+            throws: FFmpegPreflightError.unavailableCapability(
+                category: .encoder,
+                name: "hevc_videotoolbox"
+            )
+        ) {
+            try FFmpegPreflightValidator().validate(
+                request,
+                capabilities: missingHEVC
+            )
+        }
     }
 
     @Test("HEVC input fails closed when the bundled decoder is unavailable")
@@ -507,7 +550,11 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
-    private func videoOnlyMediaInfo(codecName: String) throws -> MediaInfo {
+    private func videoOnlyMediaInfo(
+        codecName: String,
+        pixelFormat: String = "yuv420p",
+        bitDepth: Int = 8
+    ) throws -> MediaInfo {
         try MediaInfo(
             formatNames: ["mov", "mp4"],
             durationMicroseconds: 1_000_000,
@@ -522,8 +569,8 @@ struct FFmpegCapabilitiesTests {
                         encodedHeight: 1_080,
                         frameRate: nil,
                         rotationDegrees: nil,
-                        pixelFormat: "yuv420p",
-                        bitDepth: 8,
+                        pixelFormat: pixelFormat,
+                        bitDepth: bitDepth,
                         dynamicRange: .sdr
                     )
                 ),
@@ -561,6 +608,7 @@ struct FFmpegCapabilitiesTests {
              V..... = Video
              ------
              V....D h264_videotoolbox    VideoToolbox H.264
+             V....D hevc_videotoolbox    VideoToolbox HEVC
              A....D aac                  AAC
             """.utf8
         )

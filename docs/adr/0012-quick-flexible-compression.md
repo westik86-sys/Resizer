@@ -5,6 +5,8 @@
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 - Supersedes: the single-visible-mode, fixed first-attempt audio, and compact
   availability portions of [`ADR 0011`](0011-automatic-compression.md)
+- Codec and quality defaults amended by
+  [`ADR 0013`](0013-main10-output-for-ten-bit-sdr.md)
 
 ## Context
 
@@ -24,10 +26,11 @@ and output paths remain outside the UI.
 
 The ready screen presents a native segmented picker with two choices:
 
-- **Quick** is the default. It uses the existing balanced recipe: H.264
-  VideoToolbox quality `0.65`, at most 1920x1080 and 30 FPS, and AAC at
-  128 kbit/s when the source has audio. A single `Keep Audio` toggle may replace
-  AAC with `.remove`.
+- **Quick** is the default. Its amended balanced recipe uses H.264 VideoToolbox
+  quality `0.75` for ordinary sources or HEVC Main10 quality `0.80` for
+  confirmed SDR sources above eight bits, at most 1920x1080 and 30 FPS, and AAC
+  at 128 kbit/s when the source has audio. A single `Keep Audio` toggle may
+  replace AAC with `.remove`.
 - **Flexible** exposes a bounded set of product-level controls. It is not an
   arbitrary custom FFmpeg command.
 
@@ -47,10 +50,10 @@ Flexible mode exposes only:
   otherwise no audio stream.
 
 Every resolution and frame-rate cap preserves aspect ratio and never increases
-the source. MP4, H.264 VideoToolbox, limited-range `yuv420p`, common metadata,
-`faststart`, selected-stream mapping, validation, and publication safety remain
-fixed. The UI does not expose codec, container, video bitrate, audio bitrate,
-metadata policy, target size, or arbitrary FFmpeg arguments.
+the source. MP4, the source-derived H.264 8-bit or HEVC Main10 policy, common
+metadata, `faststart`, selected-stream mapping, validation, and publication
+safety remain fixed. The UI does not expose codec, container, video bitrate,
+audio bitrate, metadata policy, target size, or arbitrary FFmpeg arguments.
 
 The read-only summary is source-aware. When a known source frame rate is at or
 below the selected cap, it shows the source value as unchanged. `Up to N FPS`

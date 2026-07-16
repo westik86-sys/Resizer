@@ -1495,7 +1495,13 @@ struct ContentView: View {
                 localized: "AAC \(bitRate.bitsPerSecond / 1_000) kbps"
             )
         }
-        return ["MP4", "H.264", resolution, frameRate, audio]
+        let videoCodec = switch recipe.videoCodec {
+        case .h264VideoToolbox:
+            "H.264"
+        case .hevcMain10VideoToolbox:
+            "HEVC 10-bit"
+        }
+        return ["MP4", videoCodec, resolution, frameRate, audio]
             .joined(separator: " · ")
     }
 

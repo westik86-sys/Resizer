@@ -218,6 +218,57 @@ struct TranscodeOutputValidatorTests {
         )
     }
 
+    @Test("HEVC Main10 recipe requires a proven ten-bit SDR result")
+    func validatesMain10Encoding() throws {
+        let source = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        codecName: "h264",
+                        pixelFormat: "yuv444p10le",
+                        bitDepth: 10,
+                        dynamicRange: .sdr
+                    )
+                ),
+                .audio(try makeAudio()),
+            ]
+        )
+        let recipe = try makeRecipe(videoCodec: .hevcMain10VideoToolbox)
+        let compatible = try outputReplacingVideo(
+            makeVideo(
+                codecName: "hevc",
+                pixelFormat: "yuv420p10le",
+                bitDepth: 10,
+                dynamicRange: .sdr
+            )
+        )
+
+        try validator.validate(
+            output: compatible,
+            source: source,
+            recipe: recipe
+        )
+
+        let eightBit = try outputReplacingVideo(
+            makeVideo(
+                codecName: "hevc",
+                pixelFormat: "yuv420p10le",
+                bitDepth: 8,
+                dynamicRange: .sdr
+            )
+        )
+        try expectError(
+            .incompatibleVideoRange(
+                index: 0,
+                dynamicRange: .sdr,
+                bitDepth: 8
+            ),
+            output: eightBit,
+            source: source,
+            recipe: recipe
+        )
+    }
+
     @Test("Output dimensions are present, positive, and even")
     func validatesOutputDimensions() throws {
         let source = try makeMediaInfo()
@@ -597,13 +648,14 @@ struct TranscodeOutputValidatorTests {
     }
 
     private func makeRecipe(
+        videoCodec: VideoCodec = .h264VideoToolbox,
         scalePolicy: ScalePolicy = .original,
         audioPolicy: AudioPolicy? = nil
     ) throws -> CompressionRecipe {
         try CompressionRecipe(
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
-            videoCodec: .h264VideoToolbox,
+            videoCodec: videoCodec,
             rateControl: .quality(VideoQuality(0.65)),
             scalePolicy: scalePolicy,
             frameRatePolicy: .original,

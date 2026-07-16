@@ -2,12 +2,18 @@ import Foundation
 @testable import Resizer
 
 nonisolated enum TestFixtures {
-    static func mediaInfo(includeAudio: Bool = true) throws -> MediaInfo {
+    static func mediaInfo(
+        includeAudio: Bool = true,
+        videoCodec: String = "h264",
+        pixelFormat: String = "yuv420p",
+        bitDepth: Int = 8,
+        dynamicRange: DynamicRange = .sdr
+    ) throws -> MediaInfo {
         var streams: [MediaStream] = [
             .video(
                 try VideoStreamInfo(
                     index: 0,
-                    codecName: "h264",
+                    codecName: videoCodec,
                     encodedWidth: 1_920,
                     encodedHeight: 1_080,
                     frameRate: try RationalFrameRate(
@@ -15,9 +21,9 @@ nonisolated enum TestFixtures {
                         denominator: 1_001
                     ),
                     rotationDegrees: 0,
-                    pixelFormat: "yuv420p",
-                    bitDepth: 8,
-                    dynamicRange: .sdr
+                    pixelFormat: pixelFormat,
+                    bitDepth: bitDepth,
+                    dynamicRange: dynamicRange
                 )
             ),
         ]

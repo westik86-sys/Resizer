@@ -199,16 +199,21 @@ part of the domain model.
 
 `AutomaticCompressionPolicy` deterministically derives an immutable,
 validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
-origin. A primary origin is either Quick or bounded Flexible settings. Quick
-uses quality `0.65`, a 1920x1080 maximum, 30 FPS maximum, and optional AAC at
-128 kbit/s. Flexible accepts only quality `0.30...0.90`, source/1080p/720p/480p,
-source/60/30/24 FPS, and keep/remove audio. `compactRetry` remains an explicit
-secondary action with quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and
-AAC at 96 kbit/s when the Quick origin kept audio.
+origin. A primary origin is either Quick or bounded Flexible settings. For a
+confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.80`;
+ordinary inputs use H.264 quality `0.75`. Both keep the 1920x1080 and 30 FPS
+maximums and optional AAC at 128 kbit/s. Flexible accepts only quality
+`0.30...0.90`, source/1080p/720p/480p, source/60/30/24 FPS, and keep/remove
+audio while retaining the same deterministic source-depth codec policy.
+`compactRetry` remains an explicit secondary action with HEVC quality `0.60`
+or H.264 quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and AAC at
+96 kbit/s when the Quick origin kept audio.
 
-All origins produce MP4 through `h264_videotoolbox`, preserve common input
-metadata, preserve aspect ratio, and never increase source resolution or frame
-rate. Missing source audio produces a no-audio recipe. The UI exposes no raw
+All origins produce MP4 through a typed VideoToolbox codec: HEVC Main10 keeps
+the depth of confirmed >8-bit SDR sources, while ordinary inputs use compatible
+8-bit H.264. They preserve common input metadata and aspect ratio and never
+increase source resolution or frame rate. Missing source audio produces a
+no-audio recipe. The UI exposes no raw
 encoder values, bitrate, codec/container selection, metadata policy, or custom
 FFmpeg flags. Equal `MediaInfo` and typed settings produce the same recipe;
 content classification, trial encodes, and target-size search remain outside
@@ -226,9 +231,10 @@ copied video `timecode` tag can synthesize a new `tmcd` data stream after input
 mapping, bypassing the intent of `-dn`. The strict output validator continues
 to reject every subtitle, attachment, and data stream.
 
-Video output is H.264 VideoToolbox in limited-range `yuv420p`. The scale filter
-performs the range conversion for full-range 8-bit SDR input, and matching
-encoder metadata is explicit. Normalized quality maps to VideoToolbox
+Video output is either H.264 VideoToolbox in limited-range `yuv420p` or HEVC
+VideoToolbox Main10 in `p010le` with the MP4 `hvc1` tag. The scale filter
+performs range conversion and error-diffusion dithering whenever output depth
+is lower than source depth. Matching encoder metadata is explicit. Normalized quality maps to VideoToolbox
 `global_quality` `1...100`; CRF and qscale are intentionally not used. A capped
 frame-rate policy emits `fpsmax`, while original FPS adds no rate override.
 Scaling is orientation-aware, preserves aspect ratio, never upscales, and
@@ -369,8 +375,8 @@ has succeeded, completion wins a simultaneous late cancellation.
 
 ## Output validation and publication
 
-`TranscodeOutputValidator` accepts only the recipe's MP4/H.264 compatibility
-result: one non-attached H.264 `yuv420p` video stream, no subtitles,
+`TranscodeOutputValidator` accepts only the recipe's typed MP4 result: one
+non-attached H.264 `yuv420p` stream or one HEVC 10-bit 4:2:0 stream, no subtitles,
 attachments, or other streams, normalized rotation, SDR-compatible depth and
 range, the recipe's AAC-or-no-audio policy, expected no-upscale dimensions and
 aspect ratio, and duration within a bounded tolerance. Validation uses a fresh
@@ -551,12 +557,13 @@ no-replace publication.
 `./Scripts/test.sh` covers the architecture scaffold; real child-process
 success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
 cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
-Quick, Flexible, and `compactRetry` argument vectors; stream, HDR, audio removal, scaling,
+Quick, Flexible, and `compactRetry` argument vectors; H.264 and HEVC Main10
+outputs; stream, HDR, audio removal, scaling,
 metadata, and path behavior; output-name collisions; capability discovery;
 incremental progress; headless success/failure/no-benefit/cancellation races;
 output validation; and guarded publication and cleanup. Signed targeted
 integration tests run the bundled
-probe → transcode → probe transaction on deterministic H.264/AAC and HEVC/AAC
-MP4 fixtures and verify that both produce the same H.264/AAC compatibility
-output without modifying the input.
+probe → transcode → probe transaction on deterministic H.264/AAC, HEVC/AAC,
+and 10-bit SDR fixtures and verify that the output matches the captured typed
+recipe without modifying the input.
 `./Scripts/build.sh` remains the canonical build check.

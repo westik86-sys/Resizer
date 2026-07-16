@@ -60,6 +60,14 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
+    @Test("Bundled ten-bit SDR reaches a valid HEVC Main10 result")
+    func bundledMain10ProbeTranscodeProbe() async throws {
+        try await runWorkflow(
+            fixtureName: "short-hevc-main10-aac",
+            expectedInputVideoCodec: "hevc"
+        )
+    }
+
     @Test("Bundled MP4 output suppresses a source timecode data track")
     func bundledTimecodeInputDoesNotRecreateTMCD() async throws {
         let fixtureURL = try #require(
@@ -299,7 +307,14 @@ struct HeadlessTranscodingIntegrationTests {
                 recipe: configuration.recipe
             )
             #expect(outputMedia.formatNames.contains("mp4"))
-            #expect(outputMedia.videoStreams.first?.codecName == "h264")
+            switch configuration.recipe.videoCodec {
+            case .h264VideoToolbox:
+                #expect(outputMedia.videoStreams.first?.codecName == "h264")
+                #expect(outputMedia.videoStreams.first?.bitDepth == 8)
+            case .hevcMain10VideoToolbox:
+                #expect(outputMedia.videoStreams.first?.codecName == "hevc")
+                #expect(outputMedia.videoStreams.first?.bitDepth == 10)
+            }
             #expect(outputMedia.audioStreams.count == 1)
             #expect(outputMedia.audioStreams.first?.codecName == "aac")
             #expect(

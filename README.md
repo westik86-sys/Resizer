@@ -24,9 +24,10 @@ VoiceOver-focused state changes, actionable typed errors, and redacted bounded
 diagnostics are included.
 
 Supported video inputs are H.264 and HEVC in MOV/MP4 under the existing SDR
-policy. The compatibility output remains H.264 VideoToolbox with optional AAC
-in MP4; HEVC output, HDR tone mapping, libx265, GPL, and nonfree components are
-not included.
+policy. Confirmed 10-bit SDR sources keep their depth through HEVC Main10
+VideoToolbox; ordinary sources use compatible 8-bit H.264 VideoToolbox. Both
+paths produce MP4 with optional AAC. HDR tone mapping, libx265, GPL, and
+nonfree components are not included.
 
 The application coordinator remains the sole workflow owner. It retains
 security-scoped input and output access through probe, capability preflight,

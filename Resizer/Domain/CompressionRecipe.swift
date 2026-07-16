@@ -120,6 +120,7 @@ nonisolated enum OutputContainer: Sendable, Equatable {
 
 nonisolated enum VideoCodec: Sendable, Equatable {
     case h264VideoToolbox
+    case hevcMain10VideoToolbox
 }
 
 nonisolated enum RateControl: Sendable, Equatable {
@@ -226,10 +227,14 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
     ) throws -> CompressionRecipe {
         switch settings {
         case .quick(let audio):
-            try makeRecipe(
+            let videoCodec = videoCodec(for: mediaInfo)
+            return try makeRecipe(
                 for: mediaInfo,
                 origin: .primary(settings),
-                quality: try VideoQuality(0.65),
+                videoCodec: videoCodec,
+                quality: try VideoQuality(
+                    videoCodec == .hevcMain10VideoToolbox ? 0.80 : 0.75
+                ),
                 scalePolicy: .maximum(
                     try ResolutionLimit(
                         maximumLongEdge: 1_920,
@@ -243,9 +248,10 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 audioBitsPerSecond: 128_000
             )
         case .flexible(let flexible):
-            try makeRecipe(
+            return try makeRecipe(
                 for: mediaInfo,
                 origin: .primary(settings),
+                videoCodec: videoCodec(for: mediaInfo),
                 quality: flexible.quality,
                 scalePolicy: try scalePolicy(for: flexible.resolution),
                 frameRatePolicy: try frameRatePolicy(for: flexible.frameRate),
@@ -259,10 +265,14 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
         for mediaInfo: MediaInfo,
         audio: AudioPreference
     ) throws -> CompressionRecipe {
-        try makeRecipe(
+        let videoCodec = videoCodec(for: mediaInfo)
+        return try makeRecipe(
             for: mediaInfo,
             origin: .compactRetry(audio: audio),
-            quality: try VideoQuality(0.45),
+            videoCodec: videoCodec,
+            quality: try VideoQuality(
+                videoCodec == .hevcMain10VideoToolbox ? 0.60 : 0.45
+            ),
             scalePolicy: .maximum(
                 try ResolutionLimit(
                     maximumLongEdge: 1_280,
@@ -280,6 +290,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
     private func makeRecipe(
         for mediaInfo: MediaInfo,
         origin: RecipeOrigin,
+        videoCodec: VideoCodec,
         quality: VideoQuality,
         scalePolicy: ScalePolicy,
         frameRatePolicy: FrameRatePolicy,
@@ -298,13 +309,32 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
         return CompressionRecipe(
             origin: origin,
             container: .mp4,
-            videoCodec: .h264VideoToolbox,
+            videoCodec: videoCodec,
             rateControl: .quality(quality),
             scalePolicy: scalePolicy,
             frameRatePolicy: frameRatePolicy,
             audioPolicy: audioPolicy,
             metadataPolicy: .preserveCommon
         )
+    }
+
+    /// A confirmed SDR source above eight bits keeps its tonal precision in a
+    /// Main10 output. Unknown-range and ordinary eight-bit inputs stay on the
+    /// broadly compatible H.264 path; HDR remains rejected by infrastructure.
+    private func videoCodec(for mediaInfo: MediaInfo) -> VideoCodec {
+        let candidates = mediaInfo.videoStreams.filter {
+            !$0.disposition.isAttachedPicture
+        }
+        guard let video = candidates
+            .filter(\.disposition.isDefault)
+            .min(by: { $0.index < $1.index })
+                ?? candidates.min(by: { $0.index < $1.index }),
+              video.dynamicRange == .sdr,
+              let bitDepth = video.bitDepth,
+              bitDepth > 8 else {
+            return .h264VideoToolbox
+        }
+        return .hevcMain10VideoToolbox
     }
 
     private func scalePolicy(

@@ -554,11 +554,13 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
             capabilities: capabilities
         )
 
-        try require(
-            "h264_videotoolbox",
-            in: capabilities.encoders,
-            category: .encoder
-        )
+        let encoder = switch recipe.videoCodec {
+        case .h264VideoToolbox:
+            "h264_videotoolbox"
+        case .hevcMain10VideoToolbox:
+            "hevc_videotoolbox"
+        }
+        try require(encoder, in: capabilities.encoders, category: .encoder)
         try require("scale", in: capabilities.filters, category: .filter)
         try require("mp4", in: capabilities.muxers, category: .muxer)
         try require(

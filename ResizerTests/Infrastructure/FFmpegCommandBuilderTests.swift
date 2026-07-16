@@ -39,7 +39,7 @@ struct FFmpegCommandBuilderTests {
                 "-sn",
                 "-dn",
                 "-c:v:0", "h264_videotoolbox",
-                "-global_quality:v:0", "65",
+                "-global_quality:v:0", "75",
                 "-pix_fmt:v:0", "yuv420p",
                 "-color_range:v:0", "tv",
                 "-filter:v:0",
@@ -61,6 +61,67 @@ struct FFmpegCommandBuilderTests {
                 "-f", "mp4",
                 "fd:3",
             ]
+        )
+    }
+
+    @Test("Confirmed ten-bit SDR uses the fixed HEVC Main10 argument path")
+    func main10Arguments() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        codecName: "h264",
+                        pixelFormat: "yuv444p10le",
+                        bitDepth: 10,
+                        dynamicRange: .sdr
+                    )
+                ),
+                .audio(try makeAudio(index: 5)),
+            ]
+        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(optionValues("-c:v:0", in: arguments) == ["hevc_videotoolbox"])
+        #expect(optionValues("-global_quality:v:0", in: arguments) == ["80"])
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["p010le"])
+        #expect(optionValues("-profile:v:0", in: arguments) == ["main10"])
+        #expect(optionValues("-allow_sw:v:0", in: arguments) == ["1"])
+        #expect(optionValues("-tag:v:0", in: arguments) == ["hvc1"])
+        #expect(
+            optionValues("-filter:v:0", in: arguments).allSatisfy {
+                !$0.contains("sws_dither")
+            }
+        )
+    }
+
+    @Test("Ten-to-eight-bit compatibility conversion uses error diffusion")
+    func h264FallbackDithersTenBitSource() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        pixelFormat: "yuv420p10le",
+                        bitDepth: 10,
+                        dynamicRange: .sdr
+                    )
+                ),
+            ]
+        )
+        let request = try makeRequest(
+            recipe: makeRecipe(videoCodec: .h264VideoToolbox),
+            mediaInfo: mediaInfo
+        )
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(
+            optionValues("-filter:v:0", in: arguments).allSatisfy {
+                $0.hasSuffix(":sws_dither=ed")
+            }
         )
     }
 
@@ -499,6 +560,7 @@ struct FFmpegCommandBuilderTests {
     }
 
     private func makeRecipe(
+        videoCodec: VideoCodec = .h264VideoToolbox,
         quality: Double = 0.65,
         scalePolicy: ScalePolicy = .original,
         frameRatePolicy: FrameRatePolicy = .original,
@@ -508,7 +570,7 @@ struct FFmpegCommandBuilderTests {
         CompressionRecipe(
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
-            videoCodec: .h264VideoToolbox,
+            videoCodec: videoCodec,
             rateControl: .quality(try VideoQuality(quality)),
             scalePolicy: scalePolicy,
             frameRatePolicy: frameRatePolicy,

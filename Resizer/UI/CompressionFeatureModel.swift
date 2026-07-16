@@ -33,7 +33,7 @@ struct PasteboardDiagnosticCopier: DiagnosticCopying {
 }
 
 nonisolated struct CompressionDraftSettings: Sendable, Equatable {
-    static let defaultQuality = 0.65
+    static let defaultQuality = 0.75
 
     var controlMode: CompressionControlMode = .quick
     var quality = CompressionDraftSettings.defaultQuality

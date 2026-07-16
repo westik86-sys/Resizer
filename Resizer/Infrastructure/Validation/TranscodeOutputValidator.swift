@@ -81,7 +81,10 @@ nonisolated struct TranscodeOutputValidator:
         try validateContainer(output, recipe: recipe)
         try validateUnsupportedStreams(output)
 
-        let outputVideo = try validatedOutputVideo(output)
+        let outputVideo = try validatedOutputVideo(
+            output,
+            codec: recipe.videoCodec
+        )
         try validateAudio(output, source: source, recipe: recipe)
         try validateDuration(output, source: source)
 
@@ -141,28 +144,49 @@ nonisolated struct TranscodeOutputValidator:
     }
 
     private func validatedOutputVideo(
-        _ output: MediaInfo
+        _ output: MediaInfo,
+        codec: VideoCodec
     ) throws -> VideoStreamInfo {
         let videos = output.videoStreams
         guard videos.count == 1, let video = videos.first else {
             throw TranscodeOutputValidationError
                 .unexpectedVideoStreamCount(actual: videos.count)
         }
-        guard normalizedName(video.codecName) == "h264" else {
+        let expectedCodec = switch codec {
+        case .h264VideoToolbox:
+            "h264"
+        case .hevcMain10VideoToolbox:
+            "hevc"
+        }
+        guard normalizedName(video.codecName) == expectedCodec else {
             throw TranscodeOutputValidationError.unexpectedVideoCodec(
                 index: video.index,
                 actual: video.codecName
             )
         }
-        guard normalizedName(video.pixelFormat) == "yuv420p" else {
+
+        let pixelFormat = normalizedName(video.pixelFormat)
+        let hasExpectedPixelFormat = switch codec {
+        case .h264VideoToolbox:
+            pixelFormat == "yuv420p"
+        case .hevcMain10VideoToolbox:
+            pixelFormat == "yuv420p10le" || pixelFormat == "p010le"
+        }
+        guard hasExpectedPixelFormat else {
             throw TranscodeOutputValidationError.unexpectedPixelFormat(
                 index: video.index,
                 actual: video.pixelFormat
             )
         }
 
-        let isEightBitOrUnspecified = video.bitDepth.map { $0 <= 8 } ?? true
-        guard video.dynamicRange != .hdr, isEightBitOrUnspecified else {
+        let hasExpectedRangeAndDepth = switch codec {
+        case .h264VideoToolbox:
+            video.dynamicRange != .hdr
+                && (video.bitDepth.map { $0 <= 8 } ?? true)
+        case .hevcMain10VideoToolbox:
+            video.dynamicRange == .sdr && video.bitDepth == 10
+        }
+        guard hasExpectedRangeAndDepth else {
             throw TranscodeOutputValidationError.incompatibleVideoRange(
                 index: video.index,
                 dynamicRange: video.dynamicRange,
