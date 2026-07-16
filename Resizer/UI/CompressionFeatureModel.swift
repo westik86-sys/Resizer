@@ -4,18 +4,80 @@ import Foundation
 
 @MainActor
 protocol OutputRevealing {
-    func open(_ outputURL: URL)
-    func reveal(_ outputURL: URL)
+    func open(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws
+    func reveal(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws
+}
+
+@MainActor
+protocol OutputLaunching: Sendable {
+    func open(_ outputURL: URL) -> Bool
+    func reveal(_ outputURL: URL) -> Bool
+}
+
+@MainActor
+struct WorkspaceOutputLauncher: OutputLaunching {
+    func open(_ outputURL: URL) -> Bool {
+        NSWorkspace.shared.open(outputURL)
+    }
+
+    func reveal(_ outputURL: URL) -> Bool {
+        NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+        return true
+    }
+}
+
+nonisolated enum OutputRevealError: Error, Sendable, Equatable {
+    case openFailed
+    case revealFailed
 }
 
 @MainActor
 struct WorkspaceOutputRevealer: OutputRevealing {
-    func open(_ outputURL: URL) {
-        NSWorkspace.shared.open(outputURL)
+    private let fileAccess: any FileAccessing
+    private let launcher: any OutputLaunching
+
+    init(
+        fileAccess: any FileAccessing,
+        launcher: any OutputLaunching = WorkspaceOutputLauncher()
+    ) {
+        self.fileAccess = fileAccess
+        self.launcher = launcher
     }
 
-    func reveal(_ outputURL: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+    func open(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws {
+        let launcher = launcher
+        let opened = try await fileAccess.withSecurityScopedAccess(
+            to: [outputDirectoryURL]
+        ) {
+            await MainActor.run {
+                launcher.open(outputURL)
+            }
+        }
+        guard opened else { throw OutputRevealError.openFailed }
+    }
+
+    func reveal(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws {
+        let launcher = launcher
+        let revealed = try await fileAccess.withSecurityScopedAccess(
+            to: [outputDirectoryURL]
+        ) {
+            await MainActor.run {
+                launcher.reveal(outputURL)
+            }
+        }
+        guard revealed else { throw OutputRevealError.revealFailed }
     }
 }
 
@@ -85,7 +147,9 @@ final class CompressionFeatureModel: ObservableObject {
 
     init(
         coordinator: any JobQueueCoordinating,
-        outputRevealer: any OutputRevealing = WorkspaceOutputRevealer(),
+        outputRevealer: any OutputRevealing = WorkspaceOutputRevealer(
+            fileAccess: SecurityScopedFileAccess()
+        ),
         diagnosticCopier: any DiagnosticCopying = PasteboardDiagnosticCopier()
     ) {
         self.coordinator = coordinator
@@ -667,25 +731,47 @@ final class CompressionFeatureModel: ObservableObject {
         }
     }
 
-    func revealResultInFinder() {
+    func revealResultInFinder() async {
         guard let selectedJobID else { return }
-        revealResultInFinder(jobID: selectedJobID)
+        await revealResultInFinder(jobID: selectedJobID)
     }
 
-    func openResult(jobID: CompressionJob.ID) {
+    func openResult(jobID: CompressionJob.ID) async {
         guard let job = job(id: jobID),
-              case .completed(let result) = job.state else {
+              case .completed(let result) = job.state,
+              let outputDirectoryURL = job.configuration?.outputPolicy.directoryURL else {
             return
         }
-        outputRevealer.open(result.outputURL)
+        do {
+            try await outputRevealer.open(
+                result.outputURL,
+                in: outputDirectoryURL
+            )
+        } catch {
+            presentValidationError(
+                String(localized: "The compressed copy could not be opened.")
+            )
+        }
     }
 
-    func revealResultInFinder(jobID: CompressionJob.ID) {
+    func revealResultInFinder(jobID: CompressionJob.ID) async {
         guard let job = job(id: jobID),
-              case .completed(let result) = job.state else {
+              case .completed(let result) = job.state,
+              let outputDirectoryURL = job.configuration?.outputPolicy.directoryURL else {
             return
         }
-        outputRevealer.reveal(result.outputURL)
+        do {
+            try await outputRevealer.reveal(
+                result.outputURL,
+                in: outputDirectoryURL
+            )
+        } catch {
+            presentValidationError(
+                String(
+                    localized: "The compressed copy could not be shown in Finder."
+                )
+            )
+        }
     }
 
     func diagnosticText(for jobID: CompressionJob.ID) -> String? {

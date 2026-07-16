@@ -926,12 +926,14 @@ struct ContentView: View {
                         Spacer()
 
                         Button("Open") {
-                            model.openResult(jobID: job.id)
+                            Task { await model.openResult(jobID: job.id) }
                         }
                         .accessibilityIdentifier("open-output")
 
                         Button("Reveal in Finder") {
-                            model.revealResultInFinder(jobID: job.id)
+                            Task {
+                                await model.revealResultInFinder(jobID: job.id)
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("reveal-output")

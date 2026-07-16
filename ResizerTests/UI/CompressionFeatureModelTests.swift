@@ -324,8 +324,8 @@ struct CompressionFeatureModelTests {
         })
         #expect(model.finishedJobs.map(\.id).contains(jobID))
         #expect(!model.canRetry(jobID: jobID))
-        model.openResult(jobID: jobID)
-        model.revealResultInFinder(jobID: jobID)
+        await model.openResult(jobID: jobID)
+        await model.revealResultInFinder(jobID: jobID)
         #expect(revealer.openedURLs.isEmpty)
         #expect(revealer.revealedURLs.isEmpty)
     }
@@ -811,11 +811,19 @@ struct CompressionFeatureModelTests {
         })
         model.selectJob(otherID)
 
-        model.openResult(jobID: completedID)
-        model.revealResultInFinder(jobID: completedID)
+        await model.openResult(jobID: completedID)
+        await model.revealResultInFinder(jobID: completedID)
 
         #expect(revealer.openedURLs == [outputURL])
         #expect(revealer.revealedURLs == [outputURL])
+        #expect(
+            revealer.openedDirectoryURLs
+                == [URL(fileURLWithPath: "/tmp/ResizerTests", isDirectory: true)]
+        )
+        #expect(
+            revealer.revealedDirectoryURLs
+                == [URL(fileURLWithPath: "/tmp/ResizerTests", isDirectory: true)]
+        )
         #expect(model.selectedJobID == otherID)
     }
 
@@ -852,17 +860,141 @@ private extension CompressionFeatureModel {
     }
 }
 
+@Suite("Workspace output reveal")
+struct WorkspaceOutputRevealerTests {
+    @Test("Open and Reveal keep the selected output folder scoped")
+    @MainActor
+    func outputActionsUseTemporaryDirectoryScope() async throws {
+        let outputDirectoryURL = URL(
+            fileURLWithPath: "/tmp/ResizerTests/output",
+            isDirectory: true
+        )
+        let outputURL = outputDirectoryURL.appendingPathComponent("result.mp4")
+        let scopeRecorder = OutputScopeRecorder()
+        let fileAccess = SecurityScopedFileAccess(
+            startAccessing: scopeRecorder.start,
+            stopAccessing: scopeRecorder.stop
+        )
+        let launcher = OutputWorkspaceLauncherSpy(
+            scopeRecorder: scopeRecorder,
+            expectedScopedPath: outputDirectoryURL.path
+        )
+        let revealer = WorkspaceOutputRevealer(
+            fileAccess: fileAccess,
+            launcher: launcher
+        )
+
+        try await revealer.open(outputURL, in: outputDirectoryURL)
+        try await revealer.reveal(outputURL, in: outputDirectoryURL)
+
+        #expect(launcher.openedURLs == [outputURL])
+        #expect(launcher.revealedURLs == [outputURL])
+        #expect(launcher.openWasScoped)
+        #expect(launcher.revealWasScoped)
+        #expect(
+            scopeRecorder.startedPaths
+                == [outputDirectoryURL.path, outputDirectoryURL.path]
+        )
+        #expect(
+            scopeRecorder.stoppedPaths
+                == [outputDirectoryURL.path, outputDirectoryURL.path]
+        )
+        #expect(scopeRecorder.activePaths.isEmpty)
+    }
+}
+
 @MainActor
 private final class OutputRevealerSpy: OutputRevealing {
     private(set) var openedURLs: [URL] = []
     private(set) var revealedURLs: [URL] = []
+    private(set) var openedDirectoryURLs: [URL] = []
+    private(set) var revealedDirectoryURLs: [URL] = []
 
-    func open(_ outputURL: URL) {
+    func open(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws {
         openedURLs.append(outputURL)
+        openedDirectoryURLs.append(outputDirectoryURL)
     }
 
-    func reveal(_ outputURL: URL) {
+    func reveal(
+        _ outputURL: URL,
+        in outputDirectoryURL: URL
+    ) async throws {
         revealedURLs.append(outputURL)
+        revealedDirectoryURLs.append(outputDirectoryURL)
+    }
+}
+
+@MainActor
+private final class OutputWorkspaceLauncherSpy: OutputLaunching {
+    private let scopeRecorder: OutputScopeRecorder
+    private let expectedScopedPath: String
+
+    private(set) var openedURLs: [URL] = []
+    private(set) var revealedURLs: [URL] = []
+    private(set) var openWasScoped = false
+    private(set) var revealWasScoped = false
+
+    init(
+        scopeRecorder: OutputScopeRecorder,
+        expectedScopedPath: String
+    ) {
+        self.scopeRecorder = scopeRecorder
+        self.expectedScopedPath = expectedScopedPath
+    }
+
+    func open(_ outputURL: URL) -> Bool {
+        openedURLs.append(outputURL)
+        openWasScoped = scopeRecorder.activePaths.contains(expectedScopedPath)
+        return true
+    }
+
+    func reveal(_ outputURL: URL) -> Bool {
+        revealedURLs.append(outputURL)
+        revealWasScoped = scopeRecorder.activePaths.contains(expectedScopedPath)
+        return true
+    }
+}
+
+private final class OutputScopeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var startedPathsStorage: [String] = []
+    private var stoppedPathsStorage: [String] = []
+    private var activePathsStorage: Set<String> = []
+
+    var startedPaths: [String] {
+        withLock { startedPathsStorage }
+    }
+
+    var stoppedPaths: [String] {
+        withLock { stoppedPathsStorage }
+    }
+
+    var activePaths: Set<String> {
+        withLock { activePathsStorage }
+    }
+
+    func start(_ url: URL) -> Bool {
+        withLock {
+            startedPathsStorage.append(url.path)
+            activePathsStorage.insert(url.path)
+        }
+        return true
+    }
+
+    func stop(_ url: URL) {
+        withLock {
+            stoppedPathsStorage.append(url.path)
+            activePathsStorage.remove(url.path)
+        }
+    }
+
+    private func withLock<Value>(_ operation: () -> Value) -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return operation()
     }
 }
 

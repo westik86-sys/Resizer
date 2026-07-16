@@ -6,7 +6,12 @@ struct AppComposition {
 
     init(dependencies: CompressionCoordinatorDependencies) {
         let coordinator = JobQueueCoordinator(dependencies: dependencies)
-        compressionFeatureModel = CompressionFeatureModel(coordinator: coordinator)
+        compressionFeatureModel = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: WorkspaceOutputRevealer(
+                fileAccess: dependencies.fileAccess
+            )
+        )
     }
 
     /// Builds the production dependency graph once at application startup.

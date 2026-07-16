@@ -59,6 +59,18 @@ struct LocalizationTests {
         #expect(localized("Open", localization: "ru") == "Открыть")
         #expect(
             localized(
+                "The compressed copy could not be opened.",
+                localization: "ru"
+            ) == "Не удалось открыть сжатую копию."
+        )
+        #expect(
+            localized(
+                "The compressed copy could not be shown in Finder.",
+                localization: "ru"
+            ) == "Не удалось показать сжатую копию в Finder."
+        )
+        #expect(
+            localized(
                 "Quick couldn’t make this video smaller",
                 localization: "ru"
             ) == "Быстрый режим не уменьшил файл"
