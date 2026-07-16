@@ -52,6 +52,11 @@ the source. MP4, H.264 VideoToolbox, limited-range `yuv420p`, common metadata,
 fixed. The UI does not expose codec, container, video bitrate, audio bitrate,
 metadata policy, target size, or arbitrary FFmpeg arguments.
 
+The read-only summary is source-aware. When a known source frame rate is at or
+below the selected cap, it shows the source value as unchanged. `Up to N FPS`
+is shown only when the cap reduces a higher source rate or the source rate is
+unknown.
+
 ### Secondary compact attempt
 
 `Compress More` remains available only after a Quick completed or `noBenefit`

@@ -33,6 +33,22 @@
         }
       }
     },
+    "%@ FPS (same as source)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ FPS (same as source)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ кадр/с (как в оригинале)"
+          }
+        }
+      }
+    },
     "%@ fps" : {
       "localizations" : {
         "en" : {

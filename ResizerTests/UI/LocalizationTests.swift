@@ -96,6 +96,16 @@ struct LocalizationTests {
                 "H.264"
             ) == "H.264 / без аудио"
         )
+        #expect(
+            String(
+                format: localized(
+                    "%@ FPS (same as source)",
+                    localization: "ru"
+                ),
+                locale: russian,
+                "24"
+            ) == "24 кадр/с (как в оригинале)"
+        )
     }
 
     @Test("Safety failure guidance is translated into Russian")

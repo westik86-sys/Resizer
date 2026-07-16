@@ -2,6 +2,40 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+nonisolated enum CompressionFrameRateSummary: Sendable, Equatable {
+    case source(Double)
+    case maximum(Double)
+    case originalUnknown
+}
+
+nonisolated enum CompressionSummaryFormatter {
+    private static let frameRateComparisonTolerance = 0.01
+
+    static func frameRateSummary(
+        policy: FrameRatePolicy,
+        sourceFramesPerSecond: Double?
+    ) -> CompressionFrameRateSummary {
+        let sourceFramesPerSecond = sourceFramesPerSecond.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        }
+
+        switch policy {
+        case .original:
+            if let sourceFramesPerSecond {
+                return .source(sourceFramesPerSecond)
+            }
+            return .originalUnknown
+        case .capped(let limit):
+            if let sourceFramesPerSecond,
+               sourceFramesPerSecond
+                    <= limit.framesPerSecond + frameRateComparisonTolerance {
+                return .source(sourceFramesPerSecond)
+            }
+            return .maximum(limit.framesPerSecond)
+        }
+    }
+}
+
 struct ContentView: View {
     private enum AccessibilityFocusTarget: Hashable {
         case validationError
@@ -1408,7 +1442,7 @@ struct ContentView: View {
             return String(localized: "Compression settings")
         }
 
-        return recipeSummary(recipe)
+        return recipeSummary(recipe, mediaInfo: job.mediaInfo)
     }
 
     private func draftRecipeSummary(for job: CompressionJob) -> String {
@@ -1422,10 +1456,13 @@ struct ContentView: View {
               ) else {
             return String(localized: "Compression settings")
         }
-        return recipeSummary(recipe)
+        return recipeSummary(recipe, mediaInfo: mediaInfo)
     }
 
-    private func recipeSummary(_ recipe: CompressionRecipe) -> String {
+    private func recipeSummary(
+        _ recipe: CompressionRecipe,
+        mediaInfo: MediaInfo?
+    ) -> String {
         let resolution = switch recipe.scalePolicy {
         case .original:
             String(localized: "Original resolution")
@@ -1434,12 +1471,20 @@ struct ContentView: View {
                 localized: "Up to \(limit.maximumLongEdge)×\(limit.maximumShortEdge)"
             )
         }
-        let frameRate = switch recipe.frameRatePolicy {
-        case .original:
+        let sourceFramesPerSecond = mediaInfo.flatMap {
+            Self.primaryVideo(in: $0)?.frameRate?.doubleValue
+        }
+        let frameRate = switch CompressionSummaryFormatter.frameRateSummary(
+            policy: recipe.frameRatePolicy,
+            sourceFramesPerSecond: sourceFramesPerSecond
+        ) {
+        case .source(let framesPerSecond):
+            sourceFrameRateSummary(framesPerSecond)
+        case .originalUnknown:
             String(localized: "Original FPS")
-        case .capped(let limit):
+        case .maximum(let framesPerSecond):
             String(
-                localized: "Up to \(limit.framesPerSecond.formatted(.number)) FPS"
+                localized: "Up to \(framesPerSecond.formatted(.number)) FPS"
             )
         }
         let audio = switch recipe.audioPolicy {
@@ -1452,6 +1497,13 @@ struct ContentView: View {
         }
         return ["MP4", "H.264", resolution, frameRate, audio]
             .joined(separator: " · ")
+    }
+
+    private func sourceFrameRateSummary(_ framesPerSecond: Double) -> String {
+        let formatted = framesPerSecond.formatted(
+            .number.precision(.fractionLength(0 ... 2))
+        )
+        return String(localized: "\(formatted) FPS (same as source)")
     }
 
     private func capturedCompressionTitle(for job: CompressionJob) -> String {
