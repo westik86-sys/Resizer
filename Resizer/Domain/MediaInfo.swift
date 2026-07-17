@@ -43,6 +43,17 @@ nonisolated struct MediaInfo: Sendable, Equatable {
             return audio
         }
     }
+
+    /// The one audio stream used by the closed compression policy and FFmpeg
+    /// pipeline: prefer the lowest-index default stream, then the lowest
+    /// absolute stream index.
+    var preferredAudioStream: AudioStreamInfo? {
+        let candidates = audioStreams
+        return candidates
+            .filter(\.disposition.isDefault)
+            .min(by: { $0.index < $1.index })
+            ?? candidates.min(by: { $0.index < $1.index })
+    }
 }
 
 nonisolated enum MediaStream: Sendable, Equatable {

@@ -88,6 +88,87 @@ struct AutomaticCompressionPolicyTests {
         #expect(recipe.audioPolicy == .remove)
     }
 
+    @Test("Quick and Flexible match CompressO's mono AAC default")
+    func monoAudioBitRate() throws {
+        let mediaInfo = try mediaInfo(
+            audioStreams: [try audioStream(index: 1, channelCount: 1)]
+        )
+        let settings: [PrimaryCompressionSettings] = [
+            .quick(audio: .keep),
+            .flexible(
+                try FlexibleCompressionSettings(
+                    quality: VideoQuality(0.75),
+                    resolution: .source,
+                    frameRate: .source,
+                    audioPreference: .keep
+                )
+            ),
+        ]
+
+        for setting in settings {
+            let recipe = try AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                settings: setting
+            )
+
+            #expect(
+                recipe.audioPolicy == .aac(
+                    try AudioBitRate(bitsPerSecond: 69_000)
+                )
+            )
+        }
+    }
+
+    @Test("Non-mono and unknown channel counts retain the quality-safe rate")
+    func nonMonoAudioBitRate() throws {
+        let channelCounts: [Int?] = [2, 6, nil]
+
+        for channelCount in channelCounts {
+            let mediaInfo = try mediaInfo(
+                audioStreams: [
+                    try audioStream(
+                        index: 1,
+                        channelCount: channelCount,
+                        channelLayout: channelCount == nil ? "mono" : nil
+                    ),
+                ]
+            )
+            let recipe = try AutomaticCompressionPolicy().recipe(
+                for: mediaInfo,
+                settings: .quick(audio: .keep)
+            )
+
+            #expect(
+                recipe.audioPolicy == .aac(
+                    try AudioBitRate(bitsPerSecond: 128_000)
+                )
+            )
+        }
+    }
+
+    @Test("Audio rate follows the same preferred stream used by FFmpeg")
+    func preferredAudioStreamControlsBitRate() throws {
+        let mediaInfo = try mediaInfo(
+            audioStreams: [
+                try audioStream(index: 1, channelCount: 2),
+                try audioStream(
+                    index: 9,
+                    channelCount: 1,
+                    isDefault: true
+                ),
+            ]
+        )
+
+        let recipe = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
+
+        #expect(mediaInfo.preferredAudioStream?.index == 9)
+        #expect(
+            recipe.audioPolicy == .aac(
+                try AudioBitRate(bitsPerSecond: 69_000)
+            )
+        )
+    }
+
     @Test("Flexible maps every bounded resolution and frame-rate option")
     func flexibleOptions() throws {
         let resolutions: [(FlexibleResolution, ScalePolicy)] = [
@@ -278,5 +359,51 @@ struct AutomaticCompressionPolicyTests {
         #expect(recipe.container == .mp4)
         #expect(recipe.videoCodec == videoCodec)
         #expect(recipe.metadataPolicy == .preserveCommon)
+    }
+
+    private func mediaInfo(
+        audioStreams: [AudioStreamInfo]
+    ) throws -> MediaInfo {
+        let videoOnly = try TestFixtures.mediaInfo(includeAudio: false)
+        return try MediaInfo(
+            formatNames: videoOnly.formatNames,
+            durationMicroseconds: videoOnly.durationMicroseconds,
+            byteCount: videoOnly.byteCount,
+            bitRate: videoOnly.bitRate,
+            streams: videoOnly.streams + audioStreams.map(MediaStream.audio)
+        )
+    }
+
+    private func audioStream(
+        index: Int,
+        channelCount: Int?,
+        channelLayout: String? = nil,
+        isDefault: Bool = false
+    ) throws -> AudioStreamInfo {
+        let resolvedLayout: String?
+        if let channelLayout {
+            resolvedLayout = channelLayout
+        } else if channelCount == 1 {
+            resolvedLayout = "mono"
+        } else if channelCount == 2 {
+            resolvedLayout = "stereo"
+        } else {
+            resolvedLayout = nil
+        }
+
+        return try AudioStreamInfo(
+            index: index,
+            codecName: "aac",
+            sampleRate: 48_000,
+            channelCount: channelCount,
+            channelLayout: resolvedLayout,
+            bitRate: 128_000,
+            languageCode: nil,
+            disposition: StreamDisposition(
+                isDefault: isDefault,
+                isForced: false,
+                isAttachedPicture: false
+            )
+        )
     }
 }

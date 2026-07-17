@@ -2,6 +2,8 @@
 
 > Ordinary H.264 encoding, rate control, and licensing/source-distribution
 > details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Fixed first-attempt AAC bitrate details are superseded by
+> [ADR 0015](0015-channel-aware-aac.md).
 
 - Status: Implemented
 - Date: 2026-07-16
@@ -10,6 +12,8 @@
   availability portions of [`ADR 0011`](0011-automatic-compression.md)
 - Codec and quality defaults amended by
   [`ADR 0013`](0013-main10-output-for-ten-bit-sdr.md)
+- Audio bitrate policy amended by
+  [`ADR 0015`](0015-channel-aware-aac.md)
 
 ## Context
 
@@ -31,9 +35,9 @@ The ready screen presents a native segmented picker with two choices:
 
 - **Quick** is the default. Its amended balanced recipe uses H.264 VideoToolbox
   quality `0.75` for ordinary sources or HEVC Main10 quality `0.70` for
-  confirmed SDR sources above eight bits, at most 1920x1080 and 30 FPS, and AAC
-  at 128 kbit/s when the source has audio. A single `Keep Audio` toggle may
-  replace AAC with `.remove`.
+  confirmed SDR sources above eight bits, at most 1920x1080 and 30 FPS, and the
+  channel-aware AAC policy from ADR 0015 when the source has audio. A single
+  `Keep Audio` toggle may replace AAC with `.remove`.
 - **Flexible** exposes a bounded set of product-level controls. It is not an
   arbitrary custom FFmpeg command.
 
@@ -49,8 +53,8 @@ Flexible mode exposes only:
 - video quality from `0.30` through `0.90`, in `0.05` UI steps;
 - maximum resolution: source, 1920x1080, 1280x720, or 854x480;
 - frame-rate policy: source, at most 60 FPS, at most 30 FPS, or at most 24 FPS;
-- `Keep Audio`, producing AAC at 128 kbit/s when enabled and source audio exists,
-  otherwise no audio stream.
+- `Keep Audio`, producing AAC according to ADR 0015 when enabled and source
+  audio exists, otherwise no audio stream.
 
 Every resolution and frame-rate cap preserves aspect ratio and never increases
 the source. MP4, the source-derived H.264 8-bit or HEVC Main10 policy, common

@@ -23,7 +23,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         }
 
         let video = try selectedVideo(in: request.mediaInfo)
-        let audio = selectedAudio(in: request.mediaInfo)
+        let audio = request.mediaInfo.preferredAudioStream
         try validateSDRConversion(video)
         try validateVideoCodec(request.recipe.videoCodec, source: video)
 
@@ -150,14 +150,6 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             .filter(\.disposition.isDefault)
             .min(by: { $0.index < $1.index })
             ?? candidates.min(by: { $0.index < $1.index })!
-    }
-
-    private func selectedAudio(in mediaInfo: MediaInfo) -> AudioStreamInfo? {
-        let candidates = mediaInfo.audioStreams
-        return candidates
-            .filter(\.disposition.isDefault)
-            .min(by: { $0.index < $1.index })
-            ?? candidates.min(by: { $0.index < $1.index })
     }
 
     private func validateSDRConversion(_ video: VideoStreamInfo) throws {

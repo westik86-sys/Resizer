@@ -580,7 +580,7 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
         )
 
         if case .aac = recipe.audioPolicy,
-           let audio = preferredAudio(mediaInfo.audioStreams) {
+           let audio = mediaInfo.preferredAudioStream {
             try requireDecoder(
                 codecName: audio.codecName,
                 streamIndex: audio.index,
@@ -598,14 +598,6 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
     private func preferredVideo(
         _ streams: [VideoStreamInfo]
     ) -> VideoStreamInfo? {
-        streams.filter(\.disposition.isDefault).min {
-            $0.index < $1.index
-        } ?? streams.min { $0.index < $1.index }
-    }
-
-    private func preferredAudio(
-        _ streams: [AudioStreamInfo]
-    ) -> AudioStreamInfo? {
         streams.filter(\.disposition.isDefault).min {
             $0.index < $1.index
         } ?? streams.min { $0.index < $1.index }

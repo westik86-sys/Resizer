@@ -261,6 +261,7 @@ struct FFmpegCommandBuilderTests {
                 .audio(
                     try makeAudio(
                         index: 5,
+                        channelCount: 1,
                         disposition: disposition(isDefault: true)
                     )
                 ),
@@ -277,6 +278,7 @@ struct FFmpegCommandBuilderTests {
         #expect(
             optionValues("-map_metadata:s:a:0", in: arguments) == ["0:s:5"]
         )
+        #expect(optionValues("-b:a:0", in: arguments) == ["69000"])
     }
 
     @Test("HDR video is rejected before arguments are returned")
@@ -600,14 +602,23 @@ struct FFmpegCommandBuilderTests {
 
     private func makeAudio(
         index: Int,
+        channelCount: Int? = 2,
         disposition: StreamDisposition = .none
     ) throws -> AudioStreamInfo {
-        try AudioStreamInfo(
+        let channelLayout: String? = switch channelCount {
+        case 1:
+            "mono"
+        case 2:
+            "stereo"
+        default:
+            nil
+        }
+        return try AudioStreamInfo(
             index: index,
             codecName: "aac",
             sampleRate: 48_000,
-            channelCount: 2,
-            channelLayout: "stereo",
+            channelCount: channelCount,
+            channelLayout: channelLayout,
             bitRate: 128_000,
             languageCode: "eng",
             disposition: disposition

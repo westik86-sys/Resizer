@@ -274,6 +274,12 @@ struct HeadlessTranscodingIntegrationTests {
                 directoryURL: outputDirectory
             )
         )
+        #expect(sourceMedia.preferredAudioStream?.channelCount == 1)
+        #expect(
+            configuration.recipe.audioPolicy == .aac(
+                try AudioBitRate(bitsPerSecond: 69_000)
+            )
+        )
 
         let terminal = try await ProcessHarnessFixture.withTimeout(
             after: .seconds(60)

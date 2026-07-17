@@ -2,6 +2,8 @@
 
 > Ordinary H.264 encoding, rate control, and licensing/source-distribution
 > details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> The fixed first-attempt AAC bitrate is superseded by
+> [ADR 0015](0015-channel-aware-aac.md); the table below is historical.
 
 - Status: Implemented; superseded in part by ADR 0012
 - Date: 2026-07-16

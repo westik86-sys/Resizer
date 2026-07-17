@@ -246,57 +246,6 @@
         }
       }
     },
-    "AAC 96 kbps" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 96 kbps"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 96 кбит/с"
-          }
-        }
-      }
-    },
-    "AAC 128 kbps" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 128 kbps"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 128 кбит/с"
-          }
-        }
-      }
-    },
-    "AAC 192 kbps" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 192 kbps"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "AAC 192 кбит/с"
-          }
-        }
-      }
-    },
     "About" : {
       "localizations" : {
         "en" : {

@@ -202,9 +202,12 @@ validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
 origin. A primary origin is either Quick or bounded Flexible settings. For a
 confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.70`;
 ordinary inputs use libx264 CRF `24` with preset `medium`. Both keep the 1920x1080 and 30 FPS
-maximums and optional AAC at 128 kbit/s. Flexible accepts only quality
+maximums. When audio is kept, the selected mono stream uses AAC at 69 kbit/s;
+stereo, multichannel, and unknown channel counts use AAC at 128 kbit/s.
+Flexible accepts only quality
 `0.30...0.90`, source/1080p/720p/480p, source/60/30/24 FPS, and keep/remove
-audio while retaining the same deterministic source-depth codec policy.
+audio while retaining the same deterministic source-depth codec and audio
+policies.
 For libx264 the bounded quality maps through
 `CRF = 36 - floor(12 × qualityPercent / 100)`, yielding CRF 33...26.
 `compactRetry` remains an explicit secondary action with HEVC quality `0.60`
@@ -224,7 +227,9 @@ the MVP.
 `FFmpegCommandBuilder` is pure and stateless. It returns an ordered `[String]`
 and never creates a shell command. It selects one non-attached video stream and
 at most one audio stream, preferring the lowest-index default stream and then
-the lowest absolute index. Those absolute indices are mapped explicitly;
+the lowest absolute index. Audio bitrate derivation, capability preflight, and
+command mapping all use that same domain-level audio selection. Those absolute
+indices are mapped explicitly;
 subtitles, data, and unselected audio are excluded. Missing audio is valid and
 becomes `-an`, as does the remove-audio policy.
 

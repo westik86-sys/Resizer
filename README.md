@@ -29,6 +29,13 @@ VideoToolbox; ordinary sources use compatible 8-bit H.264 through software
 libx264. Both paths produce MP4 with optional AAC. HDR tone mapping, libx265,
 and nonfree components are not included.
 
+Kept audio follows the same deterministic default that CompressO receives from
+FFmpeg: the selected mono stream is encoded as AAC at 69 kbit/s, while stereo,
+multichannel, and unknown channel counts retain AAC at 128 kbit/s. Resizer
+emits both values explicitly so equal probed inputs always capture equal
+recipes; removing audio or an input without audio still produces no audio
+stream.
+
 Quick H.264 uses `libx264`, CRF 24, and preset `medium`. This is the same
 effective x264 quality/preset pair as CompressO's `thunderbolt` preset at 100%
 quality (CompressO leaves x264 on its default `medium` preset). Flexible keeps
@@ -60,6 +67,7 @@ filesystem publication paths, localization, accessibility-facing copy, and a
 real bundled `probe → transcode → probe` flow. See
 [`docs/architecture.md`](docs/architecture.md),
 [`docs/adr/0014-libx264-gpl-toolchain.md`](docs/adr/0014-libx264-gpl-toolchain.md),
+[`docs/adr/0015-channel-aware-aac.md`](docs/adr/0015-channel-aware-aac.md),
 [`docs/adr/0011-automatic-compression.md`](docs/adr/0011-automatic-compression.md),
 [`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md),
 [`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md),

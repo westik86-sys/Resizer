@@ -213,7 +213,7 @@ nonisolated struct TranscodeOutputValidator:
     ) throws {
         let expectedCount: Int
         switch recipe.audioPolicy {
-        case .aac where !source.audioStreams.isEmpty:
+        case .aac where source.preferredAudioStream != nil:
             expectedCount = 1
         case .aac, .remove:
             expectedCount = 0

@@ -198,6 +198,9 @@ nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
 }
 
 nonisolated struct AutomaticCompressionPolicy: Sendable {
+    private static let monoAACBitsPerSecond = 69_000
+    private static let defaultAACBitsPerSecond = 128_000
+
     func recipe(
         for mediaInfo: MediaInfo
     ) throws -> CompressionRecipe {
@@ -230,8 +233,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 frameRatePolicy: .capped(
                     try FrameRateLimit(framesPerSecond: 30)
                 ),
-                audioPreference: audio,
-                audioBitsPerSecond: 128_000
+                audioPreference: audio
             )
         case .flexible(let flexible):
             let videoCodec = videoCodec(for: mediaInfo)
@@ -245,8 +247,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 ),
                 scalePolicy: try scalePolicy(for: flexible.resolution),
                 frameRatePolicy: try frameRatePolicy(for: flexible.frameRate),
-                audioPreference: flexible.audioPreference,
-                audioBitsPerSecond: 128_000
+                audioPreference: flexible.audioPreference
             )
         }
     }
@@ -258,16 +259,20 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
         rateControl: RateControl,
         scalePolicy: ScalePolicy,
         frameRatePolicy: FrameRatePolicy,
-        audioPreference: AudioPreference,
-        audioBitsPerSecond: Int
+        audioPreference: AudioPreference
     ) throws -> CompressionRecipe {
         let audioPolicy: AudioPolicy
-        if audioPreference == .remove || mediaInfo.audioStreams.isEmpty {
+        if audioPreference == .remove {
             audioPolicy = .remove
-        } else {
+        } else if let audio = mediaInfo.preferredAudioStream {
+            let bitsPerSecond = audio.channelCount == 1
+                ? Self.monoAACBitsPerSecond
+                : Self.defaultAACBitsPerSecond
             audioPolicy = .aac(
-                try AudioBitRate(bitsPerSecond: audioBitsPerSecond)
+                try AudioBitRate(bitsPerSecond: bitsPerSecond)
             )
+        } else {
+            audioPolicy = .remove
         }
 
         return CompressionRecipe(
