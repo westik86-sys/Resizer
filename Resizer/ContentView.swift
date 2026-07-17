@@ -34,6 +34,21 @@ nonisolated enum CompressionSummaryFormatter {
             return .maximum(limit.framesPerSecond)
         }
     }
+
+    static func videoCodecSummary(
+        outputPixelFormat: OutputPixelFormat
+    ) -> String {
+        switch outputPixelFormat {
+        case .yuv420p:
+            "H.264"
+        case .yuv420p10le:
+            "H.264 10-bit 4:2:0"
+        case .yuv422p10le:
+            "H.264 10-bit 4:2:2"
+        case .yuv444p10le:
+            "H.264 10-bit 4:4:4"
+        }
+    }
 }
 
 struct ContentView: View {
@@ -1463,12 +1478,9 @@ struct ContentView: View {
                 localized: "AAC \(bitRate.bitsPerSecond / 1_000) kbps"
             )
         }
-        let videoCodec = switch recipe.videoCodec {
-        case .h264Libx264:
-            "H.264"
-        case .hevcMain10VideoToolbox:
-            "HEVC 10-bit"
-        }
+        let videoCodec = CompressionSummaryFormatter.videoCodecSummary(
+            outputPixelFormat: recipe.outputPixelFormat
+        )
         return ["MP4", videoCodec, resolution, frameRate, audio]
             .joined(separator: " · ")
     }

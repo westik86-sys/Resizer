@@ -24,10 +24,12 @@ VoiceOver-focused state changes, actionable typed errors, and redacted bounded
 diagnostics are included.
 
 Supported video inputs are H.264 and HEVC in MOV/MP4 under the existing SDR
-policy. Confirmed 10-bit SDR sources keep their depth through HEVC Main10
-VideoToolbox; ordinary sources use compatible 8-bit H.264 through software
-libx264. Both paths produce MP4 with optional AAC. HDR tone mapping, libx265,
-and nonfree components are not included.
+policy. Every supported SDR source is encoded to H.264 through software
+libx264. Sources at or below 8-bit produce compatible `yuv420p`; confirmed
+sources above 8-bit retain ten-bit precision and supported source chroma as
+`yuv420p10le`, `yuv422p10le`, or `yuv444p10le`. All paths produce MP4 with
+optional AAC. HDR tone mapping, libx265, and nonfree components are not
+included.
 
 Kept audio follows the same deterministic default that CompressO receives from
 FFmpeg: the selected mono stream is encoded as AAC at 69 kbit/s, while stereo,
@@ -36,12 +38,23 @@ emits both values explicitly so equal probed inputs always capture equal
 recipes; removing audio or an input without audio still produces no audio
 stream.
 
-Quick H.264 uses `libx264`, CRF 24, and preset `medium`. This is the same
-effective x264 quality/preset pair as CompressO's `thunderbolt` preset at 100%
-quality (CompressO leaves x264 on its default `medium` preset). Flexible keeps
-the product's 30...90% quality bound and applies CompressO's integer curve
+Quick uses `libx264`, CRF 22, and preset `medium`. It deliberately spends more
+bits than CompressO's `thunderbolt` preset at 100% (CRF 24) to retain a larger
+quality margin while preserving the same software encoder and preset.
+Flexible keeps the product's 30...90% quality bound and applies the integer
+curve
 `CRF = 36 - floor(12 × qualityPercent / 100)`, producing CRF 33...26. CRF is
 kept as a typed internal policy and is not exposed as an arbitrary FFmpeg flag.
+The planned `compactRetry` action remains specified as libx264 CRF 31; its
+separate secondary-action implementation is outside this encoder-policy stage.
+
+Ten-bit 4:2:0, 4:2:2, and 4:4:4 H.264 outputs use High 10, High 4:2:2, or High
+4:4:4 Predictive profiles and are less widely hardware-decoded than ordinary
+8-bit 4:2:0 H.264.
+Preserving the source precision and chroma avoids the visible loss caused by
+converting such material to 8-bit 4:2:0. Any compatibility claim for a named
+external player or upload service requires a recorded release smoke test for
+that exact target.
 
 The application coordinator remains the sole workflow owner. It retains
 security-scoped input and output access through probe, capability preflight,
@@ -59,13 +72,16 @@ Failure and cancellation close only the job's anonymous lease, never a glob or
 a later pathname replacement.
 
 The bundled FFmpeg 8.1.2 tools are reproducibly built as Universal 2 from the
-pinned official FFmpeg and x264 sources with a GPL 2.0-or-later profile. The
-app includes the exact third-party notices and GPL/LGPL texts and exposes them
-in Settings. Deterministic
+pinned official FFmpeg and x264 sources with a GPL 2.0-or-later profile. x264
+is configured for all supported bit depths and chroma formats; the minimal
+profile retains HEVC input decoding but no HEVC output encoder. The app includes
+the exact third-party notices and GPL/LGPL texts and exposes them in Settings.
+Deterministic
 tests cover the state machine, queue races, process teardown, validation,
 filesystem publication paths, localization, accessibility-facing copy, and a
 real bundled `probe → transcode → probe` flow. See
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/adr/0016-libx264-high-bit-depth-chroma.md`](docs/adr/0016-libx264-high-bit-depth-chroma.md),
 [`docs/adr/0014-libx264-gpl-toolchain.md`](docs/adr/0014-libx264-gpl-toolchain.md),
 [`docs/adr/0015-channel-aware-aac.md`](docs/adr/0015-channel-aware-aac.md),
 [`docs/adr/0011-automatic-compression.md`](docs/adr/0011-automatic-compression.md),

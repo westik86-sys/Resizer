@@ -1,0 +1,10 @@
+profile_identifier=libx264-8-and-10-bit-all-chroma-v1
+binary_version_marker=libx264-8-and-10-bit-all-chroma-v1
+bit_depths=8,10
+chroma_formats=420,422,444
+pixel_formats=yuv420p,yuv420p10le,yuv422p10le,yuv444p10le
+x264_api_smoke_matrix=arm64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444;x86_64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444
+ffmpeg_wrapper_smoke_matrix=arm64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le;x86_64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le
+ffmpeg_wrapper_smoke_fixture=ResizerTests/Fixtures/Media/short-h264-aac.mp4
+ffmpeg_wrapper_smoke_fixture_sha256=d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1
+smoke_status=passed

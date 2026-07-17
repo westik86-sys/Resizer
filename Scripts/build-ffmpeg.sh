@@ -13,8 +13,9 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 VERSION=8.1.2
-PROFILE_REVISION=10
+PROFILE_REVISION=12
 DEPLOYMENT_TARGET=14.0
+LIBX264_PROFILE_IDENTIFIER=libx264-8-and-10-bit-all-chroma-v1
 ARCHIVE_NAME="ffmpeg-$VERSION.tar.xz"
 ARCHIVE="$ROOT_DIR/Vendor/FFmpeg/sources/$ARCHIVE_NAME"
 X264_REVISION=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
@@ -26,13 +27,17 @@ X264_ARCHIVE="$ROOT_DIR/Vendor/x264/sources/$X264_ARCHIVE_NAME"
 X264_CHECKSUMS="$ROOT_DIR/Vendor/x264/checksums/SHA256SUMS"
 X264_PATCH_NAME=0001-reproducible-version-metadata.patch
 X264_PATCH_FILE="$ROOT_DIR/Vendor/x264/patches/$X264_PATCH_NAME"
+X264_SMOKE_NAME=tests/encode-smoke.c
+X264_SMOKE_FILE="$ROOT_DIR/Vendor/x264/$X264_SMOKE_NAME"
+FFMPEG_WRAPPER_SMOKE_NAME=ResizerTests/Fixtures/Media/short-h264-aac.mp4
+FFMPEG_WRAPPER_SMOKE_FILE="$ROOT_DIR/$FFMPEG_WRAPPER_SMOKE_NAME"
 PATCH_NAME="0001-avformat-fd-accept-descriptor-in-url.patch"
 PATCH_FILE="$ROOT_DIR/Vendor/FFmpeg/patches/$PATCH_NAME"
 PATCHED_FILE_TARGET="libavformat/file.c"
 PATCHED_FILE_SHA256=a70cd7c73aede2e8af12e8208fc6aa520307310c5b1766ce538042481628b56a
 PATCHED_DOC_TARGET="doc/protocols.texi"
 PATCHED_DOC_SHA256=3605ab85752fdd25b55a5803fc8dbe0974dbfa94923d904b97486f5df6ce650e
-PROFILE_SHA256=a4cecac1dc7df3da63be289492dae668e75ec903f3308da802cd91aeb6ba4938
+PROFILE_SHA256=0db3e006e54fcf13da93b8a08895ad513d23e53a34797e13ef997bd38734f714
 CHECKSUM_DIR="$ROOT_DIR/Vendor/FFmpeg/checksums"
 CHECKSUMS="$CHECKSUM_DIR/SHA256SUMS"
 BUILD_CHECKSUMS="$CHECKSUM_DIR/BUILD_SHA256SUMS"
@@ -165,6 +170,12 @@ fi
 if [ ! -f "$X264_PATCH_FILE" ] || [ -L "$X264_PATCH_FILE" ]; then
     fail "Missing regular x264 source patch: $X264_PATCH_FILE"
 fi
+if [ ! -f "$X264_SMOKE_FILE" ] || [ -L "$X264_SMOKE_FILE" ]; then
+    fail "Missing regular x264 encode smoke: $X264_SMOKE_FILE"
+fi
+if [ ! -f "$FFMPEG_WRAPPER_SMOKE_FILE" ] || [ -L "$FFMPEG_WRAPPER_SMOKE_FILE" ]; then
+    fail "Missing regular FFmpeg wrapper smoke fixture: $FFMPEG_WRAPPER_SMOKE_FILE"
+fi
 
 if [ ! -f "$PATCH_FILE" ]; then
     echo "Missing FFmpeg source patch: $PATCH_FILE" >&2
@@ -201,6 +212,28 @@ fi
 ACTUAL_X264_PATCH_SHA256=$(shasum -a 256 "$X264_PATCH_FILE" | awk '{ print $1 }')
 if [ "$ACTUAL_X264_PATCH_SHA256" != "$EXPECTED_X264_PATCH_SHA256" ]; then
     fail "x264 source patch checksum mismatch"
+fi
+
+EXPECTED_X264_SMOKE_SHA256=$(awk -v smoke="$X264_SMOKE_NAME" '$2 == smoke { print $1 }' "$X264_CHECKSUMS")
+if [ -z "$EXPECTED_X264_SMOKE_SHA256" ]; then
+    fail "No pinned checksum for $X264_SMOKE_NAME"
+fi
+ACTUAL_X264_SMOKE_SHA256=$(shasum -a 256 "$X264_SMOKE_FILE" | awk '{ print $1 }')
+if [ "$ACTUAL_X264_SMOKE_SHA256" != "$EXPECTED_X264_SMOKE_SHA256" ]; then
+    fail "x264 encode smoke checksum mismatch"
+fi
+
+EXPECTED_FFMPEG_WRAPPER_SMOKE_SHA256=$(
+    awk -v fixture="$FFMPEG_WRAPPER_SMOKE_NAME" '$2 == fixture { print $1 }' "$CHECKSUMS"
+)
+if [ -z "$EXPECTED_FFMPEG_WRAPPER_SMOKE_SHA256" ]; then
+    fail "No pinned checksum for $FFMPEG_WRAPPER_SMOKE_NAME"
+fi
+ACTUAL_FFMPEG_WRAPPER_SMOKE_SHA256=$(
+    shasum -a 256 "$FFMPEG_WRAPPER_SMOKE_FILE" | awk '{ print $1 }'
+)
+if [ "$ACTUAL_FFMPEG_WRAPPER_SMOKE_SHA256" != "$EXPECTED_FFMPEG_WRAPPER_SMOKE_SHA256" ]; then
+    fail "FFmpeg wrapper smoke fixture checksum mismatch"
 fi
 
 EXPECTED_PATCH_SHA256=$(awk -v patch="$PATCH_NAME" '$2 == patch { print $1 }' "$CHECKSUMS")
@@ -334,8 +367,8 @@ build_x264_architecture() {
             --enable-pic \
             --disable-cli \
             --disable-opencl \
-            --bit-depth=8 \
-            --chroma-format=420 \
+            --bit-depth=all \
+            --chroma-format=all \
             $ASM_OPTION \
             --extra-asflags="--sysroot=$SDK_PATH -arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET" \
             --extra-cflags="-arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET $PREFIX_MAP_FLAGS" \
@@ -348,12 +381,35 @@ build_x264_architecture() {
        ! grep -q "^#define X264_POINTVER \"0.$X264_BUILD.$X264_REVISION_NUMBER $X264_SHORT_REVISION\"$" "$BUILD_DIR/x264_config.h"; then
         fail "x264 compiled version metadata does not match the pinned source"
     fi
+    if ! grep -q '^#define X264_BIT_DEPTH     0$' "$BUILD_DIR/x264_config.h"; then
+        fail "x264 must expose the all-bit-depth public configuration for $ARCH"
+    fi
+    if ! grep -q '^#define X264_CHROMA_FORMAT 0$' "$BUILD_DIR/x264_config.h"; then
+        fail "x264 must expose the all-chroma public configuration for $ARCH"
+    fi
+    for BITDEPTH in 8 10; do
+        if ! grep -q "^#define HAVE_BITDEPTH$BITDEPTH 1$" "$BUILD_DIR/config.h"; then
+            fail "x264 bit-depth implementation is missing for $ARCH: $BITDEPTH"
+        fi
+    done
+    if grep -q '^#define CHROMA_FORMAT ' "$BUILD_DIR/config.h"; then
+        fail "x264 chroma support was unexpectedly restricted for $ARCH"
+    fi
 
     make -C "$BUILD_DIR" -j "$JOBS" install-lib-static
     cp "$BUILD_DIR/config.mak" "$STAGED_REPORT_DIR/x264-configure-$ARCH.mak"
     cp "$BUILD_DIR/x264_config.h" "$STAGED_REPORT_DIR/x264-config-$ARCH.h"
+    cp "$BUILD_DIR/config.h" "$STAGED_REPORT_DIR/x264-build-config-$ARCH.h"
     cp "$BUILD_DIR/x264.pc" "$STAGED_REPORT_DIR/x264-$ARCH.pc"
 
+    X264_STATIC_LIBRARY_COUNT=$(
+        find "$PREFIX_DIR/lib" -type f -name 'libx264*.a' -print |
+            wc -l |
+            tr -d ' '
+    )
+    if [ "$X264_STATIC_LIBRARY_COUNT" != "1" ]; then
+        fail "Expected exactly one x264 static library for $ARCH"
+    fi
     if ! lipo "$PREFIX_DIR/lib/libx264.a" -verify_arch "$ARCH"; then
         fail "x264 archive has the wrong architecture: $ARCH"
     fi
@@ -365,6 +421,35 @@ build_x264_architecture() {
         grep -q '_x264_encoder_encode'; then
         fail "x264 encoder symbol is missing for $ARCH"
     fi
+    for BITDEPTH in 8 10; do
+        for SYMBOL in encoder_open encoder_encode; do
+            if ! "$NM" -gU "$PREFIX_DIR/lib/libx264.a" | \
+                grep -q "_x264_${BITDEPTH}_${SYMBOL}"; then
+                fail "x264 $BITDEPTH-bit $SYMBOL symbol is missing for $ARCH"
+            fi
+        done
+    done
+
+    X264_SMOKE_BINARY="$BUILD_DIR/x264-encode-smoke"
+    "$CLANG" \
+        --sysroot="$SDK_PATH" \
+        -arch "$ARCH" \
+        -mmacosx-version-min="$DEPLOYMENT_TARGET" \
+        -std=c11 \
+        -Wall \
+        -Wextra \
+        -Werror \
+        -I"$PREFIX_DIR/include" \
+        "$X264_SMOKE_FILE" \
+        "$PREFIX_DIR/lib/libx264.a" \
+        -lpthread \
+        -lm \
+        -o "$X264_SMOKE_BINARY"
+    if ! lipo "$X264_SMOKE_BINARY" -verify_arch "$ARCH"; then
+        fail "x264 encode smoke has the wrong architecture: $ARCH"
+    fi
+    arch "-$ARCH" "$X264_SMOKE_BINARY" \
+        > "$STAGED_REPORT_DIR/x264-encode-smoke-$ARCH.txt"
 
     DEPLOYMENT_OBJECT="$BUILD_DIR/common/osdep.o"
     if [ "$ARCH" = "arm64" ]; then
@@ -403,6 +488,7 @@ build_architecture() {
             ./src/configure \
             --prefix="$PREFIX_DIR" \
             --target-os=darwin \
+            --extra-version="$LIBX264_PROFILE_IDENTIFIER" \
             --arch="$FFMPEG_ARCH" \
             --cpu=generic \
             --enable-cross-compile \
@@ -427,7 +513,6 @@ build_architecture() {
             --disable-x86asm \
             --disable-iconv \
             --disable-audiotoolbox \
-            --enable-videotoolbox \
             --enable-ffmpeg \
             --enable-ffprobe \
             --enable-protocol=fd \
@@ -444,7 +529,6 @@ build_architecture() {
             --enable-gpl \
             --enable-libx264 \
             --enable-encoder=libx264 \
-            --enable-encoder=hevc_videotoolbox \
             --enable-encoder=aac \
             --enable-filter=scale \
             --enable-filter=aresample \
@@ -466,8 +550,85 @@ build_architecture() {
     cp "$BUILD_DIR/ffbuild/config.mak" "$STAGED_REPORT_DIR/configure-$ARCH.mak"
 }
 
+smoke_ffmpeg_wrapper_architecture() {
+    ARCH=$1
+    BUILD_DIR="$WORK_ROOT/build-$ARCH"
+    SMOKE_OUTPUT_DIR="$WORK_ROOT/ffmpeg-wrapper-smoke-$ARCH"
+    SMOKE_REPORT="$STAGED_REPORT_DIR/ffmpeg-wrapper-encode-smoke-$ARCH.txt"
+
+    mkdir -p "$SMOKE_OUTPUT_DIR"
+    {
+        printf 'fixture=%s\n' "$FFMPEG_WRAPPER_SMOKE_NAME"
+        printf 'fixture_sha256=%s\n' "$ACTUAL_FFMPEG_WRAPPER_SMOKE_SHA256"
+    } > "$SMOKE_REPORT"
+
+    for PIXEL_FORMAT in \
+        yuv420p \
+        yuv420p10le \
+        yuv422p10le \
+        yuv444p10le; do
+        SMOKE_OUTPUT="$SMOKE_OUTPUT_DIR/$PIXEL_FORMAT.mp4"
+        arch "-$ARCH" "$BUILD_DIR/ffmpeg" \
+            -hide_banner \
+            -loglevel error \
+            -nostdin \
+            -i "$FFMPEG_WRAPPER_SMOKE_FILE" \
+            -map 0:v:0 \
+            -an \
+            -frames:v 2 \
+            -vf scale=64:64:flags=bilinear \
+            -c:v libx264 \
+            -preset medium \
+            -crf 22 \
+            -pix_fmt "$PIXEL_FORMAT" \
+            -movflags +faststart \
+            -y \
+            "$SMOKE_OUTPUT"
+
+        if [ ! -s "$SMOKE_OUTPUT" ]; then
+            fail "FFmpeg wrapper smoke produced no output for $ARCH/$PIXEL_FORMAT"
+        fi
+
+        ACTUAL_CODEC=$(
+            arch "-$ARCH" "$BUILD_DIR/ffprobe" \
+                -v error \
+                -select_streams v:0 \
+                -show_entries stream=codec_name \
+                -of default=noprint_wrappers=1:nokey=1 \
+                "$SMOKE_OUTPUT"
+        )
+        ACTUAL_PIXEL_FORMAT=$(
+            arch "-$ARCH" "$BUILD_DIR/ffprobe" \
+                -v error \
+                -select_streams v:0 \
+                -show_entries stream=pix_fmt \
+                -of default=noprint_wrappers=1:nokey=1 \
+                "$SMOKE_OUTPUT"
+        )
+        if [ "$ACTUAL_CODEC" != h264 ]; then
+            fail "FFmpeg wrapper smoke produced unexpected codec for $ARCH/$PIXEL_FORMAT: $ACTUAL_CODEC"
+        fi
+        if [ "$ACTUAL_PIXEL_FORMAT" != "$PIXEL_FORMAT" ]; then
+            fail "FFmpeg wrapper smoke produced unexpected pixel format for $ARCH/$PIXEL_FORMAT: $ACTUAL_PIXEL_FORMAT"
+        fi
+
+        printf 'pixel_format=%s codec_name=h264 output_pixel_format=%s output_nonempty=yes\n' \
+            "$PIXEL_FORMAT" \
+            "$ACTUAL_PIXEL_FORMAT" \
+            >> "$SMOKE_REPORT"
+    done
+
+    printf '%s\n' 'status=passed' >> "$SMOKE_REPORT"
+    rm -rf "$SMOKE_OUTPUT_DIR"
+}
+
 build_x264_architecture arm64 aarch64-apple-darwin
 build_x264_architecture x86_64 x86_64-apple-darwin
+if ! cmp -s \
+    "$STAGED_REPORT_DIR/x264-encode-smoke-arm64.txt" \
+    "$STAGED_REPORT_DIR/x264-encode-smoke-x86_64.txt"; then
+    fail "x264 encode smoke matrix differs between architecture slices"
+fi
 {
     printf 'x264 commit: %s\n' "$X264_REVISION"
     printf 'x264 core ABI: %s\n' "$X264_BUILD"
@@ -476,6 +637,25 @@ build_x264_architecture x86_64 x86_64-apple-darwin
 } > "$STAGED_REPORT_DIR/x264-version.txt"
 build_architecture arm64 aarch64
 build_architecture x86_64 x86_64
+smoke_ffmpeg_wrapper_architecture arm64
+smoke_ffmpeg_wrapper_architecture x86_64
+if ! cmp -s \
+    "$STAGED_REPORT_DIR/ffmpeg-wrapper-encode-smoke-arm64.txt" \
+    "$STAGED_REPORT_DIR/ffmpeg-wrapper-encode-smoke-x86_64.txt"; then
+    fail "FFmpeg wrapper encode smoke semantics differ between architecture slices"
+fi
+{
+    printf 'profile_identifier=%s\n' "$LIBX264_PROFILE_IDENTIFIER"
+    printf 'binary_version_marker=%s\n' "$LIBX264_PROFILE_IDENTIFIER"
+    printf '%s\n' 'bit_depths=8,10'
+    printf '%s\n' 'chroma_formats=420,422,444'
+    printf '%s\n' 'pixel_formats=yuv420p,yuv420p10le,yuv422p10le,yuv444p10le'
+    printf '%s\n' 'x264_api_smoke_matrix=arm64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444;x86_64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444'
+    printf '%s\n' 'ffmpeg_wrapper_smoke_matrix=arm64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le;x86_64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le'
+    printf 'ffmpeg_wrapper_smoke_fixture=%s\n' "$FFMPEG_WRAPPER_SMOKE_NAME"
+    printf 'ffmpeg_wrapper_smoke_fixture_sha256=%s\n' "$ACTUAL_FFMPEG_WRAPPER_SMOKE_SHA256"
+    printf '%s\n' 'smoke_status=passed'
+} > "$STAGED_REPORT_DIR/libx264-profile.txt"
 
 for CAPABILITY in encoders decoders muxers demuxers protocols filters; do
     arch -arm64 "$WORK_ROOT/build-arm64/ffmpeg" \
@@ -511,8 +691,26 @@ chmod 755 "$STAGED_OUTPUT_DIR/ffmpeg" "$STAGED_OUTPUT_DIR/ffprobe"
 "$STAGED_OUTPUT_DIR/ffmpeg" -demuxers > "$STAGED_REPORT_DIR/demuxers.txt"
 "$STAGED_OUTPUT_DIR/ffmpeg" -protocols > "$STAGED_REPORT_DIR/protocols.txt"
 "$STAGED_OUTPUT_DIR/ffmpeg" -filters > "$STAGED_REPORT_DIR/filters.txt"
+"$STAGED_OUTPUT_DIR/ffmpeg" -hide_banner -h encoder=libx264 \
+    > "$STAGED_REPORT_DIR/libx264-encoder.txt" 2>&1
 "$STAGED_OUTPUT_DIR/ffmpeg" -L > "$STAGED_REPORT_DIR/runtime-license.txt"
 "$STAGED_OUTPUT_DIR/ffprobe" -L > "$STAGED_REPORT_DIR/runtime-license-ffprobe.txt"
+
+if ! grep -F \
+    "ffmpeg version $VERSION-$LIBX264_PROFILE_IDENTIFIER " \
+    "$STAGED_REPORT_DIR/ffmpeg-version.txt" >/dev/null; then
+    fail "FFmpeg runtime version does not contain the required profile identifier"
+fi
+if ! grep -F \
+    "ffprobe version $VERSION-$LIBX264_PROFILE_IDENTIFIER " \
+    "$STAGED_REPORT_DIR/ffprobe-version.txt" >/dev/null; then
+    fail "FFprobe runtime version does not contain the required profile identifier"
+fi
+if ! grep -F \
+    -- "--extra-version=$LIBX264_PROFILE_IDENTIFIER" \
+    "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt" >/dev/null; then
+    fail "FFmpeg build configuration does not contain the required profile identifier"
+fi
 
 LIPO_REPORT_RAW="$WORK_ROOT/lipo.txt"
 (
@@ -539,9 +737,24 @@ if ! grep -q ' libx264 ' "$STAGED_REPORT_DIR/encoders.txt"; then
     echo "Required libx264 encoder is missing" >&2
     exit 1
 fi
-if ! grep -q 'hevc_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
-    echo "Required hevc_videotoolbox encoder is missing" >&2
-    exit 1
+for PIXEL_FORMAT in \
+    yuv420p \
+    yuv420p10le \
+    yuv422p10le \
+    yuv444p10le; do
+    if ! awk -v pixel_format="$PIXEL_FORMAT" '
+        /^    Supported pixel formats:/ {
+            for (field = 4; field <= NF; field++)
+                if ($field == pixel_format)
+                    found = 1
+        }
+        END { exit !found }
+    ' "$STAGED_REPORT_DIR/libx264-encoder.txt"; then
+        fail "Required libx264 pixel format is missing: $PIXEL_FORMAT"
+    fi
+done
+if grep -q 'hevc_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
+    fail "Unused hevc_videotoolbox encoder is present"
 fi
 if ! grep -q ' aac ' "$STAGED_REPORT_DIR/encoders.txt"; then
     echo "Required native AAC encoder is missing" >&2
@@ -572,6 +785,9 @@ for CONFIG_REPORT in \
     if ! grep -q '^CONFIG_LIBX264=yes$' "$CONFIG_REPORT"; then
         fail "Static libx264 support is missing from $CONFIG_REPORT"
     fi
+    if ! grep -q '^!CONFIG_HEVC_VIDEOTOOLBOX_ENCODER=yes$' "$CONFIG_REPORT"; then
+        fail "Unused HEVC VideoToolbox encoder is not fail-closed in $CONFIG_REPORT"
+    fi
     for DISABLED_LICENSE_MODE in VERSION3 NONFREE; do
         if ! grep -q "^!CONFIG_$DISABLED_LICENSE_MODE=yes$" "$CONFIG_REPORT"; then
             fail "FFmpeg license mode is not fail-closed in $CONFIG_REPORT: $DISABLED_LICENSE_MODE"
@@ -585,7 +801,6 @@ for CONFIG_REPORT in \
         HEVC_PARSER \
         AAC_PARSER \
         LIBX264_ENCODER \
-        HEVC_VIDEOTOOLBOX_ENCODER \
         AAC_ENCODER; do
         if ! grep -q "^CONFIG_$REQUIRED_COMPONENT=yes$" "$CONFIG_REPORT"; then
             fail "Required FFmpeg component is missing from $CONFIG_REPORT: $REQUIRED_COMPONENT"

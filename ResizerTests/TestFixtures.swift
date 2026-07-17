@@ -7,6 +7,7 @@ nonisolated enum TestFixtures {
         videoCodec: String = "h264",
         pixelFormat: String = "yuv420p",
         bitDepth: Int = 8,
+        colorRange: String? = nil,
         dynamicRange: DynamicRange = .sdr
     ) throws -> MediaInfo {
         var streams: [MediaStream] = [
@@ -23,6 +24,12 @@ nonisolated enum TestFixtures {
                     rotationDegrees: 0,
                     pixelFormat: pixelFormat,
                     bitDepth: bitDepth,
+                    colorMetadata: VideoColorMetadata(
+                        primaries: nil,
+                        transfer: nil,
+                        space: nil,
+                        range: colorRange
+                    ),
                     dynamicRange: dynamicRange
                 )
             ),

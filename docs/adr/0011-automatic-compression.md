@@ -1,7 +1,7 @@
 # ADR 0011: Automatic compression and no-benefit outcomes
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Current output encoder, pixel-format, Quick quality, and compact-retry policy
+> is defined by [ADR 0016](0016-libx264-high-bit-depth-chroma.md).
 > The fixed first-attempt AAC bitrate is superseded by
 > [ADR 0015](0015-channel-aware-aac.md); the table below is historical.
 
@@ -14,9 +14,9 @@
   [`ADR 0007`](0007-headless-transcoding-core.md)
 - Superseded in part: the single-visible-mode, fixed-first-attempt-audio, and
   initial UI decisions are superseded by
-  [`ADR 0012`](0012-quick-flexible-compression.md). The base Quick and compact
-  numeric policies plus `noBenefit` semantics remain authoritative; ADR 0012
-  governs audio choice, Flexible settings, and compact-action availability.
+  [`ADR 0012`](0012-quick-flexible-compression.md). The `noBenefit` semantics
+  remain authoritative; ADR 0012 governs audio choice, Flexible settings, and
+  compact-action availability, while ADR 0016 governs current video defaults.
 
 ## Context
 

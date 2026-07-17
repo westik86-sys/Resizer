@@ -1,7 +1,8 @@
 # ADR 0012: Quick and flexible compression modes
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Current output codec, pixel-format, Quick quality, and compact-retry defaults
+> are defined by [ADR 0016](0016-libx264-high-bit-depth-chroma.md). This record
+> remains authoritative for the Quick/Flexible UI and queue behavior.
 > Fixed first-attempt AAC bitrate details are superseded by
 > [ADR 0015](0015-channel-aware-aac.md).
 
@@ -11,7 +12,7 @@
 - Supersedes: the single-visible-mode, fixed first-attempt audio, and compact
   availability portions of [`ADR 0011`](0011-automatic-compression.md)
 - Codec and quality defaults amended by
-  [`ADR 0013`](0013-main10-output-for-ten-bit-sdr.md)
+  [`ADR 0016`](0016-libx264-high-bit-depth-chroma.md)
 - Audio bitrate policy amended by
   [`ADR 0015`](0015-channel-aware-aac.md)
 

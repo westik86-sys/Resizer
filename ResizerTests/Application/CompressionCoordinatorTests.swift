@@ -205,6 +205,44 @@ struct CompressionCoordinatorTests {
         #expect(stored.mediaInfo == nil)
     }
 
+    @Test("Unsupported high-depth chroma fails preparation as invalid media")
+    func unsupportedPixelFormatFailsPreparation() async throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            pixelFormat: "gbrp10le",
+            bitDepth: 10,
+            dynamicRange: .sdr
+        )
+        let coordinator = CompressionCoordinator(
+            dependencies: try dependencies(
+                mediaInfo: mediaInfo,
+                capabilityHandler: { _, _ in
+                    Issue.record(
+                        "Unsupported media must fail before capability validation"
+                    )
+                }
+            )
+        )
+        let job = try await coordinator.createJob(
+            inputURL: URL(fileURLWithPath: "/tmp/unsupported-chroma.mov")
+        )
+
+        do {
+            _ = try await coordinator.prepare(jobID: job.id)
+            Issue.record("Expected recipe preparation to fail")
+        } catch let failure as TranscodeFailure {
+            #expect(failure.stage == .probe)
+            #expect(failure.reason == .invalidMedia)
+        }
+
+        let stored = try #require(await coordinator.job(id: job.id))
+        guard case .failed(let failure) = stored.state else {
+            Issue.record("Expected failed state, got \(stored.state)")
+            return
+        }
+        #expect(failure.reason == .invalidMedia)
+        #expect(stored.mediaInfo == nil)
+    }
+
     @Test("A cancel at the end of capability validation wins ready")
     func latePreparationCancellation() async throws {
         let jobID = UUID()
@@ -252,11 +290,18 @@ struct CompressionCoordinatorTests {
     }
 
     private func dependencies(
+        mediaInfo: MediaInfo? = nil,
         capabilityHandler: @escaping FakeTranscoder.CapabilityHandler
     ) throws -> CompressionCoordinatorDependencies {
         let base = try TestFixtures.dependencies()
+        let mediaProber: any MediaProbing
+        if let mediaInfo {
+            mediaProber = FakeMediaProber { _ in mediaInfo }
+        } else {
+            mediaProber = base.mediaProber
+        }
         return CompressionCoordinatorDependencies(
-            mediaProber: base.mediaProber,
+            mediaProber: mediaProber,
             transcoder: FakeTranscoder(
                 capabilityHandler: capabilityHandler,
                 handler: { _, _ in

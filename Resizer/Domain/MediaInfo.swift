@@ -92,11 +92,25 @@ nonisolated struct VideoColorMetadata: Sendable, Equatable {
     let primaries: String?
     let transfer: String?
     let space: String?
+    let range: String?
+
+    init(
+        primaries: String?,
+        transfer: String?,
+        space: String?,
+        range: String? = nil
+    ) {
+        self.primaries = primaries
+        self.transfer = transfer
+        self.space = space
+        self.range = range
+    }
 
     static let unknown = VideoColorMetadata(
         primaries: nil,
         transfer: nil,
-        space: nil
+        space: nil,
+        range: nil
     )
 }
 

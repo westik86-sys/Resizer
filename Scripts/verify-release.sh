@@ -39,7 +39,7 @@ case "$(basename "$SOURCE_ARCHIVE_PATH")" in
 esac
 release_require_regular_file "$SOURCE_ARCHIVE_PATH"
 
-for COMMAND in codesign cmp find hdiutil lipo nm otool plutil shasum spctl stat tar xcrun; do
+for COMMAND in codesign cmp find hdiutil lipo nm otool plutil shasum spctl stat strings tar xcrun; do
     release_require_command "$COMMAND"
 done
 
@@ -212,6 +212,8 @@ APP_BUILD=$(plutil -extract CFBundleVersion raw "$INFO_PLIST")
 for EXECUTABLE in "$APP_EXECUTABLE" "$FFMPEG_EXECUTABLE" "$FFPROBE_EXECUTABLE"; do
     release_require_universal_2 "$EXECUTABLE"
 done
+release_require_libx264_profile_marker "$FFMPEG_EXECUTABLE"
+release_require_libx264_profile_marker "$FFPROBE_EXECUTABLE"
 if [ "$(stat -f '%Lp' "$FFMPEG_EXECUTABLE")" != "755" ] || \
    [ "$(stat -f '%Lp' "$FFPROBE_EXECUTABLE")" != "755" ]; then
     release_fail "Bundled FFmpeg tools must have executable mode 0755"

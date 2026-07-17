@@ -1,7 +1,8 @@
 # ADR 0009: Native HEVC input decoding
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> HEVC input decoding remains accepted. Current output encoder, pixel-format,
+> and quality policy is defined by
+> [ADR 0016](0016-libx264-high-bit-depth-chroma.md).
 
 - Status: Accepted
 - Date: 2026-07-14

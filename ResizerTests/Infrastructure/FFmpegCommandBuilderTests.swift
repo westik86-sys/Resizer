@@ -39,10 +39,12 @@ struct FFmpegCommandBuilderTests {
                 "-sn",
                 "-dn",
                 "-c:v:0", "libx264",
-                "-crf:v:0", "24",
+                "-crf:v:0", "22",
                 "-pix_fmt:v:0", "yuv420p",
                 "-color_range:v:0", "tv",
                 "-preset:v:0", "medium",
+                "-x264-params:v:0",
+                "fullrange=off:videoformat=component",
                 "-filter:v:0",
                 "scale=w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
                     + "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
@@ -65,8 +67,8 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    @Test("Confirmed ten-bit SDR uses the fixed HEVC Main10 argument path")
-    func main10Arguments() async throws {
+    @Test("Confirmed ten-bit 4:4:4 SDR uses software x264 without depth loss")
+    func tenBit444Arguments() async throws {
         let mediaInfo = try makeMediaInfo(
             streams: [
                 .video(
@@ -85,12 +87,17 @@ struct FFmpegCommandBuilderTests {
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
-        #expect(optionValues("-c:v:0", in: arguments) == ["hevc_videotoolbox"])
-        #expect(optionValues("-global_quality:v:0", in: arguments) == ["70"])
-        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["p010le"])
-        #expect(optionValues("-profile:v:0", in: arguments) == ["main10"])
-        #expect(optionValues("-allow_sw:v:0", in: arguments) == ["1"])
-        #expect(optionValues("-tag:v:0", in: arguments) == ["hvc1"])
+        #expect(optionValues("-c:v:0", in: arguments) == ["libx264"])
+        #expect(optionValues("-crf:v:0", in: arguments) == ["22"])
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv444p10le"])
+        #expect(optionValues("-preset:v:0", in: arguments) == ["medium"])
+        #expect(
+            optionValues("-x264-params:v:0", in: arguments)
+                == ["fullrange=off:videoformat=component"]
+        )
+        #expect(!arguments.contains("-global_quality:v:0"))
+        #expect(!arguments.contains("-allow_sw:v:0"))
+        #expect(!arguments.contains("-tag:v:0"))
         #expect(
             optionValues("-filter:v:0", in: arguments).allSatisfy {
                 !$0.contains("sws_dither")
@@ -98,8 +105,8 @@ struct FFmpegCommandBuilderTests {
         )
     }
 
-    @Test("Ten-to-eight-bit compatibility conversion uses error diffusion")
-    func h264FallbackDithersTenBitSource() async throws {
+    @Test("Ten-bit 4:2:0 remains ten-bit and needs no depth dithering")
+    func preservesTenBit420WithoutDithering() async throws {
         let mediaInfo = try makeMediaInfo(
             streams: [
                 .video(
@@ -112,18 +119,98 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeRequest(
-            recipe: makeRecipe(videoCodec: .h264Libx264),
-            mediaInfo: mediaInfo
-        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv420p10le"])
+        #expect(
+            optionValues("-filter:v:0", in: arguments).allSatisfy {
+                !$0.contains("sws_dither")
+            }
+        )
+    }
+
+    @Test("Twelve-bit SDR targets ten bits with error-diffusion dithering")
+    func dithersTwelveBitToTenBit() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        pixelFormat: "yuv422p12le",
+                        bitDepth: 12,
+                        dynamicRange: .sdr
+                    )
+                ),
+            ]
+        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv422p10le"])
         #expect(
             optionValues("-filter:v:0", in: arguments).allSatisfy {
                 $0.hasSuffix(":sws_dither=ed")
             }
         )
+    }
+
+    @Test("Pixel-format depth still enables dithering when scalar depth is absent")
+    func infersDitheringDepthFromPixelFormat() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        pixelFormat: "yuv422p12le",
+                        bitDepth: nil,
+                        dynamicRange: .sdr
+                    )
+                ),
+            ]
+        )
+        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
+
+        let arguments = try await FFmpegCommandBuilder().arguments(for: request)
+
+        #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv422p10le"])
+        #expect(
+            optionValues("-filter:v:0", in: arguments).allSatisfy {
+                $0.hasSuffix(":sws_dither=ed")
+            }
+        )
+    }
+
+    @Test("A recipe cannot silently reduce a confirmed ten-bit source")
+    func rejectsTenToEightBitRecipeMismatch() async throws {
+        let mediaInfo = try makeMediaInfo(
+            streams: [
+                .video(
+                    try makeVideo(
+                        index: 2,
+                        pixelFormat: "yuv444p10le",
+                        bitDepth: 10,
+                        dynamicRange: .sdr
+                    )
+                ),
+            ]
+        )
+        let request = try makeRequest(
+            recipe: makeRecipe(outputPixelFormat: .yuv420p),
+            mediaInfo: mediaInfo
+        )
+
+        await expectBuilderError(
+            .incompatibleOutputPixelFormat(
+                streamIndex: 2,
+                expected: .yuv444p10le,
+                actual: .yuv420p
+            )
+        ) {
+            try await FFmpegCommandBuilder().arguments(for: request)
+        }
     }
 
     @Test("Flexible settings produce bounded video and explicit audio removal")
@@ -288,6 +375,7 @@ struct FFmpegCommandBuilderTests {
                 .video(
                     try makeVideo(
                         index: 7,
+                        pixelFormat: "yuv420p10le",
                         bitDepth: 10,
                         dynamicRange: .hdr
                     )
@@ -308,6 +396,7 @@ struct FFmpegCommandBuilderTests {
                 .video(
                     try makeVideo(
                         index: 6,
+                        pixelFormat: "yuv420p10le",
                         bitDepth: 10,
                         dynamicRange: .unknown
                     )
@@ -375,7 +464,10 @@ struct FFmpegCommandBuilderTests {
                 ),
             ]
         )
-        let request = try makeAutomaticRequest(mediaInfo: mediaInfo)
+        let request = try makeRequest(
+            recipe: makeRecipe(),
+            mediaInfo: mediaInfo
+        )
 
         await expectBuilderError(.missingVideoStream) {
             try await FFmpegCommandBuilder().arguments(for: request)
@@ -405,27 +497,6 @@ struct FFmpegCommandBuilderTests {
         )
         #expect(optionValues("-crf:v:0", in: smallestArguments) == ["51"])
         #expect(!smallestArguments.contains("-fpsmax:v:0"))
-    }
-
-    @Test("Codec and rate-control types cannot be mixed")
-    func rejectsMismatchedRateControl() async throws {
-        let valid = try makeRecipe()
-        let mismatched = CompressionRecipe(
-            origin: valid.origin,
-            container: valid.container,
-            videoCodec: .h264Libx264,
-            rateControl: .videoToolboxQuality(try VideoQuality(0.70)),
-            scalePolicy: valid.scalePolicy,
-            frameRatePolicy: valid.frameRatePolicy,
-            audioPolicy: valid.audioPolicy,
-            metadataPolicy: valid.metadataPolicy
-        )
-
-        await expectBuilderError(.incompatibleRateControl) {
-            try await FFmpegCommandBuilder().arguments(
-                for: makeRequest(recipe: mismatched)
-            )
-        }
     }
 
     @Test("Validated requests route media through the reserved stdout descriptor")
@@ -540,6 +611,7 @@ struct FFmpegCommandBuilderTests {
     private func makeRecipe(
         videoCodec: VideoCodec = .h264Libx264,
         crf: Int = 24,
+        outputPixelFormat: OutputPixelFormat = .yuv420p,
         scalePolicy: ScalePolicy = .original,
         frameRatePolicy: FrameRatePolicy = .original,
         audioPolicy: AudioPolicy? = nil,
@@ -549,9 +621,10 @@ struct FFmpegCommandBuilderTests {
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
             videoCodec: videoCodec,
-            rateControl: videoCodec == .h264Libx264
-                ? .libx264CRF(try X264ConstantRateFactor(crf))
-                : .videoToolboxQuality(try VideoQuality(0.70)),
+            outputPixelFormat: outputPixelFormat,
+            rateControl: .libx264CRF(
+                try X264ConstantRateFactor(crf)
+            ),
             scalePolicy: scalePolicy,
             frameRatePolicy: frameRatePolicy,
             audioPolicy: try audioPolicy ?? .aac(

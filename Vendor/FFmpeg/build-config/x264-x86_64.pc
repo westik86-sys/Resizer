@@ -1,4 +1,4 @@
-prefix=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10/x264-prefix-x86_64
+prefix=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12/x264-prefix-x86_64
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include

@@ -44,6 +44,24 @@ private actor HeadlessIntegrationEnvironment {
 struct HeadlessTranscodingIntegrationTests {
     private static let environment = HeadlessIntegrationEnvironment()
 
+    @Test("Bundled runtime marker admits the audited libx264 profile")
+    func bundledProfileMarkerDiscovery() async throws {
+        let fixtureURL = try #require(
+            Self.fixtureURL(named: "short-h264-aac")
+        )
+        let dependencies = try await Self.environment.dependencies()
+        let mediaInfo = try await dependencies.prober.probe(fixtureURL)
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: mediaInfo,
+            settings: .quick(audio: .keep)
+        )
+
+        try await dependencies.transcoder.validateCapabilities(
+            for: mediaInfo,
+            recipe: recipe
+        )
+    }
+
     @Test("Bundled H.264 probe → transcode → probe reaches a valid result")
     func bundledProbeTranscodeProbe() async throws {
         try await runWorkflow(
@@ -60,11 +78,105 @@ struct HeadlessTranscodingIntegrationTests {
         )
     }
 
-    @Test("Bundled ten-bit SDR reaches a valid HEVC Main10 result")
-    func bundledMain10ProbeTranscodeProbe() async throws {
+    @Test("Bundled ten-bit SDR reaches a valid ten-bit H.264 result")
+    func bundledTenBitProbeTranscodeProbe() async throws {
         try await runWorkflow(
             fixtureName: "short-hevc-main10-aac",
             expectedInputVideoCodec: "hevc"
+        )
+    }
+
+    @Test("Bundled 10-bit 4:2:2 H.264 stays 10-bit 4:2:2 through Quick")
+    func bundledTenBit422ProbeTranscodeProbe() async throws {
+        try await runTenBitChromaWorkflow(
+            outputPixelFormat: .yuv422p10le
+        )
+    }
+
+    @Test("Bundled 10-bit 4:4:4 H.264 stays 10-bit 4:4:4 through Quick")
+    func bundledTenBit444ProbeTranscodeProbe() async throws {
+        try await runTenBitChromaWorkflow(
+            outputPixelFormat: .yuv444p10le
+        )
+    }
+
+    private func runTenBitChromaWorkflow(
+        outputPixelFormat: OutputPixelFormat
+    ) async throws {
+        try #require(outputPixelFormat.bitDepth == 10)
+        let fixtureURL = try #require(
+            Self.fixtureURL(named: "short-h264-aac")
+        )
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ResizerTenBitChromaIntegration-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: fixtureDirectory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: fixtureDirectory)
+        }
+
+        let tenBitURL = fixtureDirectory.appendingPathComponent(
+            "short-h264-\(outputPixelFormat.rawValue).mp4"
+        )
+        let dependencies = try await Self.environment.dependencies()
+        try await Self.createTenBitFixture(
+            from: fixtureURL,
+            at: tenBitURL,
+            pixelFormat: outputPixelFormat,
+            runner: dependencies.runner
+        )
+
+        let sourceMedia = try await dependencies.prober.probe(tenBitURL)
+        let recipe = try AutomaticCompressionPolicy().recipe(
+            for: sourceMedia,
+            settings: .quick(audio: .keep)
+        )
+        #expect(sourceMedia.videoStreams.first?.codecName == "h264")
+        #expect(
+            sourceMedia.videoStreams.first?.pixelFormat
+                == outputPixelFormat.rawValue
+        )
+        #expect(sourceMedia.videoStreams.first?.bitDepth == 10)
+        #expect(sourceMedia.videoStreams.first?.dynamicRange == .sdr)
+        #expect(
+            sourceMedia.videoStreams.first?.colorMetadata.transfer
+                == "bt709"
+        )
+        #expect(
+            sourceMedia.videoStreams.first?.sampleAspectRatio?.isSquare
+                != false
+        )
+        #expect(recipe.videoCodec == .h264Libx264)
+        #expect(recipe.outputPixelFormat == outputPixelFormat)
+        #expect(
+            recipe.rateControl
+                == .libx264CRF(try X264ConstantRateFactor(22))
+        )
+
+        let preflightPlan = try await OutputPlanner().planOutput(
+            for: OutputPlanningRequest(
+                jobID: UUID(),
+                inputURL: tenBitURL,
+                policy: try OutputPolicy(directoryURL: fixtureDirectory)
+            )
+        )
+        try await dependencies.transcoder.preflight(
+            TranscodeRequest(
+                outputPlan: preflightPlan,
+                mediaInfo: sourceMedia,
+                recipe: recipe
+            )
+        )
+
+        try await runWorkflow(
+            inputURL: tenBitURL,
+            expectedInputVideoCodec: "h264",
+            requiresPublishedOutput: true
         )
     }
 
@@ -223,18 +335,21 @@ struct HeadlessTranscodingIntegrationTests {
 
     private func runWorkflow(
         fixtureName: String,
-        expectedInputVideoCodec: String
+        expectedInputVideoCodec: String,
+        requiresPublishedOutput: Bool = false
     ) async throws {
         let fixtureURL = try #require(Self.fixtureURL(named: fixtureName))
         try await runWorkflow(
             inputURL: fixtureURL,
-            expectedInputVideoCodec: expectedInputVideoCodec
+            expectedInputVideoCodec: expectedInputVideoCodec,
+            requiresPublishedOutput: requiresPublishedOutput
         )
     }
 
     private func runWorkflow(
         inputURL: URL,
-        expectedInputVideoCodec: String
+        expectedInputVideoCodec: String,
+        requiresPublishedOutput: Bool = false
     ) async throws {
         let originalFixtureData = try Data(contentsOf: inputURL)
         let outputDirectory = FileManager.default.temporaryDirectory
@@ -313,14 +428,15 @@ struct HeadlessTranscodingIntegrationTests {
                 recipe: configuration.recipe
             )
             #expect(outputMedia.formatNames.contains("mp4"))
-            switch configuration.recipe.videoCodec {
-            case .h264Libx264:
-                #expect(outputMedia.videoStreams.first?.codecName == "h264")
-                #expect(outputMedia.videoStreams.first?.bitDepth == 8)
-            case .hevcMain10VideoToolbox:
-                #expect(outputMedia.videoStreams.first?.codecName == "hevc")
-                #expect(outputMedia.videoStreams.first?.bitDepth == 10)
-            }
+            #expect(outputMedia.videoStreams.first?.codecName == "h264")
+            #expect(
+                outputMedia.videoStreams.first?.pixelFormat
+                    == configuration.recipe.outputPixelFormat.rawValue
+            )
+            #expect(
+                outputMedia.videoStreams.first?.bitDepth
+                    == configuration.recipe.outputPixelFormat.bitDepth
+            )
             #expect(outputMedia.audioStreams.count == 1)
             #expect(outputMedia.audioStreams.first?.codecName == "aac")
             #expect(
@@ -335,6 +451,11 @@ struct HeadlessTranscodingIntegrationTests {
             )
         case .noBenefit(let result):
             #expect(result.candidateByteCount >= result.sourceByteCount)
+            if requiresPublishedOutput {
+                Issue.record(
+                    "Expected the lossless fixture to produce a smaller copy"
+                )
+            }
             #expect(
                 try FileManager.default.contentsOfDirectory(
                     at: outputDirectory,
@@ -380,6 +501,55 @@ struct HeadlessTranscodingIntegrationTests {
                 "-c", "copy",
                 "-metadata:s:v:0", "timecode=00:00:00:00",
                 "-write_tmcd", "1",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                "-y", outputURL.path,
+            ],
+            environment: [:],
+            diagnosticByteLimit: 64 * 1_024
+        )
+        let collected = try await ProcessHarnessFixture.collect(
+            try await runner.start(request)
+        )
+        try #require(collected.result.termination.status == 0)
+        try #require(
+            FileManager.default.fileExists(atPath: outputURL.path)
+        )
+    }
+
+    /// Builds the motivating source shape with the same bundled binary used
+    /// by production. Lossless x264 makes the subsequent CRF 22 Quick encode
+    /// predictably beneficial while preserving a byte-for-byte immutable
+    /// input for the workflow assertion.
+    private static func createTenBitFixture(
+        from sourceURL: URL,
+        at outputURL: URL,
+        pixelFormat: OutputPixelFormat,
+        runner: ProcessRunner
+    ) async throws {
+        try #require(pixelFormat.bitDepth == 10)
+        let executableURL = try #require(
+            Bundle.main.url(forAuxiliaryExecutable: "ffmpeg")
+        )
+        let request = try ProcessRequest(
+            executableURL: executableURL,
+            arguments: [
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", sourceURL.path,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c:v", "libx264",
+                "-crf", "0",
+                "-preset", "medium",
+                "-pix_fmt", pixelFormat.rawValue,
+                "-color_primaries", "bt709",
+                "-color_trc", "bt709",
+                "-colorspace", "bt709",
+                "-color_range", "tv",
+                "-x264-params",
+                "colorprim=bt709:transfer=bt709:colormatrix=bt709",
+                "-c:a", "copy",
                 "-movflags", "+faststart",
                 "-f", "mp4",
                 "-y", outputURL.path,

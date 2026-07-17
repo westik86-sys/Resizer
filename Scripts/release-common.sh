@@ -3,6 +3,8 @@
 # Shared fail-closed helpers for the direct Developer ID DMG workflow.
 # This file is sourced by the release entry points and is not an entry point.
 
+RESIZER_LIBX264_PROFILE_IDENTIFIER=libx264-8-and-10-bit-all-chroma-v1
+
 release_fail() {
     echo "error: $1" >&2
     exit 1
@@ -192,6 +194,17 @@ release_require_universal_2() {
     fi
 }
 
+release_require_libx264_profile_marker() {
+    PROFILE_BINARY=$1
+    release_require_regular_file "$PROFILE_BINARY"
+    for PROFILE_ARCHITECTURE in arm64 x86_64; do
+        if ! strings -arch "$PROFILE_ARCHITECTURE" -- "$PROFILE_BINARY" |
+            grep -F "8.1.2-$RESIZER_LIBX264_PROFILE_IDENTIFIER" >/dev/null; then
+            release_fail "Bundled helper lacks the libx264 profile marker for $PROFILE_ARCHITECTURE: $PROFILE_BINARY"
+        fi
+    done
+}
+
 release_codesign_report() {
     codesign -dvvv "$1" 2>&1
 }
@@ -287,10 +300,12 @@ release_require_corresponding_source_files() {
         docs/architecture.md \
         docs/RELEASING.md \
         docs/adr/0014-libx264-gpl-toolchain.md \
+        docs/adr/0016-libx264-high-bit-depth-chroma.md \
         Resizer.xcodeproj/project.pbxproj \
         Resizer.xcodeproj/project.xcworkspace/contents.xcworkspacedata \
         Resizer/ResizerApp.swift \
         ResizerTests/Integration/HeadlessTranscodingIntegrationTests.swift \
+        ResizerTests/Fixtures/Media/short-h264-aac.mp4 \
         Vendor/FFmpeg/sources/ffmpeg-8.1.2.tar.xz \
         Vendor/FFmpeg/sources/ffmpeg-8.1.2.tar.xz.asc \
         Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch \
@@ -298,6 +313,11 @@ release_require_corresponding_source_files() {
         Vendor/FFmpeg/README.md \
         Vendor/FFmpeg/sources/README.md \
         Vendor/FFmpeg/build-config/ffmpeg-buildconf.txt \
+        Vendor/FFmpeg/build-config/ffmpeg-version.txt \
+        Vendor/FFmpeg/build-config/ffprobe-version.txt \
+        Vendor/FFmpeg/build-config/ffmpeg-wrapper-encode-smoke-arm64.txt \
+        Vendor/FFmpeg/build-config/ffmpeg-wrapper-encode-smoke-x86_64.txt \
+        Vendor/FFmpeg/build-config/libx264-profile.txt \
         Vendor/FFmpeg/build-config/runtime-license.txt \
         Vendor/FFmpeg/build-config/profile.txt \
         Vendor/FFmpeg/licenses/COPYING.GPLv2 \
@@ -309,6 +329,7 @@ release_require_corresponding_source_files() {
         Vendor/x264/checksums/SHA256SUMS \
         Vendor/x264/licenses/COPYING \
         Vendor/x264/patches/0001-reproducible-version-metadata.patch \
+        Vendor/x264/tests/encode-smoke.c \
         Vendor/x264/README.md \
         Scripts/support/pkg-config-x264 \
         Configuration/FFmpegHelper.entitlements \
@@ -329,6 +350,69 @@ release_verify_x264_source_pins() {
         "$X264_CHECKSUMS" \
         patches/0001-reproducible-version-metadata.patch \
         "$SOURCE_ROOT/Vendor/x264/patches/0001-reproducible-version-metadata.patch"
+    release_verify_checksum_entry \
+        "$X264_CHECKSUMS" \
+        tests/encode-smoke.c \
+        "$SOURCE_ROOT/Vendor/x264/tests/encode-smoke.c"
+}
+
+release_verify_libx264_profile() {
+    SOURCE_ROOT=$1
+    LIBX264_PROFILE="$SOURCE_ROOT/Vendor/FFmpeg/build-config/libx264-profile.txt"
+    release_require_regular_file "$LIBX264_PROFILE"
+    if ! awk '
+        NR == 1 && $0 != "profile_identifier=libx264-8-and-10-bit-all-chroma-v1" { invalid = 1 }
+        NR == 2 && $0 != "binary_version_marker=libx264-8-and-10-bit-all-chroma-v1" { invalid = 1 }
+        NR == 3 && $0 != "bit_depths=8,10" { invalid = 1 }
+        NR == 4 && $0 != "chroma_formats=420,422,444" { invalid = 1 }
+        NR == 5 && $0 != "pixel_formats=yuv420p,yuv420p10le,yuv422p10le,yuv444p10le" { invalid = 1 }
+        NR == 6 && $0 != "x264_api_smoke_matrix=arm64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444;x86_64:8x400,8x420,8x422,8x444,10x400,10x420,10x422,10x444" { invalid = 1 }
+        NR == 7 && $0 != "ffmpeg_wrapper_smoke_matrix=arm64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le;x86_64:yuv420p,yuv420p10le,yuv422p10le,yuv444p10le" { invalid = 1 }
+        NR == 8 && $0 != "ffmpeg_wrapper_smoke_fixture=ResizerTests/Fixtures/Media/short-h264-aac.mp4" { invalid = 1 }
+        NR == 9 && $0 != "ffmpeg_wrapper_smoke_fixture_sha256=d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1" { invalid = 1 }
+        NR == 10 && $0 != "smoke_status=passed" { invalid = 1 }
+        END { exit invalid || NR != 10 }
+    ' "$LIBX264_PROFILE"; then
+        release_fail "Bundled libx264 profile report does not match the required policy"
+    fi
+
+    for SMOKE_ARCHITECTURE in arm64 x86_64; do
+        FFMPEG_WRAPPER_SMOKE="$SOURCE_ROOT/Vendor/FFmpeg/build-config/ffmpeg-wrapper-encode-smoke-$SMOKE_ARCHITECTURE.txt"
+        release_require_regular_file "$FFMPEG_WRAPPER_SMOKE"
+        if ! awk '
+            NR == 1 && $0 != "fixture=ResizerTests/Fixtures/Media/short-h264-aac.mp4" { invalid = 1 }
+            NR == 2 && $0 != "fixture_sha256=d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1" { invalid = 1 }
+            NR == 3 && $0 != "pixel_format=yuv420p codec_name=h264 output_pixel_format=yuv420p output_nonempty=yes" { invalid = 1 }
+            NR == 4 && $0 != "pixel_format=yuv420p10le codec_name=h264 output_pixel_format=yuv420p10le output_nonempty=yes" { invalid = 1 }
+            NR == 5 && $0 != "pixel_format=yuv422p10le codec_name=h264 output_pixel_format=yuv422p10le output_nonempty=yes" { invalid = 1 }
+            NR == 6 && $0 != "pixel_format=yuv444p10le codec_name=h264 output_pixel_format=yuv444p10le output_nonempty=yes" { invalid = 1 }
+            NR == 7 && $0 != "status=passed" { invalid = 1 }
+            END { exit invalid || NR != 7 }
+        ' "$FFMPEG_WRAPPER_SMOKE"; then
+            release_fail "FFmpeg wrapper smoke report does not match the required policy: $SMOKE_ARCHITECTURE"
+        fi
+    done
+
+    for PROFILE_TOOL in ffmpeg ffprobe; do
+        VERSION_REPORT="$SOURCE_ROOT/Vendor/FFmpeg/build-config/$PROFILE_TOOL-version.txt"
+        release_require_regular_file "$VERSION_REPORT"
+        if ! awk \
+            -v tool="$PROFILE_TOOL" \
+            -v version="8.1.2-$RESIZER_LIBX264_PROFILE_IDENTIFIER" '
+                NR == 1 { valid = ($1 == tool && $2 == "version" && $3 == version) }
+                END { exit !valid }
+            ' "$VERSION_REPORT"; then
+            release_fail "Bundled $PROFILE_TOOL version report lacks the required profile marker"
+        fi
+    done
+
+    FFMPEG_BUILDCONF="$SOURCE_ROOT/Vendor/FFmpeg/build-config/ffmpeg-buildconf.txt"
+    release_require_regular_file "$FFMPEG_BUILDCONF"
+    if ! grep -F \
+        -- "--extra-version=$RESIZER_LIBX264_PROFILE_IDENTIFIER" \
+        "$FFMPEG_BUILDCONF" >/dev/null; then
+        release_fail "Bundled FFmpeg build configuration lacks the required profile marker"
+    fi
 }
 
 release_verify_ffmpeg_source_pins() {
@@ -346,6 +430,11 @@ release_verify_ffmpeg_source_pins() {
         "$SOURCE_CHECKSUMS" \
         0001-avformat-fd-accept-descriptor-in-url.patch \
         "$SOURCE_ROOT/Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch"
+    release_verify_checksum_entry \
+        "$SOURCE_CHECKSUMS" \
+        ResizerTests/Fixtures/Media/short-h264-aac.mp4 \
+        "$SOURCE_ROOT/ResizerTests/Fixtures/Media/short-h264-aac.mp4"
+    release_verify_libx264_profile "$SOURCE_ROOT"
 }
 
 release_verify_repository_ffmpeg_materials() {

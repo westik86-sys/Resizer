@@ -1,5 +1,9 @@
 # ADR 0015: Channel-aware AAC bitrate
 
+> The historical CRF 24 reference below is superseded by Quick CRF 22 in
+> [ADR 0016](0016-libx264-high-bit-depth-chroma.md). The audio decision itself
+> remains unchanged.
+
 - Status: Implemented
 - Date: 2026-07-17
 - Source of truth: [`PLAN.md`](../../PLAN.md)

@@ -1,14 +1,14 @@
 Executable=<REPOSITORY_ROOT>/Vendor/FFmpeg/bin/ffprobe
 Identifier=com.example.Resizer.ffprobe
 Format=Mach-O universal (x86_64 arm64)
-CodeDirectory v=20500 size=12732 flags=0x10002(adhoc,runtime) hashes=387+7 location=embedded
+CodeDirectory v=20500 size=14140 flags=0x10002(adhoc,runtime) hashes=431+7 location=embedded
 Hash type=sha256 size=32
-CandidateCDHash sha256=028eea7672f2f9697b7241c9b02d12d150492ac2
-CandidateCDHashFull sha256=028eea7672f2f9697b7241c9b02d12d150492ac228c7fbe793ac5cfe1f7bd96a
+CandidateCDHash sha256=d44c0b836ee3ef03965f727d63ac71f3d2383887
+CandidateCDHashFull sha256=d44c0b836ee3ef03965f727d63ac71f3d238388761e2688fe7dbc484a1b8b558
 Hash choices=sha256
-CMSDigest=028eea7672f2f9697b7241c9b02d12d150492ac228c7fbe793ac5cfe1f7bd96a
+CMSDigest=d44c0b836ee3ef03965f727d63ac71f3d238388761e2688fe7dbc484a1b8b558
 CMSDigestType=2
-CDHash=028eea7672f2f9697b7241c9b02d12d150492ac2
+CDHash=d44c0b836ee3ef03965f727d63ac71f3d2383887
 Signature=adhoc
 Info.plist=not bound
 TeamIdentifier=not set

@@ -18,11 +18,22 @@ The retained patch under `patches/` injects the pinned r3223/short-commit
 metadata when building from the archive, which intentionally contains no
 `.git` directory. Its checksum is covered by the same manifest.
 
-`Scripts/build-ffmpeg.sh` builds a static 8-bit 4:2:0 library for each target
-architecture before configuring FFmpeg. The arm64 slice uses x264 assembly;
-the x86_64 slice disables assembly because the pinned Xcode toolchain does not
-provide NASM. This changes encoding speed, not the encoded format or CRF
-quality contract. No installed x264 library or package manager is used.
+`Scripts/build-ffmpeg.sh` builds one static library for each target architecture
+with `--bit-depth=all` and `--chroma-format=all`. Each library therefore
+contains the 8- and 10-bit encoder implementations and supports planar 4:0:0,
+4:2:0, 4:2:2, and 4:4:4 input, including `yuv444p10le` through FFmpeg. The
+arm64 slice uses x264 assembly; the x86_64 slice disables assembly because the
+pinned Xcode toolchain does not provide NASM. This changes encoding speed, not
+the encoded format or CRF quality contract. No installed x264 library or
+package manager is used.
+
+The build compiles and runs `tests/encode-smoke.c` against each architecture's
+static library. The smoke must produce a non-empty H.264 bitstream for every
+8/10-bit planar chroma combination before FFmpeg can be built. A second smoke
+then invokes each architecture's final FFmpeg and FFprobe command-line wrappers
+against the checksum-pinned synthetic fixture under
+`ResizerTests/Fixtures/Media/`, and verifies the four product pixel formats
+before either helper can be published.
 
 x264 is licensed under GNU GPL version 2 or later. The unmodified upstream
 license is retained in `licenses/COPYING`.

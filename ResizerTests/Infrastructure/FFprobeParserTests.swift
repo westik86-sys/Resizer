@@ -33,6 +33,7 @@ struct FFprobeParserTests {
         #expect(primaryVideo.colorMetadata.primaries == "bt2020")
         #expect(primaryVideo.colorMetadata.transfer == "smpte2084")
         #expect(primaryVideo.colorMetadata.space == "bt2020nc")
+        #expect(primaryVideo.colorMetadata.range == "tv")
         #expect(primaryVideo.dynamicRange == .hdr)
         #expect(primaryVideo.disposition.isDefault)
         #expect(!primaryVideo.disposition.isForced)
@@ -143,6 +144,7 @@ struct FFprobeParserTests {
         #expect(video.colorMetadata.primaries == "bt709")
         #expect(video.colorMetadata.transfer == "bt709")
         #expect(video.colorMetadata.space == "bt709")
+        #expect(video.colorMetadata.range == "tv")
         #expect(video.dynamicRange == .sdr)
         #expect(video.disposition.isDefault)
     }

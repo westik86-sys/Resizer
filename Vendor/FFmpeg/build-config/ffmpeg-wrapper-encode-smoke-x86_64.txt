@@ -1,0 +1,7 @@
+fixture=ResizerTests/Fixtures/Media/short-h264-aac.mp4
+fixture_sha256=d36f4bd50eb9294bef46aec9de1b6182a32fc7980ad81b070b7b9ce44d91f1c1
+pixel_format=yuv420p codec_name=h264 output_pixel_format=yuv420p output_nonempty=yes
+pixel_format=yuv420p10le codec_name=h264 output_pixel_format=yuv420p10le output_nonempty=yes
+pixel_format=yuv422p10le codec_name=h264 output_pixel_format=yuv422p10le output_nonempty=yes
+pixel_format=yuv444p10le codec_name=h264 output_pixel_format=yuv444p10le output_nonempty=yes
+status=passed

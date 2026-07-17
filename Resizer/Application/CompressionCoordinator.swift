@@ -878,6 +878,14 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
 
             let sourceMetadata = try await validateFilePreflight(plan)
             try await runTranscodePreflight(request, jobID: jobID)
+            // A dependency can finish normally while its child task is being
+            // cancelled. Re-check the coordinator-owned intent before the
+            // first output-side effect so a preflight cancellation cannot
+            // create a temporary reservation that then needs cleanup.
+            guard !Task.isCancelled,
+                  !cancellationIntents.contains(jobID) else {
+                throw CancellationError()
+            }
             let reservation = try await runTemporaryReservation(
                 plan,
                 jobID: jobID
@@ -1271,12 +1279,14 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
             }
         } else if let preflightError = error as? FFmpegPreflightError {
             switch preflightError {
-            case .unavailableCapability:
+            case .unavailableCapability, .unverifiedLibx264PixelFormat:
                 reason = .serviceUnavailable
             case .unsupportedInputFormat, .missingVideoStream,
                  .missingCodecName, .unsupportedDecoder:
                 reason = .invalidMedia
             }
+        } else if error is CompressionRecipeValidationError {
+            reason = .invalidMedia
         } else if error is FFmpegCapabilityClientError {
             reason = .serviceUnavailable
         } else if let builderError = error as? FFmpegCommandBuilderError {
@@ -1289,7 +1299,7 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 reason = .outputUnavailable
             case .inputOutputAlias:
                 reason = .outputConflict
-            case .incompatibleRateControl:
+            case .incompatibleOutputPixelFormat:
                 reason = .serviceUnavailable
             }
         } else if let serviceError =

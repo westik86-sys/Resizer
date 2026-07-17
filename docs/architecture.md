@@ -8,7 +8,9 @@ and hardening for shutdown, publication, diagnostics, accessibility, and
 localization. Quick/Flexible selection is defined by
 [ADR 0012](adr/0012-quick-flexible-compression.md); the compact retry and
 `noBenefit` contracts remain defined by
-[ADR 0011](adr/0011-automatic-compression.md).
+[ADR 0011](adr/0011-automatic-compression.md). The current all-libx264 output,
+high-bit-depth/chroma, and CRF policy is defined by
+[ADR 0016](adr/0016-libx264-high-bit-depth-chroma.md).
 
 ## Dependency direction
 
@@ -189,38 +191,41 @@ treated as unavailable, while a present corrupt, fractional integer, or
 overflowing metric is invalid metadata. Mapping then creates validated domain
 values: comma-separated format names, rounded microsecond duration, byte count,
 bitrate, every stream index, rational FPS, dispositions, rotation, color
-metadata, and conservative HDR/SDR classification. Display-matrix rotation
-takes precedence over the legacy `rotate` tag. Missing video or audio is valid,
-while missing, negative, or duplicate stream indices invalidate the metadata.
-Chapters are requested and decoded for forward compatibility but are not yet
-part of the domain model.
+metadata including `color_range`, and conservative HDR/SDR classification.
+Display-matrix rotation takes precedence over the legacy `rotate` tag. Missing
+video or audio is valid, while missing, negative, or duplicate stream indices
+invalidate the metadata. Chapters are requested and decoded for forward
+compatibility but are not yet part of the domain model.
 
 ## Compression recipe and FFmpeg command contract
 
 `AutomaticCompressionPolicy` deterministically derives an immutable,
 validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
-origin. A primary origin is either Quick or bounded Flexible settings. For a
-confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.70`;
-ordinary inputs use libx264 CRF `24` with preset `medium`. Both keep the 1920x1080 and 30 FPS
-maximums. When audio is kept, the selected mono stream uses AAC at 69 kbit/s;
-stereo, multichannel, and unknown channel counts use AAC at 128 kbit/s.
+origin. A primary origin is either Quick or bounded Flexible settings. Quick
+uses libx264 CRF `22` with preset `medium` for every supported SDR input and
+keeps the 1920x1080 and 30 FPS maximums. When audio is kept, the selected mono
+stream uses AAC at 69 kbit/s; stereo, multichannel, and unknown channel counts
+use AAC at 128 kbit/s.
 Flexible accepts only quality
 `0.30...0.90`, source/1080p/720p/480p, source/60/30/24 FPS, and keep/remove
-audio while retaining the same deterministic source-depth codec and audio
+audio while retaining the same deterministic source-depth/chroma and audio
 policies.
 For libx264 the bounded quality maps through
 `CRF = 36 - floor(12 × qualityPercent / 100)`, yielding CRF 33...26.
-`compactRetry` remains an explicit secondary action with HEVC quality `0.60`
-or libx264 CRF `31`, a 1280x720 maximum, 24 FPS maximum, and AAC at
-96 kbit/s when the Quick origin kept audio.
+The separately planned `compactRetry` contract remains libx264 CRF `31`, a
+1280x720 maximum, 24 FPS maximum, and AAC at 96 kbit/s when the Quick origin
+kept audio. That secondary action is not implemented in this encoder-policy
+stage.
 
-All origins produce MP4 through a typed codec: HEVC Main10 VideoToolbox keeps
-the depth of confirmed >8-bit SDR sources, while ordinary inputs use compatible
-8-bit software H.264 through libx264. They preserve common input metadata and aspect ratio and never
-increase source resolution or frame rate. Missing source audio produces a
-no-audio recipe. The UI exposes no raw
-encoder values, bitrate, codec/container selection, metadata policy, or custom
-FFmpeg flags. Equal `MediaInfo` and typed settings produce the same recipe;
+All currently implemented Quick and Flexible origins produce H.264 MP4 through
+software libx264. Inputs at or below
+8-bit use limited-range `yuv420p`. Confirmed inputs above 8-bit use 10-bit
+output and preserve a supported source chroma class as `yuv420p10le`,
+`yuv422p10le`, or `yuv444p10le`; unsupported or unknown chroma fails closed.
+They preserve common input metadata and aspect ratio and never increase source
+resolution or frame rate. Missing source audio produces a no-audio recipe. The
+UI exposes no raw encoder values, bitrate, codec/container selection, metadata
+policy, or custom FFmpeg flags. Equal `MediaInfo` and typed settings produce the same recipe;
 content classification, trial encodes, and target-size search remain outside
 the MVP.
 
@@ -238,13 +243,18 @@ copied video `timecode` tag can synthesize a new `tmcd` data stream after input
 mapping, bypassing the intent of `-dn`. The strict output validator continues
 to reject every subtitle, attachment, and data stream.
 
-Video output is either libx264 in limited-range `yuv420p` or HEVC
-VideoToolbox Main10 in `p010le` with the MP4 `hvc1` tag. The scale filter
-performs range conversion and error-diffusion dithering whenever output depth
-is lower than source depth. Matching encoder metadata is explicit. H.264 uses
-typed CRF plus the closed `medium` preset; HEVC quality maps to VideoToolbox
-`global_quality` `1...100`. A capped
-frame-rate policy emits `fpsmax`, while original FPS adds no rate override.
+Video output is libx264 with typed CRF and the closed `medium` preset. The scale
+filter selects compatible limited-range `yuv420p` for sources at or below
+8-bit, or one of `yuv420p10le`, `yuv422p10le`, and `yuv444p10le` for confirmed
+sources above 8-bit. It performs range conversion and error-diffusion dithering
+whenever output depth is lower than source depth. Matching encoder metadata is
+explicit, including x264 VUI
+`fullrange=off:videoformat=component`, so even an input with unspecified color
+metadata probes back as exact limited `color_range=tv`. The resulting High 10,
+High 4:2:2, and High 4:4:4 Predictive profiles are less widely hardware-decoded
+than ordinary 8-bit 4:2:0 H.264, so external playback and upload compatibility
+remains a release smoke test. A capped frame-rate policy emits `fpsmax`, while
+original FPS adds no rate override.
 Scaling is orientation-aware, preserves aspect ratio, never upscales, and
 produces even dimensions. Autorotation is applied to pixels and the stale output
 rotation tag is cleared. FFprobe recovers component depth from
@@ -300,7 +310,7 @@ directory alive across this ordered sequence:
 
 ```text
 probe input
-    -> record MediaInfo and derive Quick, Flexible, or compactRetry recipe
+    -> record MediaInfo and derive a Quick or Flexible recipe
     -> capture immutable typed recipe and output policy
     -> plan unique temporary and final paths
     -> file and bundled-capability preflight
@@ -339,10 +349,11 @@ This is a neutral successful outcome with source/candidate sizes and elapsed
 time, not a failure, and it has no URL to open or reveal. A smaller candidate
 continues through the unchanged atomic no-replace publication path.
 
-`FFmpegCapabilityClient` queries the actual bundled executable for decoders,
-encoders, filters, demuxers, muxers, and protocols. Discovery is single-flight
-for concurrent callers, runs all six queries in parallel, has a 15-second
-overall deadline, and is cached only after a complete successful result. A
+`FFmpegCapabilityClient` queries the actual bundled executable for its version
+marker plus decoders, encoders, filters, demuxers, muxers, and protocols.
+Discovery is single-flight for concurrent callers, runs all seven queries in
+parallel, has a 15-second overall deadline, and is cached only after a complete
+successful result. A
 sole cancelled waiter tears down discovery; cancellation of one of several
 waiters does not poison their shared task. Each query has bounded stdout and
 diagnostics. `FFmpegPreflightValidator` then requires the selected input
@@ -350,9 +361,13 @@ demuxer and video decoder. Preparation validates this common video-only
 admission path so an unsupported source audio stream can still reach the
 `Keep Audio` decision and be intentionally removed. The immutable selected
 recipe is validated again before encode; that preflight requires
-`libx264` or `hevc_videotoolbox`, MP4, scale, AAC/aresample only when audio is kept, and the
-file/fd/pipe protocols used by the command. Missing selected capabilities fail
-before the job enters `running`.
+`libx264`, the recipe's exact pixel format, MP4, scale, AAC/aresample only when
+audio is kept, and the file/fd/pipe protocols used by the command. Missing
+selected capabilities fail before the job enters `running`.
+
+The minimal bundled profile retains native H.264/HEVC input decoding and AAC,
+but its sole video encoder is all-bit-depth/all-chroma libx264.
+`hevc_videotoolbox` is not bundled and is not an admitted recipe capability.
 
 `FFmpegTranscodingService` owns one active execution identity per job. It uses
 the command builder and process runner, retains an additional narrow input and
@@ -384,13 +399,16 @@ has succeeded, completion wins a simultaneous late cancellation.
 ## Output validation and publication
 
 `TranscodeOutputValidator` accepts only the recipe's typed MP4 result: one
-non-attached H.264 `yuv420p` stream or one HEVC 10-bit 4:2:0 stream, no subtitles,
-attachments, or other streams, normalized rotation, SDR-compatible depth and
-range, the recipe's AAC-or-no-audio policy, expected no-upscale dimensions and
-aspect ratio, and duration within a bounded tolerance. Validation uses a fresh
-probe of the same retained staging descriptor after the process and both-pipe
-completion barrier. The output probe receives that exact file as child fd 3;
-it does not resolve or reopen the planned temporary pathname.
+non-attached H.264 stream in the exact expected `yuv420p`, `yuv420p10le`,
+`yuv422p10le`, or `yuv444p10le` format, no subtitles, attachments, or other
+streams, normalized rotation, SDR-compatible depth, and exact limited
+`color_range=tv`. Missing range metadata and full `color_range=pc` both fail
+closed before publication. The validator also enforces the recipe's
+AAC-or-no-audio policy, expected no-upscale dimensions and aspect ratio, and
+duration within a bounded tolerance. Validation uses a fresh probe of the same
+retained staging descriptor after the process and both-pipe completion barrier.
+The output probe receives that exact file as child fd 3; it does not resolve or
+reopen the planned temporary pathname.
 
 `SecurityScopedFileAccess` rejects terminal symlinks and unsupported file types
 during input and directory checks, then uses `fstat` for all staging metadata.
@@ -432,16 +450,15 @@ replacing newer UI state.
 `CompressionFeatureModel` is `MainActor`-isolated and consumes immutable
 snapshots. It owns only transient presentation state: selection, per-ready-job
 Quick/Flexible drafts, import and button activity, output selection, validation
-messages, compact-attempt audio intent, and smoothed ETA. Compact intent is
-retained through a probe retry so a silent Quick result cannot regain audio.
+messages, and smoothed ETA.
 SwiftUI views never launch or retain a process. Every queue job owns an
 immutable mode, and every queued attempt captures the validated policy recipe
 and output policy derived for that job's probed media. Output-location edits
 affect only future admissions. The ready UI uses a native segmented Quick /
 Flexible picker. Quick shows only its summary and audio toggle; Flexible shows
-bounded quality, resolution, FPS, and audio controls. `compactRetry` is a
-secondary action after a Quick completed or `noBenefit` outcome, inherits its
-audio choice, and always targets the original.
+bounded quality, resolution, FPS, and audio controls. The planned
+`compactRetry` secondary action will follow a Quick completed or `noBenefit`
+outcome, inherit its audio choice, and always target the original.
 
 The trash action removes only an inactive entry from the in-memory session. It
 is allowed for ready, waiting queued, cancelled, completed, no-benefit, and
@@ -497,8 +514,9 @@ to `probing`. Post-probe failures return to `ready`.
 - the input URL, job ID, and creation date never change;
 - `ready` requires probed media information;
 - `queued` and post-probe processing/final states require media information, an
-  immutable typed Quick/Flexible/compact recipe and its matching output policy;
-  cancellation from
+  immutable typed Quick or Flexible recipe and its matching output policy; the
+  separately planned `compactRetry` action must add its typed origin before it
+  can participate in this invariant; cancellation from
   `probing` or pre-configuration `ready` is the explicit exception;
 - the coordinator permits at most one `running`, `finishing`, or `cancelling`
   job at a time;
@@ -514,10 +532,11 @@ to `probing`. Post-probe failures return to `ready`.
   count. It carries no final URL, and its anonymous staging lease has been
   released without publication.
 
-`completed` and `noBenefit` are terminal outcomes for that attempt. The
-secondary compact action creates a new `compactRetry` attempt from the original
-input; it does not transition the completed/no-benefit job back into the active
-state machine and does not encode a prior result.
+`completed` and `noBenefit` are terminal outcomes for that attempt. When the
+planned secondary compact action is implemented, it will create a new
+`compactRetry` attempt from the original input; it will not transition the
+completed/no-benefit job back into the active state machine or encode a prior
+result.
 
 Pre-run cancellation intent does not mutate the visible phase immediately.
 Only after an in-flight probe or preflight has been asked to cancel and the
@@ -554,24 +573,24 @@ through `probing`; later cancellation can reuse `ready`.
 
 The production runner implements pipe draining, bounded diagnostics, and direct
 child cancellation. The FFprobe adapter resolves and interprets bundled probe
-output. The implementation adds deterministic Quick/Flexible/compact policy
-selection and no-benefit branching to the existing deterministic FFmpeg
-command construction, safe output naming, capability-aware preflight,
-process-level progress, cancellation, temporary validation, exact cleanup, and
-no-replace publication.
+output. The implementation adds deterministic Quick/Flexible policy selection
+and no-benefit branching to the existing deterministic FFmpeg command
+construction, safe output naming, capability-aware preflight, process-level
+progress, cancellation, temporary validation, exact cleanup, and no-replace
+publication. `compactRetry` remains a separate planned stage.
 
 ## Verification
 
 `./Scripts/test.sh` covers the architecture scaffold; real child-process
 success, failure, simultaneous pipes, bounded diagnostics, literal arguments,
 cancellation, and completion; FFprobe fixture mapping and adapter boundaries;
-Quick, Flexible, and `compactRetry` argument vectors; H.264 and HEVC Main10
-outputs; stream, HDR, audio removal, scaling,
+Quick and Flexible argument vectors; 8-bit 4:2:0 and 10-bit
+4:2:0/4:2:2/4:4:4 H.264 outputs; stream, HDR, audio removal, scaling,
 metadata, and path behavior; output-name collisions; capability discovery;
 incremental progress; headless success/failure/no-benefit/cancellation races;
 output validation; and guarded publication and cleanup. Signed targeted
 integration tests run the bundled
-probe → transcode → probe transaction on deterministic H.264/AAC, HEVC/AAC,
-and 10-bit SDR fixtures and verify that the output matches the captured typed
-recipe without modifying the input.
+probe → transcode → probe transaction on deterministic H.264/AAC and
+HEVC/AAC inputs plus 10-bit SDR 4:2:0/4:2:2/4:4:4 fixtures, and verify that the
+output matches the captured typed recipe without modifying the input.
 `./Scripts/build.sh` remains the canonical build check.

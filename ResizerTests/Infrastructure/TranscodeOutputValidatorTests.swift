@@ -218,8 +218,46 @@ struct TranscodeOutputValidatorTests {
         )
     }
 
-    @Test("HEVC Main10 recipe requires a proven ten-bit SDR result")
-    func validatesMain10Encoding() throws {
+    @Test("Only limited tv color range is accepted for every output format")
+    func validatesLimitedColorRange() throws {
+        let source = try makeMediaInfo()
+        let formats: [(OutputPixelFormat, Int, DynamicRange)] = [
+            (.yuv420p, 8, .sdr),
+            (.yuv420p10le, 10, .sdr),
+            (.yuv422p10le, 10, .sdr),
+            (.yuv444p10le, 10, .sdr),
+        ]
+
+        for (pixelFormat, bitDepth, dynamicRange) in formats {
+            let fullRange = try outputReplacingVideo(
+                makeVideo(
+                    pixelFormat: pixelFormat.rawValue,
+                    bitDepth: bitDepth,
+                    colorRange: "pc",
+                    dynamicRange: dynamicRange
+                )
+            )
+
+            try expectError(
+                .unexpectedColorRange(index: 0, actual: "pc"),
+                output: fullRange,
+                source: source,
+                recipe: makeRecipe(outputPixelFormat: pixelFormat)
+            )
+        }
+
+        let missingRange = try outputReplacingVideo(
+            makeVideo(colorRange: nil)
+        )
+        try expectError(
+            .unexpectedColorRange(index: 0, actual: nil),
+            output: missingRange,
+            source: source
+        )
+    }
+
+    @Test("Ten-bit 4:4:4 x264 recipe requires the exact SDR result")
+    func validatesTenBit444Encoding() throws {
         let source = try makeMediaInfo(
             streams: [
                 .video(
@@ -233,11 +271,11 @@ struct TranscodeOutputValidatorTests {
                 .audio(try makeAudio()),
             ]
         )
-        let recipe = try makeRecipe(videoCodec: .hevcMain10VideoToolbox)
+        let recipe = try makeRecipe(outputPixelFormat: .yuv444p10le)
         let compatible = try outputReplacingVideo(
             makeVideo(
-                codecName: "hevc",
-                pixelFormat: "yuv420p10le",
+                codecName: "h264",
+                pixelFormat: "yuv444p10le",
                 bitDepth: 10,
                 dynamicRange: .sdr
             )
@@ -251,8 +289,8 @@ struct TranscodeOutputValidatorTests {
 
         let eightBit = try outputReplacingVideo(
             makeVideo(
-                codecName: "hevc",
-                pixelFormat: "yuv420p10le",
+                codecName: "h264",
+                pixelFormat: "yuv444p10le",
                 bitDepth: 8,
                 dynamicRange: .sdr
             )
@@ -264,6 +302,21 @@ struct TranscodeOutputValidatorTests {
                 bitDepth: 8
             ),
             output: eightBit,
+            source: source,
+            recipe: recipe
+        )
+
+        let wrongChroma = try outputReplacingVideo(
+            makeVideo(
+                codecName: "h264",
+                pixelFormat: "yuv420p10le",
+                bitDepth: 10,
+                dynamicRange: .sdr
+            )
+        )
+        try expectError(
+            .unexpectedPixelFormat(index: 0, actual: "yuv420p10le"),
+            output: wrongChroma,
             source: source,
             recipe: recipe
         )
@@ -648,17 +701,16 @@ struct TranscodeOutputValidatorTests {
     }
 
     private func makeRecipe(
-        videoCodec: VideoCodec = .h264Libx264,
+        outputPixelFormat: OutputPixelFormat = .yuv420p,
         scalePolicy: ScalePolicy = .original,
         audioPolicy: AudioPolicy? = nil
     ) throws -> CompressionRecipe {
         try CompressionRecipe(
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
-            videoCodec: videoCodec,
-            rateControl: videoCodec == .h264Libx264
-                ? .libx264CRF(X264ConstantRateFactor(24))
-                : .videoToolboxQuality(VideoQuality(0.65)),
+            videoCodec: .h264Libx264,
+            outputPixelFormat: outputPixelFormat,
+            rateControl: .libx264CRF(X264ConstantRateFactor(24)),
             scalePolicy: scalePolicy,
             frameRatePolicy: .original,
             audioPolicy: audioPolicy ?? .aac(
@@ -693,6 +745,7 @@ struct TranscodeOutputValidatorTests {
         rotation: Int? = 0,
         pixelFormat: String? = "yuv420p",
         bitDepth: Int? = 8,
+        colorRange: String? = "tv",
         dynamicRange: DynamicRange = .sdr,
         disposition: StreamDisposition = .none
     ) throws -> VideoStreamInfo {
@@ -708,6 +761,12 @@ struct TranscodeOutputValidatorTests {
             rotationDegrees: rotation,
             pixelFormat: pixelFormat,
             bitDepth: bitDepth,
+            colorMetadata: VideoColorMetadata(
+                primaries: nil,
+                transfer: nil,
+                space: nil,
+                range: colorRange
+            ),
             dynamicRange: dynamicRange,
             disposition: disposition
         )

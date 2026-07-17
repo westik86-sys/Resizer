@@ -1,6 +1,11 @@
 # ADR 0014: Software H.264 with libx264 and GPL distribution
 
-- Status: Accepted
+> The Quick CRF, high-bit-depth/chroma, and automatic HEVC output portions of
+> this decision are superseded by
+> [ADR 0016](0016-libx264-high-bit-depth-chroma.md). Its pinned-source,
+> GPL-2.0-or-later, and corresponding-source requirements remain in force.
+
+- Status: Accepted; output policy amended by ADR 0016
 - Date: 2026-07-17
 - Supersedes: the ordinary H.264 encoder, H.264 rate-control, LGPL-only toolchain,
   and corresponding-source portions of ADRs 0001, 0002, 0006, 0007, 0008,

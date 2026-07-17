@@ -3,6 +3,24 @@ import Testing
 
 @Suite("Compression summary formatter")
 struct CompressionSummaryFormatterTests {
+    @Test("Video summary exposes preserved ten-bit chroma")
+    func videoCodecSummary() {
+        let cases: [(OutputPixelFormat, String)] = [
+            (.yuv420p, "H.264"),
+            (.yuv420p10le, "H.264 10-bit 4:2:0"),
+            (.yuv422p10le, "H.264 10-bit 4:2:2"),
+            (.yuv444p10le, "H.264 10-bit 4:4:4"),
+        ]
+
+        for (pixelFormat, expected) in cases {
+            #expect(
+                CompressionSummaryFormatter.videoCodecSummary(
+                    outputPixelFormat: pixelFormat
+                ) == expected
+            )
+        }
+    }
+
     @Test("A source below the FPS cap is described as unchanged")
     func sourceBelowCap() throws {
         let summary = CompressionSummaryFormatter.frameRateSummary(

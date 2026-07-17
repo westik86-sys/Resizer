@@ -14,8 +14,9 @@ struct AutomaticCompressionPolicyTests {
         expectCommonContract(recipe, origin: .primary(settings))
         #expect(
             recipe.rateControl
-                == .libx264CRF(try X264ConstantRateFactor(24))
+                == .libx264CRF(try X264ConstantRateFactor(22))
         )
+        #expect(recipe.outputPixelFormat == .yuv420p)
         #expect(
             recipe.scalePolicy == .maximum(
                 try ResolutionLimit(
@@ -36,8 +37,8 @@ struct AutomaticCompressionPolicyTests {
         )
     }
 
-    @Test("Quick preserves confirmed ten-bit SDR through HEVC Main10")
-    func quickMain10Mode() throws {
+    @Test("Quick preserves confirmed ten-bit 4:4:4 SDR through libx264")
+    func quickTenBit444Mode() throws {
         let mediaInfo = try TestFixtures.mediaInfo(
             videoCodec: "h264",
             pixelFormat: "yuv444p10le",
@@ -53,17 +54,17 @@ struct AutomaticCompressionPolicyTests {
 
         expectCommonContract(
             recipe,
-            origin: .primary(settings),
-            videoCodec: .hevcMain10VideoToolbox
+            origin: .primary(settings)
         )
         #expect(
             recipe.rateControl
-                == .videoToolboxQuality(try VideoQuality(0.70))
+                == .libx264CRF(try X264ConstantRateFactor(22))
         )
+        #expect(recipe.outputPixelFormat == .yuv444p10le)
     }
 
-    @Test("Unknown-range ten-bit input does not enter the Main10 SDR path")
-    func unknownRangeTenBitStaysOnCompatibilityPath() throws {
+    @Test("Pixel-format derivation is independent of the later SDR gate")
+    func unknownRangeTenBitStillDerivesTenBitFormat() throws {
         let mediaInfo = try TestFixtures.mediaInfo(
             pixelFormat: "yuv420p10le",
             bitDepth: 10,
@@ -73,6 +74,7 @@ struct AutomaticCompressionPolicyTests {
         let recipe = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
 
         #expect(recipe.videoCodec == .h264Libx264)
+        #expect(recipe.outputPixelFormat == .yuv420p10le)
     }
 
     @Test("Quick can remove audio from an input that contains it")
@@ -306,8 +308,8 @@ struct AutomaticCompressionPolicyTests {
         }
     }
 
-    @Test("Flexible keeps its selected quality on the Main10 path")
-    func flexibleMain10Mode() throws {
+    @Test("Flexible keeps ten-bit depth while using its bounded x264 CRF")
+    func flexibleTenBitMode() throws {
         let mediaInfo = try TestFixtures.mediaInfo(
             videoCodec: "hevc",
             pixelFormat: "yuv420p10le",
@@ -328,12 +330,111 @@ struct AutomaticCompressionPolicyTests {
             settings: settings
         )
 
-        #expect(recipe.videoCodec == .hevcMain10VideoToolbox)
+        #expect(recipe.videoCodec == .h264Libx264)
+        #expect(recipe.outputPixelFormat == .yuv420p10le)
         #expect(
             recipe.rateControl
-                == .videoToolboxQuality(try VideoQuality(0.85))
+                == .libx264CRF(try X264ConstantRateFactor(26))
         )
         #expect(recipe.audioPolicy == .remove)
+    }
+
+    @Test("Ten-bit source chroma maps to the matching typed x264 output")
+    func tenBitChromaMapping() throws {
+        let cases: [(String, OutputPixelFormat)] = [
+            ("yuv420p10le", .yuv420p10le),
+            ("p010le", .yuv420p10le),
+            ("yuv422p10le", .yuv422p10le),
+            ("p210le", .yuv422p10le),
+            ("yuv444p10le", .yuv444p10le),
+            ("p410le", .yuv444p10le),
+        ]
+
+        for (sourcePixelFormat, expectedOutput) in cases {
+            let mediaInfo = try TestFixtures.mediaInfo(
+                pixelFormat: sourcePixelFormat,
+                bitDepth: 10,
+                dynamicRange: .sdr
+            )
+
+            let recipe = try AutomaticCompressionPolicy().recipe(
+                for: mediaInfo
+            )
+
+            #expect(recipe.videoCodec == .h264Libx264)
+            #expect(recipe.outputPixelFormat == expectedOutput)
+        }
+    }
+
+    @Test("Sources deeper than ten bits retain chroma and target ten bits")
+    func higherDepthChromaMapping() throws {
+        let cases: [(String, Int, OutputPixelFormat)] = [
+            ("yuv420p12le", 12, .yuv420p10le),
+            ("p012le", 12, .yuv420p10le),
+            ("yuv422p12le", 12, .yuv422p10le),
+            ("p212le", 12, .yuv422p10le),
+            ("yuv444p16le", 16, .yuv444p10le),
+            ("p416le", 16, .yuv444p10le),
+        ]
+
+        for (pixelFormat, bitDepth, expectedOutput) in cases {
+            let mediaInfo = try TestFixtures.mediaInfo(
+                pixelFormat: pixelFormat,
+                bitDepth: bitDepth,
+                dynamicRange: .sdr
+            )
+
+            #expect(
+                try AutomaticCompressionPolicy().recipe(for: mediaInfo)
+                    .outputPixelFormat == expectedOutput
+            )
+        }
+    }
+
+    @Test("Unsupported high-depth chroma fails closed")
+    func rejectsUnsupportedHighDepthChroma() throws {
+        let mediaInfo = try TestFixtures.mediaInfo(
+            pixelFormat: "gbrp10le",
+            bitDepth: 10,
+            dynamicRange: .sdr
+        )
+
+        #expect(
+            throws: CompressionRecipeValidationError
+                .unsupportedSourcePixelFormat(
+                    pixelFormat: "gbrp10le",
+                    bitDepth: 10
+                )
+        ) {
+            _ = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
+        }
+    }
+
+    @Test("Contradictory bit depth and pixel format fail closed")
+    func rejectsContradictoryDepthMetadata() throws {
+        let cases: [(String, Int)] = [
+            ("yuv444p10le", 8),
+            ("yuv444p12le", 10),
+            ("yuv444p10le", 12),
+        ]
+
+        for (pixelFormat, bitDepth) in cases {
+            let mediaInfo = try TestFixtures.mediaInfo(
+                pixelFormat: pixelFormat,
+                bitDepth: bitDepth,
+                dynamicRange: .sdr
+            )
+
+            #expect(
+                throws: CompressionRecipeValidationError
+                    .unsupportedSourcePixelFormat(
+                        pixelFormat: pixelFormat,
+                        bitDepth: bitDepth
+                    )
+            ) {
+                _ = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
+            }
+        }
     }
 
     @Test("Every recipe removes audio when the source has no audio stream")

@@ -1,5 +1,5 @@
 SRCPATH=../x264-source
-prefix=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10/x264-prefix-arm64
+prefix=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12/x264-prefix-arm64
 exec_prefix=${prefix}
 bindir=${exec_prefix}/bin
 libdir=${exec_prefix}/lib
@@ -7,7 +7,7 @@ includedir=${prefix}/include
 SYS_ARCH=AARCH64
 SYS=MACOSX
 CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang
-CFLAGS=-Wshadow -O3 -ffast-math  -Wall -I. -I$(SRCPATH) --sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk -arch arm64 -mmacosx-version-min=14.0 -ffile-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10=/usr/src/resizer-ffmpeg/8.1.2-profile10 -fdebug-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10=/usr/src/resizer-ffmpeg/8.1.2-profile10 -fmacro-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10=/usr/src/resizer-ffmpeg/8.1.2-profile10 -arch arm64 -std=gnu99 -D_GNU_SOURCE -fPIC -fomit-frame-pointer -fno-tree-vectorize -fvisibility=hidden
+CFLAGS=-Wshadow -O3 -ffast-math  -Wall -I. -I$(SRCPATH) --sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk -arch arm64 -mmacosx-version-min=14.0 -ffile-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12=/usr/src/resizer-ffmpeg/8.1.2-profile12 -fdebug-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12=/usr/src/resizer-ffmpeg/8.1.2-profile12 -fmacro-prefix-map=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12=/usr/src/resizer-ffmpeg/8.1.2-profile12 -arch arm64 -std=gnu99 -D_GNU_SOURCE -fPIC -fomit-frame-pointer -fno-tree-vectorize -fvisibility=hidden
 CFLAGSSO=
 CFLAGSCLI=
 COMPILER=GNU

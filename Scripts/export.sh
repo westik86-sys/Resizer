@@ -9,7 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 release_initialize
 release_resolve_signing
 
-for COMMAND in codesign ditto find hdiutil lipo plutil shasum tar xcodebuild; do
+for COMMAND in codesign ditto find hdiutil lipo plutil shasum strings tar xcodebuild; do
     release_require_command "$COMMAND"
 done
 
@@ -94,6 +94,8 @@ else
 fi
 
 release_require_real_directory "$EXPORTED_APP"
+release_require_libx264_profile_marker "$EXPORTED_APP/Contents/MacOS/ffmpeg"
+release_require_libx264_profile_marker "$EXPORTED_APP/Contents/MacOS/ffprobe"
 for SIGNED_ITEM in \
     "$EXPORTED_APP/Contents/MacOS/ffmpeg" \
     "$EXPORTED_APP/Contents/MacOS/ffprobe" \

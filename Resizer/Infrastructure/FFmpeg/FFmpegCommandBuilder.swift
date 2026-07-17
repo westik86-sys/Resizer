@@ -5,8 +5,12 @@ nonisolated enum FFmpegCommandBuilderError: Error, Sendable, Equatable {
     case invalidTemporaryOutputURL
     case inputOutputAlias
     case missingVideoStream
-    case incompatibleRateControl
     case unsupportedVideoFormat(streamIndex: Int)
+    case incompatibleOutputPixelFormat(
+        streamIndex: Int,
+        expected: OutputPixelFormat,
+        actual: OutputPixelFormat
+    )
 }
 
 nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
@@ -25,7 +29,10 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         let video = try selectedVideo(in: request.mediaInfo)
         let audio = request.mediaInfo.preferredAudioStream
         try validateSDRConversion(video)
-        try validateVideoCodec(request.recipe.videoCodec, source: video)
+        try validateOutputPixelFormat(
+            request.recipe.outputPixelFormat,
+            source: video
+        )
 
         var arguments = [
             "-hide_banner",
@@ -52,7 +59,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         ))
         arguments.append(contentsOf: [
             "-pix_fmt:v:0",
-            pixelFormatArgument(request.recipe.videoCodec),
+            request.recipe.outputPixelFormat.rawValue,
             "-color_range:v:0", "tv",
         ])
         arguments.append(contentsOf: codecArguments(request.recipe.videoCodec))
@@ -61,8 +68,8 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
             scaleFilter(
                 request.recipe.scalePolicy,
                 useErrorDiffusion: needsDithering(
-                    sourceBitDepth: video.bitDepth,
-                    codec: request.recipe.videoCodec
+                    source: video,
+                    outputPixelFormat: request.recipe.outputPixelFormat
                 )
             ),
         ])
@@ -169,21 +176,24 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         }
     }
 
-    private func validateVideoCodec(
-        _ codec: VideoCodec,
+    private func validateOutputPixelFormat(
+        _ outputPixelFormat: OutputPixelFormat,
         source video: VideoStreamInfo
     ) throws {
-        switch codec {
-        case .h264Libx264:
-            return
-        case .hevcMain10VideoToolbox:
-            guard video.dynamicRange == .sdr,
-                  let bitDepth = video.bitDepth,
-                  bitDepth > 8 else {
-                throw FFmpegCommandBuilderError.unsupportedVideoFormat(
-                    streamIndex: video.index
-                )
-            }
+        let expected: OutputPixelFormat
+        do {
+            expected = try OutputPixelFormat.preservingSource(video)
+        } catch {
+            throw FFmpegCommandBuilderError.unsupportedVideoFormat(
+                streamIndex: video.index
+            )
+        }
+        guard outputPixelFormat == expected else {
+            throw FFmpegCommandBuilderError.incompatibleOutputPixelFormat(
+                streamIndex: video.index,
+                expected: expected,
+                actual: outputPixelFormat
+            )
         }
     }
 
@@ -191,44 +201,31 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         switch codec {
         case .h264Libx264:
             "libx264"
-        case .hevcMain10VideoToolbox:
-            "hevc_videotoolbox"
-        }
-    }
-
-    private func pixelFormatArgument(_ codec: VideoCodec) -> String {
-        switch codec {
-        case .h264Libx264:
-            "yuv420p"
-        case .hevcMain10VideoToolbox:
-            "p010le"
         }
     }
 
     private func codecArguments(_ codec: VideoCodec) -> [String] {
         switch codec {
         case .h264Libx264:
-            ["-preset:v:0", "medium"]
-        case .hevcMain10VideoToolbox:
             [
-                "-profile:v:0", "main10",
-                "-allow_sw:v:0", "1",
-                "-tag:v:0", "hvc1",
+                "-preset:v:0", "medium",
+                "-x264-params:v:0",
+                "fullrange=off:videoformat=component",
             ]
         }
     }
 
     private func needsDithering(
-        sourceBitDepth: Int?,
-        codec: VideoCodec
+        source: VideoStreamInfo,
+        outputPixelFormat: OutputPixelFormat
     ) -> Bool {
-        let outputBitDepth = switch codec {
-        case .h264Libx264:
-            8
-        case .hevcMain10VideoToolbox:
-            10
-        }
-        return sourceBitDepth.map { $0 > outputBitDepth } ?? false
+        let sourceBitDepth = source.bitDepth
+            ?? OutputPixelFormat.inferredSourceBitDepth(
+                from: source.pixelFormat
+            )
+        return sourceBitDepth.map {
+            $0 > outputPixelFormat.bitDepth
+        } ?? false
     }
 
     private func rateControlArguments(
@@ -238,15 +235,6 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         switch (codec, rateControl) {
         case (.h264Libx264, .libx264CRF(let crf)):
             return ["-crf:v:0", String(crf.value)]
-        case (.hevcMain10VideoToolbox, .videoToolboxQuality(let quality)):
-            let percent = Int((quality.value * 100).rounded())
-            return [
-                "-global_quality:v:0",
-                String(min(100, max(1, percent))),
-            ]
-        case (.h264Libx264, .videoToolboxQuality),
-             (.hevcMain10VideoToolbox, .libx264CRF):
-            throw FFmpegCommandBuilderError.incompatibleRateControl
         }
     }
 

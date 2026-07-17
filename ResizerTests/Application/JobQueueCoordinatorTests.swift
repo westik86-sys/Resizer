@@ -643,7 +643,10 @@ private struct QueueHarness: Sendable {
             fileAccess: fileAccess,
             candidateByteCounts: candidateByteCounts
         )
-        let mediaInfo = try TestFixtures.mediaInfo()
+        // This fake is used for both the input probe and the validated
+        // encoded-output probe. A successful production encode explicitly
+        // signals limited range, so the fake must model that contract too.
+        let mediaInfo = try TestFixtures.mediaInfo(colorRange: "tv")
         let selectedMediaProber: any MediaProbing
         if let mediaProber {
             selectedMediaProber = mediaProber

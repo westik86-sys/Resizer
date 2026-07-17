@@ -1,14 +1,14 @@
 Executable=<REPOSITORY_ROOT>/Vendor/FFmpeg/bin/ffmpeg
 Identifier=com.example.Resizer.ffmpeg
 Format=Mach-O universal (x86_64 arm64)
-CodeDirectory v=20500 size=13115 flags=0x10002(adhoc,runtime) hashes=399+7 location=embedded
+CodeDirectory v=20500 size=14555 flags=0x10002(adhoc,runtime) hashes=444+7 location=embedded
 Hash type=sha256 size=32
-CandidateCDHash sha256=836bd10e12bd759f59db8c3cd25653cc67e2e2de
-CandidateCDHashFull sha256=836bd10e12bd759f59db8c3cd25653cc67e2e2def45ce14072b6d09daa5ac059
+CandidateCDHash sha256=1fa275eee4e1e0ddb1dff6a9aec23469dfd2d656
+CandidateCDHashFull sha256=1fa275eee4e1e0ddb1dff6a9aec23469dfd2d656826fdb33e0b5f022c09d2d44
 Hash choices=sha256
-CMSDigest=836bd10e12bd759f59db8c3cd25653cc67e2e2def45ce14072b6d09daa5ac059
+CMSDigest=1fa275eee4e1e0ddb1dff6a9aec23469dfd2d656826fdb33e0b5f022c09d2d44
 CMSDigestType=2
-CDHash=836bd10e12bd759f59db8c3cd25653cc67e2e2de
+CDHash=1fa275eee4e1e0ddb1dff6a9aec23469dfd2d656
 Signature=adhoc
 Info.plist=not bound
 TeamIdentifier=not set

@@ -184,6 +184,13 @@ download channel testers will use. Do not remove quarantine attributes.
 7. Confirm no `.partial.mp4` remains after success, cancel, or failure.
 8. Repeat the smoke encode on Intel hardware or under Rosetta.
 
+Before release notes, documentation, or UI copy names a player, browser,
+messaging service, or upload service as compatible with 10-bit H.264, also
+encode representative SDR 4:2:0, 4:2:2, and 4:4:4 sources. Test all three
+outputs in every named target and retain the target/version/result matrix with
+the manual-test record. A target that was not tested must not be claimed as
+compatible; these profiles are not presented as universally supported.
+
 Save the release commit, notary submission result/log, final checksum manifest,
 and manual-test record. Publishing the DMG or creating a GitHub Release is a
 separate explicitly authorized operation.

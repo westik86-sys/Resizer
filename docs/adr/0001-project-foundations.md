@@ -1,7 +1,8 @@
 # ADR 0001: Project foundations
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Current output encoder, pixel-format, and quality policy is defined by
+> [ADR 0016](0016-libx264-high-bit-depth-chroma.md); GPL and corresponding-source
+> requirements remain defined by [ADR 0014](0014-libx264-gpl-toolchain.md).
 
 - Status: Accepted for bootstrap; first-run UX amended by ADR 0011; codec defaults remain proposed
 - Date: 2026-07-13

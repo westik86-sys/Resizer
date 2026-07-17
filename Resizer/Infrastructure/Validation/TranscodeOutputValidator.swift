@@ -23,6 +23,7 @@ nonisolated enum TranscodeOutputValidationError: Error, Sendable, Equatable {
     case unexpectedVideoStreamCount(actual: Int)
     case unexpectedVideoCodec(index: Int, actual: String?)
     case unexpectedPixelFormat(index: Int, actual: String?)
+    case unexpectedColorRange(index: Int, actual: String?)
     case incompatibleVideoRange(
         index: Int,
         dynamicRange: DynamicRange,
@@ -83,7 +84,7 @@ nonisolated struct TranscodeOutputValidator:
 
         let outputVideo = try validatedOutputVideo(
             output,
-            codec: recipe.videoCodec
+            recipe: recipe
         )
         try validateAudio(output, source: source, recipe: recipe)
         try validateDuration(output, source: source)
@@ -145,18 +146,16 @@ nonisolated struct TranscodeOutputValidator:
 
     private func validatedOutputVideo(
         _ output: MediaInfo,
-        codec: VideoCodec
+        recipe: CompressionRecipe
     ) throws -> VideoStreamInfo {
         let videos = output.videoStreams
         guard videos.count == 1, let video = videos.first else {
             throw TranscodeOutputValidationError
                 .unexpectedVideoStreamCount(actual: videos.count)
         }
-        let expectedCodec = switch codec {
+        let expectedCodec = switch recipe.videoCodec {
         case .h264Libx264:
             "h264"
-        case .hevcMain10VideoToolbox:
-            "hevc"
         }
         guard normalizedName(video.codecName) == expectedCodec else {
             throw TranscodeOutputValidationError.unexpectedVideoCodec(
@@ -166,12 +165,8 @@ nonisolated struct TranscodeOutputValidator:
         }
 
         let pixelFormat = normalizedName(video.pixelFormat)
-        let hasExpectedPixelFormat = switch codec {
-        case .h264Libx264:
-            pixelFormat == "yuv420p"
-        case .hevcMain10VideoToolbox:
-            pixelFormat == "yuv420p10le" || pixelFormat == "p010le"
-        }
+        let hasExpectedPixelFormat = pixelFormat
+            == recipe.outputPixelFormat.rawValue
         guard hasExpectedPixelFormat else {
             throw TranscodeOutputValidationError.unexpectedPixelFormat(
                 index: video.index,
@@ -179,14 +174,21 @@ nonisolated struct TranscodeOutputValidator:
             )
         }
 
-        let hasExpectedRangeAndDepth = switch codec {
-        case .h264Libx264:
+        guard normalizedName(video.colorMetadata.range) == "tv" else {
+            throw TranscodeOutputValidationError.unexpectedColorRange(
+                index: video.index,
+                actual: video.colorMetadata.range
+            )
+        }
+
+        let hasExpectedDynamicRangeAndDepth = switch recipe.outputPixelFormat {
+        case .yuv420p:
             video.dynamicRange != .hdr
                 && (video.bitDepth.map { $0 <= 8 } ?? true)
-        case .hevcMain10VideoToolbox:
+        case .yuv420p10le, .yuv422p10le, .yuv444p10le:
             video.dynamicRange == .sdr && video.bitDepth == 10
         }
-        guard hasExpectedRangeAndDepth else {
+        guard hasExpectedDynamicRangeAndDepth else {
             throw TranscodeOutputValidationError.incompatibleVideoRange(
                 index: video.index,
                 dynamicRange: video.dynamicRange,

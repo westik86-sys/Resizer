@@ -1,9 +1,10 @@
 # ADR 0013: Preserve ten-bit SDR with HEVC Main10
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Superseded by [ADR 0016](0016-libx264-high-bit-depth-chroma.md), which
+> preserves ten-bit SDR and source chroma through libx264 instead of HEVC
+> VideoToolbox. This record describes the historical Main10 decision.
 
-- Status: Implemented
+- Status: Superseded
 - Date: 2026-07-16
 - Source of truth: [`PLAN.md`](../../PLAN.md)
 - Amends: [`ADR 0009`](0009-hevc-input.md),

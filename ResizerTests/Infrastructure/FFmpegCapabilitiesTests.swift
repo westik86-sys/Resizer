@@ -11,7 +11,7 @@ struct FFmpegCapabilitiesTests {
         #expect(value.decoders == ["h264", "hevc", "aac"])
         #expect(
             value.encoders
-                == ["libx264", "hevc_videotoolbox", "aac"]
+                == ["libx264", "aac"]
         )
         #expect(value.filters == ["scale", "aresample"])
         #expect(value.demuxers == ["mov", "mp4", "m4a"])
@@ -27,6 +27,20 @@ struct FFmpegCapabilitiesTests {
             throws: FFmpegCapabilityClientError.invalidCapabilityOutput
         ) {
             try parser.parse(
+                version: Data([0xff]),
+                decoders: decoderOutput,
+                encoders: encoderOutput,
+                filters: filterOutput,
+                demuxers: demuxerOutput,
+                muxers: muxerOutput,
+                protocols: protocolOutput
+            )
+        }
+        #expect(
+            throws: FFmpegCapabilityClientError.invalidCapabilityOutput
+        ) {
+            try parser.parse(
+                version: versionOutput,
                 decoders: Data([0xff]),
                 encoders: encoderOutput,
                 filters: filterOutput,
@@ -39,6 +53,7 @@ struct FFmpegCapabilitiesTests {
             throws: FFmpegCapabilityClientError.invalidCapabilityOutput
         ) {
             try parser.parse(
+                version: versionOutput,
                 decoders: Data(),
                 encoders: encoderOutput,
                 filters: filterOutput,
@@ -63,6 +78,34 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
+    @Test("Runtime discovery requires the exact audited FFmpeg profile marker")
+    func rejectsMissingOrExtendedProfileMarker() throws {
+        let parser = FFmpegCapabilityParser()
+        let incompatibleVersions = [
+            "ffmpeg version n8.0 Copyright FFmpeg\n",
+            "ffmpeg version n8.0-\(BundledFFmpegProfile.identifier)-extra\n",
+        ]
+
+        for version in incompatibleVersions {
+            #expect(
+                throws: FFmpegCapabilityClientError
+                    .incompatibleBundledProfile(
+                        expectedIdentifier: BundledFFmpegProfile.identifier
+                    )
+            ) {
+                try parser.parse(
+                    version: Data(version.utf8),
+                    decoders: decoderOutput,
+                    encoders: encoderOutput,
+                    filters: filterOutput,
+                    demuxers: demuxerOutput,
+                    muxers: muxerOutput,
+                    protocols: protocolOutput
+                )
+            }
+        }
+    }
+
     @Test("The audited profile accepts SDR HEVC input")
     func acceptsHEVCInput() throws {
         let mediaInfo = try videoOnlyMediaInfo(codecName: "hevc")
@@ -77,8 +120,8 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
-    @Test("Confirmed ten-bit SDR requires the bundled HEVC encoder")
-    func main10RequiresHEVCEncoder() throws {
+    @Test("Confirmed ten-bit SDR requires the bundled software x264 encoder")
+    func tenBitRequiresLibx264Encoder() throws {
         let mediaInfo = try videoOnlyMediaInfo(
             codecName: "h264",
             pixelFormat: "yuv444p10le",
@@ -95,9 +138,9 @@ struct FFmpegCapabilitiesTests {
             capabilities: supported
         )
 
-        let missingHEVC = FFmpegCapabilities(
+        let missingX264 = FFmpegCapabilities(
             decoders: supported.decoders,
-            encoders: supported.encoders.subtracting(["hevc_videotoolbox"]),
+            encoders: supported.encoders.subtracting(["libx264"]),
             filters: supported.filters,
             demuxers: supported.demuxers,
             muxers: supported.muxers,
@@ -107,12 +150,55 @@ struct FFmpegCapabilitiesTests {
         #expect(
             throws: FFmpegPreflightError.unavailableCapability(
                 category: .encoder,
-                name: "hevc_videotoolbox"
+                name: "libx264"
             )
         ) {
             try FFmpegPreflightValidator().validate(
                 request,
-                capabilities: missingHEVC
+                capabilities: missingX264
+            )
+        }
+    }
+
+    @Test("The bundled x264 profile is exact and revisioned")
+    func bundledX264Profile() {
+        #expect(
+            BundledFFmpegProfile.identifier
+                == "libx264-8-and-10-bit-all-chroma-v1"
+        )
+        #expect(
+            BundledFFmpegProfile.verifiedLibx264PixelFormats == [
+                .yuv420p,
+                .yuv420p10le,
+                .yuv422p10le,
+                .yuv444p10le,
+            ]
+        )
+    }
+
+    @Test("Preflight rejects a format absent from verified build evidence")
+    func rejectsUnverifiedX264PixelFormat() throws {
+        let mediaInfo = try videoOnlyMediaInfo(
+            codecName: "h264",
+            pixelFormat: "yuv444p10le",
+            bitDepth: 10
+        )
+        let request = try makeRequest(
+            mediaInfo: mediaInfo,
+            recipe: automaticRecipe(for: mediaInfo)
+        )
+        let validator = FFmpegPreflightValidator(
+            verifiedLibx264PixelFormats: [.yuv420p]
+        )
+
+        #expect(
+            throws: FFmpegPreflightError.unverifiedLibx264PixelFormat(
+                .yuv444p10le
+            )
+        ) {
+            try validator.validate(
+                request,
+                capabilities: parseCapabilities()
             )
         }
     }
@@ -236,7 +322,7 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
-    @Test("The runtime client executes six exact queries once and caches")
+    @Test("The runtime client executes seven exact queries once and caches")
     func clientQueriesAndCaches() async throws {
         let runner = FFprobeProcessRunnerStub(
             scriptsByLastArgument: try capabilityScripts()
@@ -252,9 +338,10 @@ struct FFmpegCapabilitiesTests {
         let requests = await runner.recordedRequests()
 
         #expect(first == second)
-        #expect(requests.count == 6)
+        #expect(requests.count == 7)
         #expect(
             Set(requests.map(\.arguments)) == Set([
+                ["-hide_banner", "-version"],
                 ["-hide_banner", "-decoders"],
                 ["-hide_banner", "-encoders"],
                 ["-hide_banner", "-filters"],
@@ -295,7 +382,7 @@ struct FFmpegCapabilitiesTests {
 
         #expect(values.count == 16)
         #expect(values.allSatisfy { $0 == values.first })
-        #expect(await runner.recordedRequests().count == 6)
+        #expect(await runner.recordedRequests().count == 7)
     }
 
     @Test("Discovery starts all queries in parallel, times out, and retries")
@@ -311,7 +398,7 @@ struct FFmpegCapabilitiesTests {
             }
         )
 
-        for expectedRequestCount in [6, 12] {
+        for expectedRequestCount in [7, 14] {
             do {
                 _ = try await client.capabilities()
                 Issue.record("Expected capability discovery timeout")
@@ -342,10 +429,10 @@ struct FFmpegCapabilitiesTests {
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(3))
-        while await runner.requestCount() < 6, clock.now < deadline {
+        while await runner.requestCount() < 7, clock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(await runner.requestCount() == 6)
+        #expect(await runner.requestCount() == 7)
 
         operation.cancel()
         do {
@@ -355,7 +442,7 @@ struct FFmpegCapabilitiesTests {
             // Expected.
         }
 
-        #expect(await runner.uniqueCancellationCount() == 6)
+        #expect(await runner.uniqueCancellationCount() == 7)
         #expect(await runner.heldExecutionCount() == 0)
     }
 
@@ -373,16 +460,16 @@ struct FFmpegCapabilitiesTests {
             _ = await operation.result
             await completion.markCompleted()
         }
-        try await waitForRequestCount(6, runner: runner)
+        try await waitForRequestCount(7, runner: runner)
 
         operation.cancel()
-        try await waitForCancellationCount(6, runner: runner)
+        try await waitForCancellationCount(7, runner: runner)
         for _ in 0..<100 {
             await Task.yield()
         }
 
         #expect(!(await completion.isCompleted()))
-        #expect(await runner.heldExecutionCount() == 6)
+        #expect(await runner.heldExecutionCount() == 7)
 
         await runner.releaseCancellation()
         do {
@@ -406,14 +493,14 @@ struct FFmpegCapabilitiesTests {
             discoveryTimeout: .seconds(30)
         )
         let first = Task { try await client.capabilities() }
-        try await waitForRequestCount(6, runner: runner)
+        try await waitForRequestCount(7, runner: runner)
 
         first.cancel()
-        try await waitForCancellationCount(6, runner: runner)
+        try await waitForCancellationCount(7, runner: runner)
 
         let second = Task { try await client.capabilities() }
-        try await waitForRequestCount(12, runner: runner)
-        #expect(await runner.requestCount() == 12)
+        try await waitForRequestCount(14, runner: runner)
+        #expect(await runner.requestCount() == 14)
 
         second.cancel()
         await runner.releaseCancellation()
@@ -438,7 +525,7 @@ struct FFmpegCapabilitiesTests {
         )
         let first = Task { try await client.capabilities() }
         let second = Task { try await client.capabilities() }
-        try await waitForRequestCount(6, runner: runner)
+        try await waitForRequestCount(7, runner: runner)
 
         first.cancel()
         do {
@@ -448,7 +535,7 @@ struct FFmpegCapabilitiesTests {
             // Expected without waiting for the shared discovery.
         }
         #expect(await runner.uniqueCancellationCount() == 0)
-        #expect(await runner.heldExecutionCount() == 6)
+        #expect(await runner.heldExecutionCount() == 7)
 
         second.cancel()
         do {
@@ -457,7 +544,7 @@ struct FFmpegCapabilitiesTests {
         } catch is CancellationError {
             // The final waiter owns shared teardown.
         }
-        #expect(await runner.uniqueCancellationCount() == 6)
+        #expect(await runner.uniqueCancellationCount() == 7)
         #expect(await runner.heldExecutionCount() == 0)
     }
 
@@ -486,6 +573,7 @@ struct FFmpegCapabilitiesTests {
 
     private func parseCapabilities() throws -> FFmpegCapabilities {
         try FFmpegCapabilityParser().parse(
+            version: versionOutput,
             decoders: decoderOutput,
             encoders: encoderOutput,
             filters: filterOutput,
@@ -499,6 +587,9 @@ struct FFmpegCapabilitiesTests {
         String: FFprobeRunnerScript
     ] {
         [
+            "-version": try .success(
+                standardOutputChunks: [versionOutput]
+            ),
             "-decoders": try .success(
                 standardOutputChunks: [decoderOutput]
             ),
@@ -600,6 +691,14 @@ struct FFmpegCapabilitiesTests {
         )
     }
 
+    private var versionOutput: Data {
+        Data(
+            """
+            ffmpeg version n8.0-\(BundledFFmpegProfile.identifier) Copyright FFmpeg
+            """.utf8
+        )
+    }
+
     private var encoderOutput: Data {
         Data(
             """
@@ -607,7 +706,6 @@ struct FFmpegCapabilitiesTests {
              V..... = Video
              ------
              V....D libx264              libx264 H.264
-             V....D hevc_videotoolbox    VideoToolbox HEVC
              A....D aac                  AAC
             """.utf8
         )
@@ -738,7 +836,7 @@ private actor CapabilityCompletionProbe {
 
 private actor CapabilityTimeoutGate {
     private let runner: HoldingCapabilityRunner
-    private var nextRequestCount = 6
+    private var nextRequestCount = 7
 
     init(runner: HoldingCapabilityRunner) {
         self.runner = runner
@@ -747,7 +845,7 @@ private actor CapabilityTimeoutGate {
     func wait(_ duration: Duration) async throws {
         _ = duration
         let target = nextRequestCount
-        nextRequestCount += 6
+        nextRequestCount += 7
         while await runner.requestCount() < target {
             try Task.checkCancellation()
             await Task.yield()

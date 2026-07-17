@@ -33,6 +33,22 @@ nonisolated enum FFmpegPreflightError: Error, Sendable, Equatable {
     case missingVideoStream
     case missingCodecName(streamIndex: Int)
     case unsupportedDecoder(streamIndex: Int, codecName: String)
+    case unverifiedLibx264PixelFormat(OutputPixelFormat)
+}
+
+/// Compile-time half of the audited bundled-encoder contract. The release
+/// build records the same identifier only after real per-architecture encode
+/// smoke tests pass; runtime discovery requires that exact identifier in the
+/// bundled FFmpeg version as well as the libx264 encoder. Encoder help is not
+/// trusted as pixel-format proof because it can over-report an external build.
+nonisolated enum BundledFFmpegProfile {
+    static let identifier = "libx264-8-and-10-bit-all-chroma-v1"
+    static let verifiedLibx264PixelFormats: Set<OutputPixelFormat> = [
+        .yuv420p,
+        .yuv420p10le,
+        .yuv422p10le,
+        .yuv444p10le,
+    ]
 }
 
 nonisolated enum FFmpegCapabilityClientError: Error, Sendable, Equatable {
@@ -41,6 +57,7 @@ nonisolated enum FFmpegCapabilityClientError: Error, Sendable, Equatable {
     case discoveryTimedOut
     case invalidProcessEventSequence
     case invalidCapabilityOutput
+    case incompatibleBundledProfile(expectedIdentifier: String)
     case outputTooLarge(limit: Int)
     case processFailed(
         termination: ProcessTerminationStatus,
@@ -63,6 +80,7 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
     private static let diagnosticByteLimit = 128 * 1_024
 
     private nonisolated enum QueryKind: CaseIterable, Hashable, Sendable {
+        case version
         case decoders
         case encoders
         case filters
@@ -72,14 +90,23 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
 
         var option: String {
             switch self {
-            case .decoders: "-decoders"
-            case .encoders: "-encoders"
-            case .filters: "-filters"
-            case .demuxers: "-demuxers"
-            case .muxers: "-muxers"
-            case .protocols: "-protocols"
+            case .version:
+                "-version"
+            case .decoders:
+                "-decoders"
+            case .encoders:
+                "-encoders"
+            case .filters:
+                "-filters"
+            case .demuxers:
+                "-demuxers"
+            case .muxers:
+                "-muxers"
+            case .protocols:
+                "-protocols"
             }
         }
+
     }
 
     private nonisolated enum DiscoveryEvent: Sendable {
@@ -288,6 +315,7 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
 
                 if results.count == QueryKind.allCases.count {
                     return try FFmpegCapabilityParser().parse(
+                        version: try required(.version, in: results),
                         decoders: try required(.decoders, in: results),
                         encoders: try required(.encoders, in: results),
                         filters: try required(.filters, in: results),
@@ -411,6 +439,7 @@ actor FFmpegCapabilityClient: FFmpegCapabilityProviding {
 
 nonisolated struct FFmpegCapabilityParser: Sendable {
     func parse(
+        version: Data,
         decoders: Data,
         encoders: Data,
         filters: Data,
@@ -418,7 +447,8 @@ nonisolated struct FFmpegCapabilityParser: Sendable {
         muxers: Data,
         protocols: Data
     ) throws -> FFmpegCapabilities {
-        guard let decoderText = String(data: decoders, encoding: .utf8),
+        guard let versionText = String(data: version, encoding: .utf8),
+              let decoderText = String(data: decoders, encoding: .utf8),
               let encoderText = String(data: encoders, encoding: .utf8),
               let filterText = String(data: filters, encoding: .utf8),
               let demuxerText = String(data: demuxers, encoding: .utf8),
@@ -427,6 +457,8 @@ nonisolated struct FFmpegCapabilityParser: Sendable {
         else {
             throw FFmpegCapabilityClientError.invalidCapabilityOutput
         }
+
+        try validateBundledProfile(versionText)
 
         let parsedProtocols = parseProtocols(protocolText)
         let value = FFmpegCapabilities(
@@ -448,6 +480,29 @@ nonisolated struct FFmpegCapabilityParser: Sendable {
             throw FFmpegCapabilityClientError.invalidCapabilityOutput
         }
         return value
+    }
+
+    private func validateBundledProfile(_ text: String) throws {
+        guard let firstLine = text
+            .split(whereSeparator: \.isNewline)
+            .first else {
+            throw FFmpegCapabilityClientError.invalidCapabilityOutput
+        }
+        let fields = firstLine.split(whereSeparator: \.isWhitespace)
+        guard fields.count >= 3,
+              fields[0] == "ffmpeg",
+              fields[1] == "version" else {
+            throw FFmpegCapabilityClientError.invalidCapabilityOutput
+        }
+
+        let versionToken = fields[2]
+        let requiredSuffix = "-\(BundledFFmpegProfile.identifier)"
+        guard versionToken.hasSuffix(requiredSuffix),
+              versionToken.count > requiredSuffix.count else {
+            throw FFmpegCapabilityClientError.incompatibleBundledProfile(
+                expectedIdentifier: BundledFFmpegProfile.identifier
+            )
+        }
     }
 
     private func parseFlagTable(_ text: String) -> Set<String> {
@@ -517,6 +572,15 @@ nonisolated struct FFmpegCapabilityParser: Sendable {
 }
 
 nonisolated struct FFmpegPreflightValidator: Sendable {
+    private let verifiedLibx264PixelFormats: Set<OutputPixelFormat>
+
+    init(
+        verifiedLibx264PixelFormats: Set<OutputPixelFormat> =
+            BundledFFmpegProfile.verifiedLibx264PixelFormats
+    ) {
+        self.verifiedLibx264PixelFormats = verifiedLibx264PixelFormats
+    }
+
     func validate(
         _ request: TranscodeRequest,
         capabilities: FFmpegCapabilities
@@ -557,10 +621,15 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
         let encoder = switch recipe.videoCodec {
         case .h264Libx264:
             "libx264"
-        case .hevcMain10VideoToolbox:
-            "hevc_videotoolbox"
         }
         try require(encoder, in: capabilities.encoders, category: .encoder)
+        guard verifiedLibx264PixelFormats.contains(
+            recipe.outputPixelFormat
+        ) else {
+            throw FFmpegPreflightError.unverifiedLibx264PixelFormat(
+                recipe.outputPixelFormat
+            )
+        }
         try require("scale", in: capabilities.filters, category: .filter)
         try require("mp4", in: capabilities.muxers, category: .muxer)
         try require(

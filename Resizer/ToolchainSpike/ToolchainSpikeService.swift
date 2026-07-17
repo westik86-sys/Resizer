@@ -170,7 +170,7 @@ actor ToolchainSpikeService {
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
                 "-c:v", "libx264",
-                "-crf", "24",
+                "-crf", "22",
                 "-preset", "medium",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",

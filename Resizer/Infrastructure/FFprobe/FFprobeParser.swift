@@ -76,7 +76,8 @@ nonisolated struct FFprobeParser: Sendable {
             let colorMetadata = VideoColorMetadata(
                 primaries: cleaned(stream.colorPrimaries),
                 transfer: cleaned(stream.colorTransfer),
-                space: cleaned(stream.colorSpace)
+                space: cleaned(stream.colorSpace),
+                range: cleaned(stream.colorRange)
             )
             return .video(
                 try VideoStreamInfo(

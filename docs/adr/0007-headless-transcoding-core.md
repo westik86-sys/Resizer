@@ -1,7 +1,8 @@
 # ADR 0007: Headless transcoding transaction and safe publication
 
-> Ordinary H.264 encoding, rate control, and licensing/source-distribution
-> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+> Current output encoder, pixel-format, and quality policy is defined by
+> [ADR 0016](0016-libx264-high-bit-depth-chroma.md); GPL and corresponding-source
+> requirements remain defined by [ADR 0014](0014-libx264-gpl-toolchain.md).
 
 - Status: Accepted for implementation stage 7; cancellation and publication
   sections amended by [`ADR 0008`](0008-stage-10-hardening.md), and the input
@@ -58,11 +59,12 @@ the FIFO queue remains stage 9.
 
 `FFmpegCapabilityClient` invokes only the executable resolved from
 `Bundle.main`. It queries decoders, encoders, filters, demuxers, muxers, and
-input/output protocols through `ProcessRunning`. Query stdout is capped at
-1 MiB and diagnostics at 128 KiB. The six queries run in parallel under one
-15-second deadline. Concurrent first callers share one single-flight
-discovery, a sole cancelled waiter tears it down, and only a complete
-successful result is cached.
+input/output protocols through `ProcessRunning`. ADR 0016's audited runtime
+profile adds a seventh, parallel `-version` query for the compiled profile
+marker. Query stdout is capped at 1 MiB and diagnostics at 128 KiB. All seven
+queries run under one 15-second deadline. Concurrent first callers share one
+single-flight discovery, a sole cancelled waiter tears it down, and only a
+complete successful result is cached.
 
 `FFmpegPreflightValidator` checks the selected source demuxer and decoders and
 the recipe's required `h264_videotoolbox`, scale, MP4, file, fd, pipe, and optional

@@ -91,6 +91,7 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
         let colorPrimaries: String?
         let colorTransfer: String?
         let colorSpace: String?
+        let colorRange: String?
         let disposition: DispositionDTO?
         let tags: TagsDTO?
         let sideDataList: [SideDataDTO]
@@ -114,6 +115,7 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
             case colorPrimaries = "color_primaries"
             case colorTransfer = "color_transfer"
             case colorSpace = "color_space"
+            case colorRange = "color_range"
             case disposition
             case tags
             case sideDataList = "side_data_list"
@@ -192,6 +194,10 @@ nonisolated struct FFprobeDocumentDTO: Decodable, Sendable, Equatable {
             colorSpace = try container.decodeIfPresent(
                 String.self,
                 forKey: .colorSpace
+            )
+            colorRange = try container.decodeIfPresent(
+                String.self,
+                forKey: .colorRange
             )
             disposition = try container.decodeIfPresent(
                 DispositionDTO.self,

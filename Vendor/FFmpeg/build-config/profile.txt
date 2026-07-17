@@ -1,10 +1,11 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
-Build profile revision: 10
+Build profile revision: 12
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
 License target: GPL 2.0-or-later
+Bundled profile identifier: libx264-8-and-10-bit-all-chroma-v1
 x264 revision: 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
 x264 source date: 2025-09-10
 
@@ -16,10 +17,10 @@ root.
 
 Reproducibility paths:
 
-- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10`
-- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile10/<arch>`
+- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile12`
+- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile12/<arch>`
 - Compiler path mapping: the build/source root is mapped to
-  `/usr/src/resizer-ffmpeg/8.1.2-profile10`
+  `/usr/src/resizer-ffmpeg/8.1.2-profile12`
 
 The fixed build root, virtual prefix, C locale, UTC timezone, deterministic
 archive timestamps, and Clang file/debug/macro prefix maps prevent a developer
@@ -55,6 +56,7 @@ commit ID into x264's generated version header, matching a build from the
 pinned upstream checkout.
 
 --target-os=darwin
+--extra-version=libx264-8-and-10-bit-all-chroma-v1
 --enable-cross-compile
 --pkg-config-flags=--static
 --cpu=generic
@@ -70,7 +72,6 @@ pinned upstream checkout.
 --disable-x86asm
 --disable-iconv
 --disable-audiotoolbox
---enable-videotoolbox
 --enable-ffmpeg
 --enable-ffprobe
 --enable-protocol=fd
@@ -87,7 +88,6 @@ pinned upstream checkout.
 --enable-gpl
 --enable-libx264
 --enable-encoder=libx264
---enable-encoder=hevc_videotoolbox
 --enable-encoder=aac
 --enable-filter=scale
 --enable-filter=aresample
@@ -99,9 +99,12 @@ Explicitly absent:
 --enable-nonfree
 --enable-libx265
 
-The sole external library is the pinned, statically linked x264 snapshot. The
-x264 profile is 8-bit 4:2:0, static-library-only, with PIC enabled and its CLI
-and OpenCL disabled. arm64 uses x264 assembly; x86_64 uses the dependency-free C path
-because Xcode does not provide NASM. Network support and all network protocols
-are disabled. Only the local fd, file, and pipe protocols are enabled. The only
+The sole external library is the pinned, statically linked x264 snapshot. Each
+architecture has exactly one x264 static library, built with
+`--bit-depth=all --chroma-format=all`, PIC enabled, and its CLI and OpenCL
+disabled. The build verifies both 8- and 10-bit implementations and performs
+real in-memory encodes for planar 4:0:0, 4:2:0, 4:2:2, and 4:4:4 at each bit
+depth. arm64 uses x264 assembly; x86_64 uses the dependency-free C path because
+Xcode does not provide NASM. Network support and all network protocols are
+disabled. Only the local fd, file, and pipe protocols are enabled. The only
 bundled command-line programs are ffmpeg and ffprobe.

@@ -13,6 +13,7 @@
       "color_space": "bt709",
       "color_transfer": "bt709",
       "color_primaries": "bt709",
+      "color_range": "tv",
       "disposition": {
         "default": 1,
         "forced": 0,

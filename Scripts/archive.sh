@@ -13,6 +13,7 @@ release_require_command xcodebuild
 release_require_command codesign
 release_require_command lipo
 release_require_command shasum
+release_require_command strings
 release_require_new_path "$RESIZER_ARCHIVE_PATH"
 release_invalidate_checksums
 release_verify_repository_ffmpeg_materials
@@ -75,6 +76,8 @@ release_require_real_directory "$ARCHIVED_APP"
 release_require_universal_2 "$APP_EXECUTABLE"
 release_require_universal_2 "$FFMPEG_EXECUTABLE"
 release_require_universal_2 "$FFPROBE_EXECUTABLE"
+release_require_libx264_profile_marker "$FFMPEG_EXECUTABLE"
+release_require_libx264_profile_marker "$FFPROBE_EXECUTABLE"
 
 for SIGNED_ITEM in "$FFMPEG_EXECUTABLE" "$FFPROBE_EXECUTABLE" "$ARCHIVED_APP"; do
     if [ "$RESIZER_SIGNING_MODE" = "developer-id" ]; then
