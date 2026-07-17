@@ -5,6 +5,7 @@ nonisolated enum FFmpegCommandBuilderError: Error, Sendable, Equatable {
     case invalidTemporaryOutputURL
     case inputOutputAlias
     case missingVideoStream
+    case incompatibleRateControl
     case unsupportedVideoFormat(streamIndex: Int)
 }
 
@@ -44,8 +45,12 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
         arguments.append(contentsOf: [
             "-c:v:0", videoCodecArgument(request.recipe.videoCodec),
-            "-global_quality:v:0",
-            qualityArgument(request.recipe.rateControl),
+        ])
+        arguments.append(contentsOf: try rateControlArguments(
+            request.recipe.rateControl,
+            codec: request.recipe.videoCodec
+        ))
+        arguments.append(contentsOf: [
             "-pix_fmt:v:0",
             pixelFormatArgument(request.recipe.videoCodec),
             "-color_range:v:0", "tv",
@@ -177,7 +182,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         source video: VideoStreamInfo
     ) throws {
         switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             return
         case .hevcMain10VideoToolbox:
             guard video.dynamicRange == .sdr,
@@ -192,8 +197,8 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
     private func videoCodecArgument(_ codec: VideoCodec) -> String {
         switch codec {
-        case .h264VideoToolbox:
-            "h264_videotoolbox"
+        case .h264Libx264:
+            "libx264"
         case .hevcMain10VideoToolbox:
             "hevc_videotoolbox"
         }
@@ -201,7 +206,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
     private func pixelFormatArgument(_ codec: VideoCodec) -> String {
         switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             "yuv420p"
         case .hevcMain10VideoToolbox:
             "p010le"
@@ -210,8 +215,8 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
 
     private func codecArguments(_ codec: VideoCodec) -> [String] {
         switch codec {
-        case .h264VideoToolbox:
-            []
+        case .h264Libx264:
+            ["-preset:v:0", "medium"]
         case .hevcMain10VideoToolbox:
             [
                 "-profile:v:0", "main10",
@@ -226,7 +231,7 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         codec: VideoCodec
     ) -> Bool {
         let outputBitDepth = switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             8
         case .hevcMain10VideoToolbox:
             10
@@ -234,11 +239,22 @@ nonisolated struct FFmpegCommandBuilder: CommandBuilding, Sendable {
         return sourceBitDepth.map { $0 > outputBitDepth } ?? false
     }
 
-    private func qualityArgument(_ rateControl: RateControl) -> String {
-        switch rateControl {
-        case .quality(let quality):
+    private func rateControlArguments(
+        _ rateControl: RateControl,
+        codec: VideoCodec
+    ) throws -> [String] {
+        switch (codec, rateControl) {
+        case (.h264Libx264, .libx264CRF(let crf)):
+            return ["-crf:v:0", String(crf.value)]
+        case (.hevcMain10VideoToolbox, .videoToolboxQuality(let quality)):
             let percent = Int((quality.value * 100).rounded())
-            return String(min(100, max(1, percent)))
+            return [
+                "-global_quality:v:0",
+                String(min(100, max(1, percent))),
+            ]
+        case (.h264Libx264, .videoToolboxQuality),
+             (.hevcMain10VideoToolbox, .libx264CRF):
+            throw FFmpegCommandBuilderError.incompatibleRateControl
         }
     }
 

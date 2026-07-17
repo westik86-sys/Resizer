@@ -1688,18 +1688,18 @@
         }
       }
     },
-    "FFmpeg is bundled with Resizer and built using an LGPL-only profile. GPL and nonfree components, including libx264 and libx265, are not included." : {
+    "FFmpeg is bundled with Resizer under GPL 2.0-or-later and includes statically linked libx264. Nonfree components and libx265 are not included." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "FFmpeg is bundled with Resizer and built using an LGPL-only profile. GPL and nonfree components, including libx264 and libx265, are not included."
+            "value" : "FFmpeg is bundled with Resizer under GPL 2.0-or-later and includes statically linked libx264. Nonfree components and libx265 are not included."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "FFmpeg встроен в Resizer и собран только с компонентами LGPL. Компоненты GPL и nonfree, включая libx264 и libx265, не включены."
+            "value" : "FFmpeg встроен в Resizer на условиях GPL 2.0 или более поздней версии и включает статически скомпонованный libx264. Компоненты nonfree и libx265 не включены."
           }
         }
       }
@@ -1796,6 +1796,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Частота кадров"
+          }
+        }
+      }
+    },
+    "GNU GPL 2 license" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GNU GPL 2 license"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Лицензия GNU GPL 2"
           }
         }
       }
@@ -2710,18 +2726,18 @@
         }
       }
     },
-    "Resizer · FFmpeg %@ · LGPL-only" : {
+    "Resizer · FFmpeg %@ · GPL 2.0+" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resizer · FFmpeg %@ · LGPL-only"
+            "value" : "Resizer · FFmpeg %@ · GPL 2.0+"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resizer · FFmpeg %@ · только LGPL"
+            "value" : "Resizer · FFmpeg %@ · GPL 2.0+"
           }
         }
       }

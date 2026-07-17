@@ -9,7 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 release_initialize
 release_resolve_signing
 
-for COMMAND in codesign ditto hdiutil lipo plutil shasum tar xcodebuild; do
+for COMMAND in codesign ditto find hdiutil lipo plutil shasum tar xcodebuild; do
     release_require_command "$COMMAND"
 done
 
@@ -26,7 +26,7 @@ esac
 
 ARTIFACT_STEM="Resizer-$APP_VERSION-$APP_BUILD"
 DMG_PATH="$RESIZER_RELEASE_ROOT/$ARTIFACT_STEM.dmg"
-SOURCE_ARCHIVE_PATH="$RESIZER_RELEASE_ROOT/$ARTIFACT_STEM-ffmpeg-source.tar.xz"
+SOURCE_ARCHIVE_PATH="$RESIZER_RELEASE_ROOT/$ARTIFACT_STEM-source.tar.xz"
 release_require_new_path "$DMG_PATH"
 release_require_new_path "$SOURCE_ARCHIVE_PATH"
 release_invalidate_checksums
@@ -105,53 +105,84 @@ for SIGNED_ITEM in \
     fi
 done
 
-SOURCE_PACKAGE_NAME="$ARTIFACT_STEM-ffmpeg-source"
+SOURCE_PACKAGE_NAME="$ARTIFACT_STEM-source"
 SOURCE_PACKAGE_ROOT="$WORK_ROOT/$SOURCE_PACKAGE_NAME"
 mkdir -p \
     "$SOURCE_PACKAGE_ROOT/Vendor/FFmpeg/bin" \
-    "$SOURCE_PACKAGE_ROOT/Vendor/FFmpeg" \
-    "$SOURCE_PACKAGE_ROOT/Scripts/support" \
-    "$SOURCE_PACKAGE_ROOT/Configuration" \
-    "$SOURCE_PACKAGE_ROOT/Resizer/Resources/ThirdParty"
+    "$SOURCE_PACKAGE_ROOT/Vendor/FFmpeg"
 
 for DIRECTORY in sources patches build-config licenses checksums; do
     ditto \
         "$RELEASE_ROOT_DIR/Vendor/FFmpeg/$DIRECTORY" \
         "$SOURCE_PACKAGE_ROOT/Vendor/FFmpeg/$DIRECTORY"
 done
+
+for DIRECTORY in \
+    Resizer.xcodeproj \
+    Resizer \
+    ResizerTests \
+    ResizerUITests \
+    Tests \
+    Scripts \
+    Configuration \
+    docs \
+    Vendor/x264; do
+    ditto \
+        "$RELEASE_ROOT_DIR/$DIRECTORY" \
+        "$SOURCE_PACKAGE_ROOT/$DIRECTORY"
+done
+
+# Xcode writes per-user UI state and scheme metadata inside the project bundle.
+# It is neither corresponding source nor suitable for a public source archive.
+for PRIVATE_XCODE_DATA in \
+    "$SOURCE_PACKAGE_ROOT/Resizer.xcodeproj/xcuserdata" \
+    "$SOURCE_PACKAGE_ROOT/Resizer.xcodeproj/project.xcworkspace/xcuserdata"; do
+    if [ -L "$PRIVATE_XCODE_DATA" ]; then
+        release_fail "Refusing to remove linked Xcode user data from the source package"
+    fi
+    if [ -d "$PRIVATE_XCODE_DATA" ]; then
+        rm -rf "$PRIVATE_XCODE_DATA"
+    elif [ -e "$PRIVATE_XCODE_DATA" ]; then
+        release_fail "Unexpected non-directory Xcode user data in the source package"
+    fi
+done
 ditto \
     "$RELEASE_ROOT_DIR/Vendor/FFmpeg/README.md" \
     "$SOURCE_PACKAGE_ROOT/Vendor/FFmpeg/README.md"
-ditto \
-    "$RELEASE_ROOT_DIR/Scripts/build-ffmpeg.sh" \
-    "$SOURCE_PACKAGE_ROOT/Scripts/build-ffmpeg.sh"
-ditto \
-    "$RELEASE_ROOT_DIR/Scripts/support/pkg-config-disabled" \
-    "$SOURCE_PACKAGE_ROOT/Scripts/support/pkg-config-disabled"
-ditto \
-    "$RELEASE_ROOT_DIR/Configuration/FFmpegHelper.entitlements" \
-    "$SOURCE_PACKAGE_ROOT/Configuration/FFmpegHelper.entitlements"
-ditto \
-    "$RELEASE_ROOT_DIR/Resizer/Resources/ThirdParty/THIRD_PARTY_NOTICES.md" \
-    "$SOURCE_PACKAGE_ROOT/Resizer/Resources/ThirdParty/THIRD_PARTY_NOTICES.md"
+for ROOT_FILE in \
+    LICENSE \
+    COPYRIGHT \
+    README.md \
+    PLAN.md \
+    AGENTS.md \
+    THIRD_PARTY_NOTICES.md; do
+    ditto \
+        "$RELEASE_ROOT_DIR/$ROOT_FILE" \
+        "$SOURCE_PACKAGE_ROOT/$ROOT_FILE"
+done
+
 chmod 755 \
     "$SOURCE_PACKAGE_ROOT/Scripts/build-ffmpeg.sh" \
-    "$SOURCE_PACKAGE_ROOT/Scripts/support/pkg-config-disabled"
+    "$SOURCE_PACKAGE_ROOT/Scripts/support/pkg-config-x264"
 
-release_require_corresponding_source_files "$SOURCE_PACKAGE_ROOT"
-release_verify_ffmpeg_source_pins "$SOURCE_PACKAGE_ROOT"
-
-SOURCE_README="$SOURCE_PACKAGE_ROOT/README.md"
+SOURCE_BUNDLE_README="$SOURCE_PACKAGE_ROOT/SOURCE_BUNDLE.md"
 {
-    echo "# Resizer FFmpeg corresponding source"
+    echo "# Resizer corresponding source"
     echo
     echo "This bundle accompanies Resizer $APP_VERSION ($APP_BUILD)."
-    echo "It contains the pinned FFmpeg 8.1.2 source, local patch, licenses,"
-    echo "configuration reports, checksums, and the exact build script."
+    echo "It contains the version-matched application and test source, Xcode"
+    echo "project, build/release scripts, and pinned FFmpeg and x264 source,"
+    echo "patches, licenses, checksums, and configuration reports."
     echo
-    echo "From this directory, run ./Scripts/build-ffmpeg.sh on a supported"
-    echo "macOS/Xcode host. The script creates fresh arm64 and x86_64 builds."
-} > "$SOURCE_README"
+    echo "First rebuild the bundled Universal 2 tools with"
+    echo "./Scripts/build-ffmpeg.sh on a supported macOS/Xcode host. Then build"
+    echo "the app with ./Scripts/build.sh and test it with ./Scripts/test.sh."
+} > "$SOURCE_BUNDLE_README"
+
+release_require_no_xcode_user_data "$SOURCE_PACKAGE_ROOT"
+release_require_corresponding_source_files "$SOURCE_PACKAGE_ROOT"
+release_verify_ffmpeg_source_pins "$SOURCE_PACKAGE_ROOT"
+release_verify_x264_source_pins "$SOURCE_PACKAGE_ROOT"
 
 (
     cd "$SOURCE_PACKAGE_ROOT"
@@ -183,7 +214,7 @@ ditto \
     echo
     echo "Drag Resizer.app to Applications."
     echo "Video processing stays local and original files are never overwritten."
-    echo "Third-party notices and corresponding FFmpeg source are under Open Source."
+    echo "Third-party notices and version-matched corresponding source are under Open Source."
 } > "$PAYLOAD_ROOT/README.txt"
 
 release_note "Creating compressed DMG"
@@ -217,7 +248,7 @@ PUBLISHED_DMG=1
 PUBLISHING=0
 
 release_note "DMG created: $DMG_PATH"
-release_note "FFmpeg source bundle created: $SOURCE_ARCHIVE_PATH"
+release_note "Corresponding source bundle created: $SOURCE_ARCHIVE_PATH"
 if [ "$RESIZER_SIGNING_MODE" = "adhoc" ]; then
     echo "warning: these ad-hoc artifacts must not be distributed" >&2
 fi

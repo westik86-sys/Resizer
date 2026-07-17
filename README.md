@@ -12,22 +12,29 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - App Sandbox: enabled with user-selected read/write access; network access disabled
 - Hardened Runtime: enabled for the planned Developer ID channel
 - Planned first distribution channel: Developer ID with notarization
-- Bundled toolchain: FFmpeg 8.1.2, minimal LGPL 2.1-or-later profile
+- Bundled toolchain: FFmpeg 8.1.2 with static x264, minimal GPL 2.0-or-later profile
 
 Implementation has completed stage 10 and is preparing the direct-DMG portion
 of stage 11. The native product UI supports multi-file MOV and MP4 import, one
-sequential FIFO queue, a single automatic first-run mode, an explicit stronger
-retry from the immutable original, safe output naming, progress and ETA,
-cancellation, retry, reordering, neutral no-benefit results, and Finder reveal.
+sequential FIFO queue, bounded Quick/Flexible compression controls, safe output
+naming, progress and ETA, cancellation, retry, reordering, neutral no-benefit
+results, and Finder reveal.
 English and Russian localizations, keyboard access,
 VoiceOver-focused state changes, actionable typed errors, and redacted bounded
 diagnostics are included.
 
 Supported video inputs are H.264 and HEVC in MOV/MP4 under the existing SDR
 policy. Confirmed 10-bit SDR sources keep their depth through HEVC Main10
-VideoToolbox; ordinary sources use compatible 8-bit H.264 VideoToolbox. Both
-paths produce MP4 with optional AAC. HDR tone mapping, libx265, GPL, and
-nonfree components are not included.
+VideoToolbox; ordinary sources use compatible 8-bit H.264 through software
+libx264. Both paths produce MP4 with optional AAC. HDR tone mapping, libx265,
+and nonfree components are not included.
+
+Quick H.264 uses `libx264`, CRF 24, and preset `medium`. This is the same
+effective x264 quality/preset pair as CompressO's `thunderbolt` preset at 100%
+quality (CompressO leaves x264 on its default `medium` preset). Flexible keeps
+the product's 30...90% quality bound and applies CompressO's integer curve
+`CRF = 36 - floor(12 × qualityPercent / 100)`, producing CRF 33...26. CRF is
+kept as a typed internal policy and is not exposed as an arbitrary FFmpeg flag.
 
 The application coordinator remains the sole workflow owner. It retains
 security-scoped input and output access through probe, capability preflight,
@@ -45,12 +52,14 @@ Failure and cancellation close only the job's anonymous lease, never a glob or
 a later pathname replacement.
 
 The bundled FFmpeg 8.1.2 tools are reproducibly built as Universal 2 from the
-pinned official source with an LGPL-only profile. The app includes the exact
-third-party notice and LGPL texts and exposes them in Settings. Deterministic
+pinned official FFmpeg and x264 sources with a GPL 2.0-or-later profile. The
+app includes the exact third-party notices and GPL/LGPL texts and exposes them
+in Settings. Deterministic
 tests cover the state machine, queue races, process teardown, validation,
 filesystem publication paths, localization, accessibility-facing copy, and a
 real bundled `probe → transcode → probe` flow. See
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/adr/0014-libx264-gpl-toolchain.md`](docs/adr/0014-libx264-gpl-toolchain.md),
 [`docs/adr/0011-automatic-compression.md`](docs/adr/0011-automatic-compression.md),
 [`docs/adr/0007-headless-transcoding-core.md`](docs/adr/0007-headless-transcoding-core.md),
 [`docs/adr/0008-stage-10-hardening.md`](docs/adr/0008-stage-10-hardening.md),
@@ -72,7 +81,8 @@ not part of the first beta channel.
 - A macOS host with Xcode capable of building Swift 6 projects for macOS 14+
 - No Homebrew packages or globally installed FFmpeg are required
 - Building the bundled toolchain requires the official source archive retained
-  under `Vendor/FFmpeg/sources/`
+  under `Vendor/FFmpeg/sources/` and the pinned x264 snapshot under
+  `Vendor/x264/sources/`
 
 Developer ID identities and credentials are intentionally not stored in the
 repository. The build script disables signing. The test script uses Xcode's
@@ -129,6 +139,15 @@ ResizerUITests/     Product UI, localization, and accessibility smoke tests
 Tests/ProcessHarness/ Deterministic native process fixture used only by unit tests
 Scripts/            Shell-first build and test entry points
 Vendor/FFmpeg/      Binaries, exact source, checksums, licenses, and build reports
+Vendor/x264/        Pinned x264 source, checksum, and upstream GPL license
 Configuration/      Nested helper entitlements
 docs/               Current architecture guide and decision records
 ```
+
+## License
+
+Resizer is free and open-source software licensed under
+[`GPL-2.0-or-later`](LICENSE). The copyright and “or later” election are
+recorded in [`COPYRIGHT`](COPYRIGHT). Bundled third-party components retain
+their own notices and license texts; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

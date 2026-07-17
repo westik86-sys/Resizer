@@ -1,5 +1,8 @@
 # ADR 0002: Bundled FFmpeg toolchain spike
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted for implementation stage 2; component profile amended by
   [`ADR 0009`](0009-hevc-input.md)
 - Date: 2026-07-13

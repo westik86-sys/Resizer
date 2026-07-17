@@ -38,10 +38,11 @@ struct FFmpegCommandBuilderTests {
                 "-map", "0:5",
                 "-sn",
                 "-dn",
-                "-c:v:0", "h264_videotoolbox",
-                "-global_quality:v:0", "75",
+                "-c:v:0", "libx264",
+                "-crf:v:0", "24",
                 "-pix_fmt:v:0", "yuv420p",
                 "-color_range:v:0", "tv",
+                "-preset:v:0", "medium",
                 "-filter:v:0",
                 "scale=w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
                     + "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
@@ -112,7 +113,7 @@ struct FFmpegCommandBuilderTests {
             ]
         )
         let request = try makeRequest(
-            recipe: makeRecipe(videoCodec: .h264VideoToolbox),
+            recipe: makeRecipe(videoCodec: .h264Libx264),
             mediaInfo: mediaInfo
         )
 
@@ -144,7 +145,9 @@ struct FFmpegCommandBuilderTests {
 
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
-        #expect(optionValues("-global_quality:v:0", in: arguments) == ["80"])
+        #expect(optionValues("-crf:v:0", in: arguments) == ["27"])
+        #expect(optionValues("-preset:v:0", in: arguments) == ["medium"])
+        #expect(!arguments.contains("-global_quality:v:0"))
         #expect(
             optionValues("-filter:v:0", in: arguments) == [
                 "scale=w='if(gte(iw,ih),min(iw,1280),min(iw,720))':"
@@ -197,7 +200,7 @@ struct FFmpegCommandBuilderTests {
         let arguments = try await FFmpegCommandBuilder().arguments(for: request)
 
         #expect(
-            optionValues("-c:v:0", in: arguments) == ["h264_videotoolbox"]
+            optionValues("-c:v:0", in: arguments) == ["libx264"]
         )
         #expect(optionValues("-pix_fmt:v:0", in: arguments) == ["yuv420p"])
         #expect(optionValues("-color_range:v:0", in: arguments) == ["tv"])
@@ -377,31 +380,50 @@ struct FFmpegCommandBuilderTests {
         }
     }
 
-    @Test("Quality endpoints and fractional FPS serialize deterministically")
-    func qualityAndFractionalFrameRateArguments() async throws {
-        let zeroQuality = try makeRecipe(
-            quality: 0,
+    @Test("CRF endpoints and fractional FPS serialize deterministically")
+    func crfAndFractionalFrameRateArguments() async throws {
+        let lossless = try makeRecipe(
+            crf: 0,
             frameRatePolicy: .capped(
                 try FrameRateLimit(framesPerSecond: 29.97)
             )
         )
-        let fullQuality = try makeRecipe(quality: 1)
+        let smallest = try makeRecipe(crf: 51)
 
-        let zeroArguments = try await FFmpegCommandBuilder().arguments(
-            for: makeRequest(recipe: zeroQuality)
+        let losslessArguments = try await FFmpegCommandBuilder().arguments(
+            for: makeRequest(recipe: lossless)
         )
-        let fullArguments = try await FFmpegCommandBuilder().arguments(
-            for: makeRequest(recipe: fullQuality)
+        let smallestArguments = try await FFmpegCommandBuilder().arguments(
+            for: makeRequest(recipe: smallest)
         )
 
+        #expect(optionValues("-crf:v:0", in: losslessArguments) == ["0"])
         #expect(
-            optionValues("-global_quality:v:0", in: zeroArguments) == ["1"]
+            optionValues("-fpsmax:v:0", in: losslessArguments) == ["29.97"]
         )
-        #expect(optionValues("-fpsmax:v:0", in: zeroArguments) == ["29.97"])
-        #expect(
-            optionValues("-global_quality:v:0", in: fullArguments) == ["100"]
+        #expect(optionValues("-crf:v:0", in: smallestArguments) == ["51"])
+        #expect(!smallestArguments.contains("-fpsmax:v:0"))
+    }
+
+    @Test("Codec and rate-control types cannot be mixed")
+    func rejectsMismatchedRateControl() async throws {
+        let valid = try makeRecipe()
+        let mismatched = CompressionRecipe(
+            origin: valid.origin,
+            container: valid.container,
+            videoCodec: .h264Libx264,
+            rateControl: .videoToolboxQuality(try VideoQuality(0.70)),
+            scalePolicy: valid.scalePolicy,
+            frameRatePolicy: valid.frameRatePolicy,
+            audioPolicy: valid.audioPolicy,
+            metadataPolicy: valid.metadataPolicy
         )
-        #expect(!fullArguments.contains("-fpsmax:v:0"))
+
+        await expectBuilderError(.incompatibleRateControl) {
+            try await FFmpegCommandBuilder().arguments(
+                for: makeRequest(recipe: mismatched)
+            )
+        }
     }
 
     @Test("Validated requests route media through the reserved stdout descriptor")
@@ -514,8 +536,8 @@ struct FFmpegCommandBuilderTests {
     }
 
     private func makeRecipe(
-        videoCodec: VideoCodec = .h264VideoToolbox,
-        quality: Double = 0.65,
+        videoCodec: VideoCodec = .h264Libx264,
+        crf: Int = 24,
         scalePolicy: ScalePolicy = .original,
         frameRatePolicy: FrameRatePolicy = .original,
         audioPolicy: AudioPolicy? = nil,
@@ -525,7 +547,9 @@ struct FFmpegCommandBuilderTests {
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
             videoCodec: videoCodec,
-            rateControl: .quality(try VideoQuality(quality)),
+            rateControl: videoCodec == .h264Libx264
+                ? .libx264CRF(try X264ConstantRateFactor(crf))
+                : .videoToolboxQuality(try VideoQuality(0.70)),
             scalePolicy: scalePolicy,
             frameRatePolicy: frameRatePolicy,
             audioPolicy: try audioPolicy ?? .aac(

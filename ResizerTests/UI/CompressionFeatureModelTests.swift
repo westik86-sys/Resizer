@@ -203,7 +203,10 @@ struct CompressionFeatureModelTests {
             )
         )
         #expect(flexibleRecipe.origin == .primary(expectedSettings))
-        #expect(flexibleRecipe.rateControl == .quality(try VideoQuality(0.90)))
+        #expect(
+            flexibleRecipe.rateControl
+                == .libx264CRF(try X264ConstantRateFactor(26))
+        )
         #expect(
             flexibleRecipe.scalePolicy == .maximum(
                 try ResolutionLimit(

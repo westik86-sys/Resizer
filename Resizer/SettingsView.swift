@@ -54,7 +54,7 @@ struct SettingsView: View {
                 )
 
                 Text(String(
-                    localized: "FFmpeg is bundled with Resizer and built using an LGPL-only profile. GPL and nonfree components, including libx264 and libx265, are not included."
+                    localized: "FFmpeg is bundled with Resizer under GPL 2.0-or-later and includes statically linked libx264. Nonfree components and libx265 are not included."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -65,6 +65,11 @@ struct SettingsView: View {
                     title: String(localized: "Third-party notices"),
                     text: BundledLegalDocuments.thirdPartyNotices,
                     identifier: "settings-third-party-notices"
+                )
+                legalDisclosure(
+                    title: String(localized: "GNU GPL 2 license"),
+                    text: BundledLegalDocuments.gpl2,
+                    identifier: "settings-gpl-2"
                 )
                 legalDisclosure(
                     title: String(localized: "GNU LGPL 2.1 license"),
@@ -186,6 +191,10 @@ private enum BundledLegalDocuments {
     )
     static let lgpl21 = load(
         resource: "COPYING.LGPLv2.1",
+        fileExtension: "txt"
+    )
+    static let gpl2 = load(
+        resource: "COPYING.GPLv2",
         fileExtension: "txt"
     )
     static let lgpl3 = load(

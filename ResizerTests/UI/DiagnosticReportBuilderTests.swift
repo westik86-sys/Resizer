@@ -45,13 +45,13 @@ struct DiagnosticReportBuilderTests {
             context: DiagnosticReportContext(
                 applicationVersion: "1.2 (42)",
                 ffmpegVersion: "8.1.2",
-                ffmpegLicenseProfile: "LGPL 2.1-or-later"
+                ffmpegLicenseProfile: "GPL 2.0-or-later"
             )
         )
 
         #expect(report.contains("1.2 (42)"))
         #expect(report.contains("8.1.2"))
-        #expect(report.contains("LGPL 2.1-or-later"))
+        #expect(report.contains("GPL 2.0-or-later"))
         #expect(report.contains("encode"))
         #expect(report.contains("process_failed"))
         #expect(report.contains("17"))
@@ -83,7 +83,7 @@ struct DiagnosticReportBuilderTests {
             context: DiagnosticReportContext(
                 applicationVersion: "dev",
                 ffmpegVersion: "8.1.2",
-                ffmpegLicenseProfile: "LGPL 2.1-or-later"
+                ffmpegLicenseProfile: "GPL 2.0-or-later"
             )
         )
 

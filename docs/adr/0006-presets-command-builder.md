@@ -1,5 +1,8 @@
 # ADR 0006: Preset recipes, FFmpeg command construction, and output planning
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted for implementation stage 6; preset selection, default preset,
   and custom-recipe product decisions superseded by
   [`ADR 0011`](0011-automatic-compression.md); input capability profile amended

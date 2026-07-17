@@ -13,17 +13,26 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 VERSION=8.1.2
-PROFILE_REVISION=8
+PROFILE_REVISION=10
 DEPLOYMENT_TARGET=14.0
 ARCHIVE_NAME="ffmpeg-$VERSION.tar.xz"
 ARCHIVE="$ROOT_DIR/Vendor/FFmpeg/sources/$ARCHIVE_NAME"
+X264_REVISION=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+X264_SHORT_REVISION=0480cb0
+X264_BUILD=165
+X264_REVISION_NUMBER=3223
+X264_ARCHIVE_NAME="x264-$X264_REVISION.tar.gz"
+X264_ARCHIVE="$ROOT_DIR/Vendor/x264/sources/$X264_ARCHIVE_NAME"
+X264_CHECKSUMS="$ROOT_DIR/Vendor/x264/checksums/SHA256SUMS"
+X264_PATCH_NAME=0001-reproducible-version-metadata.patch
+X264_PATCH_FILE="$ROOT_DIR/Vendor/x264/patches/$X264_PATCH_NAME"
 PATCH_NAME="0001-avformat-fd-accept-descriptor-in-url.patch"
 PATCH_FILE="$ROOT_DIR/Vendor/FFmpeg/patches/$PATCH_NAME"
 PATCHED_FILE_TARGET="libavformat/file.c"
 PATCHED_FILE_SHA256=a70cd7c73aede2e8af12e8208fc6aa520307310c5b1766ce538042481628b56a
 PATCHED_DOC_TARGET="doc/protocols.texi"
 PATCHED_DOC_SHA256=3605ab85752fdd25b55a5803fc8dbe0974dbfa94923d904b97486f5df6ce650e
-PROFILE_SHA256=6637268dee12c863d6e42a9ec02bdc19dc5638c029af3712d5e58d680c0d9088
+PROFILE_SHA256=a4cecac1dc7df3da63be289492dae668e75ec903f3308da802cd91aeb6ba4938
 CHECKSUM_DIR="$ROOT_DIR/Vendor/FFmpeg/checksums"
 CHECKSUMS="$CHECKSUM_DIR/SHA256SUMS"
 BUILD_CHECKSUMS="$CHECKSUM_DIR/BUILD_SHA256SUMS"
@@ -37,6 +46,7 @@ WORK_ROOT="$WORK_PARENT/$VERSION-profile$PROFILE_REVISION"
 MAPPED_BUILD_ROOT="/usr/src/resizer-ffmpeg/$VERSION-profile$PROFILE_REVISION"
 VIRTUAL_PREFIX_ROOT="/opt/resizer-toolchain/ffmpeg/$VERSION-profile$PROFILE_REVISION"
 SOURCE_DIR="$WORK_ROOT/source"
+X264_SOURCE_DIR="$WORK_ROOT/x264-source"
 STAGE_ROOT="$WORK_ROOT/staging"
 STAGED_VENDOR_DIR="$STAGE_ROOT/Vendor/FFmpeg"
 STAGED_OUTPUT_DIR="$STAGED_VENDOR_DIR/bin"
@@ -48,8 +58,8 @@ OUTPUT_DIR="$ROOT_DIR/Vendor/FFmpeg/bin"
 REPORT_DIR="$ROOT_DIR/Vendor/FFmpeg/build-config"
 PROFILE_SOURCE="$REPORT_DIR/profile.txt"
 ENTITLEMENTS="$ROOT_DIR/Configuration/FFmpegHelper.entitlements"
-PKG_CONFIG_SOURCE="$SCRIPT_DIR/support/pkg-config-disabled"
-PKG_CONFIG_DISABLED="$WORK_ROOT/pkg-config-disabled"
+PKG_CONFIG_SOURCE="$SCRIPT_DIR/support/pkg-config-x264"
+PKG_CONFIG_X264="$WORK_ROOT/pkg-config-x264"
 LOCK_DIR="$WORK_PARENT/.build-lock"
 
 CURRENT_UID=$(id -u)
@@ -132,17 +142,28 @@ require_owned_directory "$CHECKSUM_DIR" "$CHECKSUM_DIR"
 if [ ! -f "$CHECKSUMS" ] || [ -L "$CHECKSUMS" ]; then
     fail "Expected a regular source checksum manifest: $CHECKSUMS"
 fi
+if [ ! -f "$X264_CHECKSUMS" ] || [ -L "$X264_CHECKSUMS" ]; then
+    fail "Expected a regular x264 source checksum manifest: $X264_CHECKSUMS"
+fi
 
 SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
 CLANG=$(xcrun --sdk macosx --find clang)
 AR=$(xcrun --sdk macosx --find ar)
 RANLIB=$(xcrun --sdk macosx --find ranlib)
 STRIP=$(xcrun --sdk macosx --find strip)
+NM=$(xcrun --sdk macosx --find nm)
+VTOOL=$(xcrun --sdk macosx --find vtool)
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
 
 if [ ! -f "$ARCHIVE" ]; then
     echo "Missing FFmpeg source archive: $ARCHIVE" >&2
     exit 1
+fi
+if [ ! -f "$X264_ARCHIVE" ] || [ -L "$X264_ARCHIVE" ]; then
+    fail "Missing regular x264 source archive: $X264_ARCHIVE"
+fi
+if [ ! -f "$X264_PATCH_FILE" ] || [ -L "$X264_PATCH_FILE" ]; then
+    fail "Missing regular x264 source patch: $X264_PATCH_FILE"
 fi
 
 if [ ! -f "$PATCH_FILE" ]; then
@@ -162,6 +183,24 @@ if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
     echo "Expected: $EXPECTED_SHA256" >&2
     echo "Actual:   $ACTUAL_SHA256" >&2
     exit 1
+fi
+
+EXPECTED_X264_SHA256=$(awk -v archive="sources/$X264_ARCHIVE_NAME" '$2 == archive { print $1 }' "$X264_CHECKSUMS")
+if [ -z "$EXPECTED_X264_SHA256" ]; then
+    fail "No pinned checksum for $X264_ARCHIVE_NAME"
+fi
+ACTUAL_X264_SHA256=$(shasum -a 256 "$X264_ARCHIVE" | awk '{ print $1 }')
+if [ "$ACTUAL_X264_SHA256" != "$EXPECTED_X264_SHA256" ]; then
+    fail "x264 source checksum mismatch"
+fi
+
+EXPECTED_X264_PATCH_SHA256=$(awk -v patch="patches/$X264_PATCH_NAME" '$2 == patch { print $1 }' "$X264_CHECKSUMS")
+if [ -z "$EXPECTED_X264_PATCH_SHA256" ]; then
+    fail "No pinned checksum for $X264_PATCH_NAME"
+fi
+ACTUAL_X264_PATCH_SHA256=$(shasum -a 256 "$X264_PATCH_FILE" | awk '{ print $1 }')
+if [ "$ACTUAL_X264_PATCH_SHA256" != "$EXPECTED_X264_PATCH_SHA256" ]; then
+    fail "x264 source patch checksum mismatch"
 fi
 
 EXPECTED_PATCH_SHA256=$(awk -v patch="$PATCH_NAME" '$2 == patch { print $1 }' "$CHECKSUMS")
@@ -224,7 +263,12 @@ if [ "$(stat -f '%Lp' "$WORK_ROOT")" != "700" ]; then
     fail "Build root must have 0700 permissions: $WORK_ROOT"
 fi
 
-mkdir -p "$SOURCE_DIR" "$STAGED_OUTPUT_DIR" "$STAGED_REPORT_DIR" "$STAGED_CHECKSUM_DIR"
+mkdir -p \
+    "$SOURCE_DIR" \
+    "$X264_SOURCE_DIR" \
+    "$STAGED_OUTPUT_DIR" \
+    "$STAGED_REPORT_DIR" \
+    "$STAGED_CHECKSUM_DIR"
 if [ ! -f "$PROFILE_SOURCE" ] || [ -L "$PROFILE_SOURCE" ]; then
     fail "Missing regular FFmpeg profile report: $PROFILE_SOURCE"
 fi
@@ -232,8 +276,8 @@ if [ "$(shasum -a 256 "$PROFILE_SOURCE" | awk '{ print $1 }')" != "$PROFILE_SHA2
     fail "Pinned FFmpeg profile report checksum mismatch: $PROFILE_SOURCE"
 fi
 cp "$PROFILE_SOURCE" "$STAGED_REPORT_DIR/profile.txt"
-cp "$PKG_CONFIG_SOURCE" "$PKG_CONFIG_DISABLED"
-chmod 755 "$PKG_CONFIG_DISABLED"
+cp "$PKG_CONFIG_SOURCE" "$PKG_CONFIG_X264"
+chmod 755 "$PKG_CONFIG_X264"
 
 verify_patched_target() {
     SOURCE_ROOT=$1
@@ -250,10 +294,90 @@ verify_patched_target() {
 }
 
 tar -xf "$ARCHIVE" --strip-components=1 -C "$SOURCE_DIR"
+tar -xf "$X264_ARCHIVE" --strip-components=1 -C "$X264_SOURCE_DIR"
 /usr/bin/patch -d "$SOURCE_DIR" -p1 --forward --batch < "$PATCH_FILE"
+/usr/bin/patch -d "$X264_SOURCE_DIR" -p1 --forward --batch < "$X264_PATCH_FILE"
 
 verify_patched_target "$SOURCE_DIR" "$PATCHED_FILE_TARGET" "$PATCHED_FILE_SHA256"
 verify_patched_target "$SOURCE_DIR" "$PATCHED_DOC_TARGET" "$PATCHED_DOC_SHA256"
+
+build_x264_architecture() {
+    ARCH=$1
+    HOST=$2
+    BUILD_DIR="$WORK_ROOT/x264-build-$ARCH"
+    PREFIX_DIR="$WORK_ROOT/x264-prefix-$ARCH"
+    PREFIX_MAP_FLAGS="-ffile-prefix-map=$WORK_ROOT=$MAPPED_BUILD_ROOT -fdebug-prefix-map=$WORK_ROOT=$MAPPED_BUILD_ROOT -fmacro-prefix-map=$WORK_ROOT=$MAPPED_BUILD_ROOT"
+    ASM_OPTION=
+
+    # Xcode does not bundle NASM. Keep Intel builds dependency-free; this only
+    # affects encoding speed, not CRF semantics or output compatibility.
+    if [ "$ARCH" = "x86_64" ]; then
+        ASM_OPTION=--disable-asm
+    fi
+
+    mkdir -p "$BUILD_DIR" "$PREFIX_DIR"
+    (
+        cd "$BUILD_DIR"
+        MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+            X264_PINNED_REV="$X264_REVISION_NUMBER" \
+            X264_PINNED_COMMIT="$X264_SHORT_REVISION" \
+            CC="$CLANG" \
+            AS="$CLANG" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            STRIP="$STRIP" \
+            "$X264_SOURCE_DIR/configure" \
+            --host="$HOST" \
+            --sysroot="$SDK_PATH" \
+            --prefix="$PREFIX_DIR" \
+            --enable-static \
+            --enable-pic \
+            --disable-cli \
+            --disable-opencl \
+            --bit-depth=8 \
+            --chroma-format=420 \
+            $ASM_OPTION \
+            --extra-asflags="--sysroot=$SDK_PATH -arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET" \
+            --extra-cflags="-arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET $PREFIX_MAP_FLAGS" \
+            --extra-ldflags="-arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET"
+    )
+
+    if ! grep -q "^#define X264_REV $X264_REVISION_NUMBER$" "$BUILD_DIR/x264_config.h" || \
+       ! grep -q '^#define X264_REV_DIFF 0$' "$BUILD_DIR/x264_config.h" || \
+       ! grep -q "^#define X264_VERSION \" r$X264_REVISION_NUMBER $X264_SHORT_REVISION\"$" "$BUILD_DIR/x264_config.h" || \
+       ! grep -q "^#define X264_POINTVER \"0.$X264_BUILD.$X264_REVISION_NUMBER $X264_SHORT_REVISION\"$" "$BUILD_DIR/x264_config.h"; then
+        fail "x264 compiled version metadata does not match the pinned source"
+    fi
+
+    make -C "$BUILD_DIR" -j "$JOBS" install-lib-static
+    cp "$BUILD_DIR/config.mak" "$STAGED_REPORT_DIR/x264-configure-$ARCH.mak"
+    cp "$BUILD_DIR/x264_config.h" "$STAGED_REPORT_DIR/x264-config-$ARCH.h"
+    cp "$BUILD_DIR/x264.pc" "$STAGED_REPORT_DIR/x264-$ARCH.pc"
+
+    if ! lipo "$PREFIX_DIR/lib/libx264.a" -verify_arch "$ARCH"; then
+        fail "x264 archive has the wrong architecture: $ARCH"
+    fi
+    if ! "$NM" -gU "$PREFIX_DIR/lib/libx264.a" | \
+        grep -q "_x264_encoder_open_$X264_BUILD"; then
+        fail "x264 ABI symbol is missing for $ARCH"
+    fi
+    if ! "$NM" -gU "$PREFIX_DIR/lib/libx264.a" | \
+        grep -q '_x264_encoder_encode'; then
+        fail "x264 encoder symbol is missing for $ARCH"
+    fi
+
+    DEPLOYMENT_OBJECT="$BUILD_DIR/common/osdep.o"
+    if [ "$ARCH" = "arm64" ]; then
+        DEPLOYMENT_OBJECT="$BUILD_DIR/common/aarch64/bitstream-a-8.o"
+    fi
+    OBJECT_MINIMUM=$(
+        "$VTOOL" -show-build "$DEPLOYMENT_OBJECT" |
+            awk '$1 == "minos" { print $2 }'
+    )
+    if [ "$OBJECT_MINIMUM" != "$DEPLOYMENT_TARGET" ]; then
+        fail "x264 object has unexpected minimum macOS version: $OBJECT_MINIMUM"
+    fi
+}
 
 build_architecture() {
     ARCH=$1
@@ -275,6 +399,7 @@ build_architecture() {
     (
         cd "$BUILD_DIR"
         MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+            X264_PREFIX="$WORK_ROOT/x264-prefix-$ARCH" \
             ./src/configure \
             --prefix="$PREFIX_DIR" \
             --target-os=darwin \
@@ -286,7 +411,8 @@ build_architecture() {
             --ar="$AR" \
             --ranlib="$RANLIB" \
             --strip="$STRIP" \
-            --pkg-config="$PKG_CONFIG_DISABLED" \
+            --pkg-config="$PKG_CONFIG_X264" \
+            --pkg-config-flags=--static \
             --extra-cflags="-arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET $PREFIX_MAP_FLAGS" \
             --extra-ldflags="-arch $ARCH -mmacosx-version-min=$DEPLOYMENT_TARGET" \
             --disable-autodetect \
@@ -315,7 +441,9 @@ build_architecture() {
             --enable-parser=h264 \
             --enable-parser=hevc \
             --enable-parser=aac \
-            --enable-encoder=h264_videotoolbox \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-encoder=libx264 \
             --enable-encoder=hevc_videotoolbox \
             --enable-encoder=aac \
             --enable-filter=scale \
@@ -325,9 +453,27 @@ build_architecture() {
 
     make -C "$BUILD_DIR" -j "$JOBS" ffmpeg ffprobe
 
+    for TOOL in ffmpeg ffprobe; do
+        TOOL_MINIMUM=$(
+            "$VTOOL" -show-build "$BUILD_DIR/$TOOL" |
+                awk '$1 == "minos" { print $2 }'
+        )
+        if [ "$TOOL_MINIMUM" != "$DEPLOYMENT_TARGET" ]; then
+            fail "$TOOL has unexpected minimum macOS version: $TOOL_MINIMUM"
+        fi
+    done
+
     cp "$BUILD_DIR/ffbuild/config.mak" "$STAGED_REPORT_DIR/configure-$ARCH.mak"
 }
 
+build_x264_architecture arm64 aarch64-apple-darwin
+build_x264_architecture x86_64 x86_64-apple-darwin
+{
+    printf 'x264 commit: %s\n' "$X264_REVISION"
+    printf 'x264 core ABI: %s\n' "$X264_BUILD"
+    printf 'x264 compiled version: 0.%s.%s %s\n' \
+        "$X264_BUILD" "$X264_REVISION_NUMBER" "$X264_SHORT_REVISION"
+} > "$STAGED_REPORT_DIR/x264-version.txt"
 build_architecture arm64 aarch64
 build_architecture x86_64 x86_64
 
@@ -366,6 +512,7 @@ chmod 755 "$STAGED_OUTPUT_DIR/ffmpeg" "$STAGED_OUTPUT_DIR/ffprobe"
 "$STAGED_OUTPUT_DIR/ffmpeg" -protocols > "$STAGED_REPORT_DIR/protocols.txt"
 "$STAGED_OUTPUT_DIR/ffmpeg" -filters > "$STAGED_REPORT_DIR/filters.txt"
 "$STAGED_OUTPUT_DIR/ffmpeg" -L > "$STAGED_REPORT_DIR/runtime-license.txt"
+"$STAGED_OUTPUT_DIR/ffprobe" -L > "$STAGED_REPORT_DIR/runtime-license-ffprobe.txt"
 
 LIPO_REPORT_RAW="$WORK_ROOT/lipo.txt"
 (
@@ -388,8 +535,8 @@ fi
 if ! lipo "$STAGED_OUTPUT_DIR/ffprobe" -verify_arch arm64 x86_64; then
     fail "FFprobe output is not Universal 2"
 fi
-if ! grep -q 'h264_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
-    echo "Required h264_videotoolbox encoder is missing" >&2
+if ! grep -q ' libx264 ' "$STAGED_REPORT_DIR/encoders.txt"; then
+    echo "Required libx264 encoder is missing" >&2
     exit 1
 fi
 if ! grep -q 'hevc_videotoolbox' "$STAGED_REPORT_DIR/encoders.txt"; then
@@ -408,14 +555,24 @@ for REQUIRED_DECODER in h264 hevc aac; do
         fail "Required native decoder is missing: $REQUIRED_DECODER"
     fi
 done
-if grep -Eq 'enable-(gpl|version3|nonfree|libx264|libx265)' "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt"; then
+if ! grep -q -- '--enable-gpl' "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt" || \
+   ! grep -q -- '--enable-libx264' "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt"; then
+    fail "Required GPL/libx264 FFmpeg configuration is missing"
+fi
+if grep -Eq 'enable-(version3|nonfree|libx265)' "$STAGED_REPORT_DIR/ffmpeg-buildconf.txt"; then
     echo "Forbidden FFmpeg licensing option detected" >&2
     exit 1
 fi
 for CONFIG_REPORT in \
     "$STAGED_REPORT_DIR/configure-arm64.mak" \
     "$STAGED_REPORT_DIR/configure-x86_64.mak"; do
-    for DISABLED_LICENSE_MODE in GPL VERSION3 NONFREE; do
+    if ! grep -q '^CONFIG_GPL=yes$' "$CONFIG_REPORT"; then
+        fail "FFmpeg GPL mode is missing from $CONFIG_REPORT"
+    fi
+    if ! grep -q '^CONFIG_LIBX264=yes$' "$CONFIG_REPORT"; then
+        fail "Static libx264 support is missing from $CONFIG_REPORT"
+    fi
+    for DISABLED_LICENSE_MODE in VERSION3 NONFREE; do
         if ! grep -q "^!CONFIG_$DISABLED_LICENSE_MODE=yes$" "$CONFIG_REPORT"; then
             fail "FFmpeg license mode is not fail-closed in $CONFIG_REPORT: $DISABLED_LICENSE_MODE"
         fi
@@ -427,7 +584,7 @@ for CONFIG_REPORT in \
         H264_PARSER \
         HEVC_PARSER \
         AAC_PARSER \
-        H264_VIDEOTOOLBOX_ENCODER \
+        LIBX264_ENCODER \
         HEVC_VIDEOTOOLBOX_ENCODER \
         AAC_ENCODER; do
         if ! grep -q "^CONFIG_$REQUIRED_COMPONENT=yes$" "$CONFIG_REPORT"; then
@@ -435,12 +592,13 @@ for CONFIG_REPORT in \
         fi
     done
 done
-if ! grep -q 'GNU Lesser General Public' "$STAGED_REPORT_DIR/runtime-license.txt"; then
-    fail "FFmpeg runtime does not report the required LGPL license"
-fi
-if grep -q 'GNU General Public License' "$STAGED_REPORT_DIR/runtime-license.txt"; then
-    fail "FFmpeg runtime reports the GPL instead of the required LGPL profile"
-fi
+for LICENSE_REPORT in \
+    "$STAGED_REPORT_DIR/runtime-license.txt" \
+    "$STAGED_REPORT_DIR/runtime-license-ffprobe.txt"; do
+    if ! grep -q 'GNU General Public License' "$LICENSE_REPORT"; then
+        fail "FFmpeg runtime does not report the required GPL license: $LICENSE_REPORT"
+    fi
+done
 if grep -Eq '/(opt/homebrew|usr/local|opt/local)/' "$STAGED_REPORT_DIR/otool.txt"; then
     echo "Unexpected package-manager linkage detected" >&2
     exit 1

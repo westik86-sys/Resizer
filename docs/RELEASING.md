@@ -17,7 +17,7 @@ Before an external beta, explicitly confirm:
 - a real application icon (the current AppIcon catalog has no PNG artwork);
 - copyright text;
 - Developer ID Application identity and Team ID;
-- final LGPL/H.264/HEVC compliance review;
+- final GPL/libx264/H.264/HEVC compliance review;
 - an Intel or Rosetta smoke test for the `x86_64` slice.
 
 The Xcode project currently has no application category. That is not required
@@ -25,7 +25,7 @@ for this direct DMG beta, but it remains store metadata to resolve before any
 future App Store submission.
 
 Do not change bundle identity, entitlements, deployment target, architecture,
-or the LGPL-only profile as an incidental release fix.
+or the pinned GPL 2.0-or-later profile as an incidental release fix.
 
 ## Prerequisites
 
@@ -64,11 +64,17 @@ git status --short
 ```
 
 The tree must be clean at the release commit. Review the FFmpeg configuration
-and confirm that GPL, nonfree, `libx264`, and `libx265` remain disabled.
+and confirm that GPL and the pinned static `libx264` remain enabled while
+version3, nonfree, and `libx265` remain disabled. Also verify the x264 pin:
+
+```sh
+(cd Vendor/x264 && shasum -a 256 -c checksums/SHA256SUMS)
+```
+
 `archive.sh` and `export.sh` repeat the build-manifest check and also verify the
-pinned SHA-256 values for the exact source archive, detached signature, and
-local patch before packaging. A freshly generated self-check alone is not
-accepted as proof of corresponding-source identity.
+pinned SHA-256 values for the exact FFmpeg and x264 source archives, FFmpeg
+detached signature, and local patch before packaging. A freshly generated
+self-check alone is not accepted as proof of corresponding-source identity.
 
 ## 2. Create the Release archive
 
@@ -96,7 +102,7 @@ The output names include the app version and build number:
 
 ```text
 .build/Release/Resizer-1.0-1.dmg
-.build/Release/Resizer-1.0-1-ffmpeg-source.tar.xz
+.build/Release/Resizer-1.0-1-source.tar.xz
 ```
 
 The DMG contains:
@@ -105,13 +111,14 @@ The DMG contains:
 - an `/Applications` symlink;
 - short installation instructions;
 - third-party notices;
-- the same self-contained FFmpeg source archive produced beside the DMG.
+- the same version-matched corresponding-source archive produced beside the DMG.
 
-The source bundle contains the pinned FFmpeg archive and signature, local
-patch, exact build script and support shim, configuration/capability reports,
-licenses, checksum manifests, and helper entitlements. This lets the DMG be
-distributed by itself while keeping the corresponding source available to its
-recipient.
+The source bundle contains the complete Resizer application and test source,
+Xcode project and scripts for that version, plus the pinned FFmpeg and x264
+sources, local patch, exact toolchain script and support shim,
+configuration/capability reports, licenses, checksum manifests, and helper
+entitlements. This lets the DMG be distributed by itself while keeping the
+corresponding source available to its recipient.
 
 ## 4. Notarize and staple
 
@@ -136,7 +143,7 @@ release checksums.
 ```sh
 DEVELOPMENT_TEAM=ABCDE12345 ./Scripts/verify-release.sh \
   .build/Release/Resizer-1.0-1.dmg \
-  .build/Release/Resizer-1.0-1-ffmpeg-source.tar.xz
+  .build/Release/Resizer-1.0-1-source.tar.xz
 ```
 
 The verifier checks:
@@ -149,9 +156,9 @@ The verifier checks:
 - system-only dynamic linkage and executable modes;
 - bundle identity, version, build, and macOS 14 deployment target;
 - absence of release coverage instrumentation;
-- bundled LGPL notices and license texts;
-- the self-contained FFmpeg source manifest, required-file set, and original
-  pinned source/signature/patch checksums.
+- bundled GPL/libx264 notices and GPL/LGPL license texts;
+- the version-matched complete source manifest, required application source,
+  and original pinned FFmpeg/x264 source/signature/patch checksums.
 
 Only after all checks pass does it write `.build/Release/SHA256SUMS` for the
 post-stapling DMG and source archive.
@@ -195,7 +202,7 @@ export RESIZER_ALLOW_AD_HOC=1
 RESIZER_ALLOW_UNNOTARIZED=1 \
   ./Scripts/verify-release.sh \
     .build/Release-AdHoc/Resizer-1.0-1.dmg \
-    .build/Release-AdHoc/Resizer-1.0-1-ffmpeg-source.tar.xz
+    .build/Release-AdHoc/Resizer-1.0-1-source.tar.xz
 ```
 
 This mode skips Developer ID, notarization, Gatekeeper, and final release

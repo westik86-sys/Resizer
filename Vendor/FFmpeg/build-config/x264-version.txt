@@ -1,0 +1,3 @@
+x264 commit: 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+x264 core ABI: 165
+x264 compiled version: 0.165.3223 0480cb0

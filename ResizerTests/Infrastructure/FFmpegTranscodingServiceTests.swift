@@ -47,7 +47,7 @@ struct FFmpegTranscodingServiceTests {
             #expect(
                 error == .unavailableCapability(
                     category: .encoder,
-                    name: "h264_videotoolbox"
+                    name: "libx264"
                 )
             )
         }
@@ -553,7 +553,7 @@ struct FFmpegTranscodingServiceTests {
     private func supportedCapabilities() -> FFmpegCapabilities {
         FFmpegCapabilities(
             decoders: ["h264", "aac"],
-            encoders: ["h264_videotoolbox", "aac"],
+            encoders: ["libx264", "aac"],
             filters: ["scale", "aresample"],
             demuxers: ["mov", "mp4"],
             muxers: ["mp4"],

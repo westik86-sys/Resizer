@@ -1,0 +1,65 @@
+#!/bin/sh
+
+# Fail-closed pkg-config subset for the x264 library built inside the pinned
+# Resizer toolchain. Any package or query outside this exact contract fails.
+set -eu
+
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+    printf '%s\n' "0.29.2-resizer-x264-only"
+    exit 0
+fi
+
+: "${X264_PREFIX:?X264_PREFIX must name the staged x264 prefix}"
+
+QUERY=
+PACKAGE=
+STATIC=0
+for ARGUMENT in "$@"; do
+    case "$ARGUMENT" in
+        --exists|--cflags|--cflags-only-I|--libs|--variable=includedir)
+            if [ -n "$QUERY" ]; then
+                exit 1
+            fi
+            QUERY=$ARGUMENT
+            ;;
+        --static)
+            if [ "$STATIC" -ne 0 ]; then
+                exit 1
+            fi
+            STATIC=1
+            ;;
+        --print-errors)
+            ;;
+        x264)
+            if [ -n "$PACKAGE" ]; then
+                exit 1
+            fi
+            PACKAGE=x264
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$QUERY" ] || [ "$PACKAGE" != "x264" ]; then
+    exit 1
+fi
+
+case "$QUERY" in
+    --exists)
+        exit 0
+        ;;
+    --cflags|--cflags-only-I)
+        printf '%s\n' "-I$X264_PREFIX/include"
+        ;;
+    --libs)
+        printf '%s\n' "-L$X264_PREFIX/lib -lx264 -lpthread -lm"
+        ;;
+    --variable=includedir)
+        printf '%s\n' "$X264_PREFIX/include"
+        ;;
+    *)
+        exit 1
+        ;;
+esac

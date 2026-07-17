@@ -201,17 +201,19 @@ part of the domain model.
 validated `CompressionRecipe` from probed `MediaInfo` and a closed recipe
 origin. A primary origin is either Quick or bounded Flexible settings. For a
 confirmed SDR source above eight bits, Quick uses HEVC Main10 quality `0.70`;
-ordinary inputs use H.264 quality `0.75`. Both keep the 1920x1080 and 30 FPS
+ordinary inputs use libx264 CRF `24` with preset `medium`. Both keep the 1920x1080 and 30 FPS
 maximums and optional AAC at 128 kbit/s. Flexible accepts only quality
 `0.30...0.90`, source/1080p/720p/480p, source/60/30/24 FPS, and keep/remove
 audio while retaining the same deterministic source-depth codec policy.
+For libx264 the bounded quality maps through
+`CRF = 36 - floor(12 × qualityPercent / 100)`, yielding CRF 33...26.
 `compactRetry` remains an explicit secondary action with HEVC quality `0.60`
-or H.264 quality `0.45`, a 1280x720 maximum, 24 FPS maximum, and AAC at
+or libx264 CRF `31`, a 1280x720 maximum, 24 FPS maximum, and AAC at
 96 kbit/s when the Quick origin kept audio.
 
-All origins produce MP4 through a typed VideoToolbox codec: HEVC Main10 keeps
+All origins produce MP4 through a typed codec: HEVC Main10 VideoToolbox keeps
 the depth of confirmed >8-bit SDR sources, while ordinary inputs use compatible
-8-bit H.264. They preserve common input metadata and aspect ratio and never
+8-bit software H.264 through libx264. They preserve common input metadata and aspect ratio and never
 increase source resolution or frame rate. Missing source audio produces a
 no-audio recipe. The UI exposes no raw
 encoder values, bitrate, codec/container selection, metadata policy, or custom
@@ -231,11 +233,12 @@ copied video `timecode` tag can synthesize a new `tmcd` data stream after input
 mapping, bypassing the intent of `-dn`. The strict output validator continues
 to reject every subtitle, attachment, and data stream.
 
-Video output is either H.264 VideoToolbox in limited-range `yuv420p` or HEVC
+Video output is either libx264 in limited-range `yuv420p` or HEVC
 VideoToolbox Main10 in `p010le` with the MP4 `hvc1` tag. The scale filter
 performs range conversion and error-diffusion dithering whenever output depth
-is lower than source depth. Matching encoder metadata is explicit. Normalized quality maps to VideoToolbox
-`global_quality` `1...100`; CRF and qscale are intentionally not used. A capped
+is lower than source depth. Matching encoder metadata is explicit. H.264 uses
+typed CRF plus the closed `medium` preset; HEVC quality maps to VideoToolbox
+`global_quality` `1...100`. A capped
 frame-rate policy emits `fpsmax`, while original FPS adds no rate override.
 Scaling is orientation-aware, preserves aspect ratio, never upscales, and
 produces even dimensions. Autorotation is applied to pixels and the stale output
@@ -342,7 +345,7 @@ demuxer and video decoder. Preparation validates this common video-only
 admission path so an unsupported source audio stream can still reach the
 `Keep Audio` decision and be intentionally removed. The immutable selected
 recipe is validated again before encode; that preflight requires
-`h264_videotoolbox`, MP4, scale, AAC/aresample only when audio is kept, and the
+`libx264` or `hevc_videotoolbox`, MP4, scale, AAC/aresample only when audio is kept, and the
 file/fd/pipe protocols used by the command. Missing selected capabilities fail
 before the job enters `running`.
 

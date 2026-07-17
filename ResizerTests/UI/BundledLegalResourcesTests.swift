@@ -4,11 +4,15 @@ import Testing
 
 @Suite("Bundled legal resources")
 struct BundledLegalResourcesTests {
-    @Test("FFmpeg notices and LGPL texts are present in the app bundle")
+    @Test("GPL toolchain notices and license texts are present in the app bundle")
     func resourcesAreBundled() throws {
         let notices = try resource(
             name: "THIRD_PARTY_NOTICES",
             fileExtension: "md"
+        )
+        let gpl2 = try resource(
+            name: "COPYING.GPLv2",
+            fileExtension: "txt"
         )
         let lgpl21 = try resource(
             name: "COPYING.LGPLv2.1",
@@ -20,9 +24,10 @@ struct BundledLegalResourcesTests {
         )
 
         #expect(notices.contains("FFmpeg 8.1.2"))
-        #expect(notices.contains("GNU Lesser General"))
-        #expect(notices.contains("Public License, version 2.1 or later"))
+        #expect(notices.contains("libx264"))
+        #expect(notices.contains("GPL version 2 or later"))
         #expect(notices.contains("Scripts/build-ffmpeg.sh"))
+        #expect(gpl2.contains("GNU GENERAL PUBLIC LICENSE"))
         #expect(lgpl21.contains("GNU LESSER GENERAL PUBLIC LICENSE"))
         #expect(lgpl3.contains("GNU LESSER GENERAL PUBLIC LICENSE"))
     }

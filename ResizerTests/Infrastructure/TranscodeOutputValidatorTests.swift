@@ -648,7 +648,7 @@ struct TranscodeOutputValidatorTests {
     }
 
     private func makeRecipe(
-        videoCodec: VideoCodec = .h264VideoToolbox,
+        videoCodec: VideoCodec = .h264Libx264,
         scalePolicy: ScalePolicy = .original,
         audioPolicy: AudioPolicy? = nil
     ) throws -> CompressionRecipe {
@@ -656,7 +656,9 @@ struct TranscodeOutputValidatorTests {
             origin: .primary(.quick(audio: .keep)),
             container: .mp4,
             videoCodec: videoCodec,
-            rateControl: .quality(VideoQuality(0.65)),
+            rateControl: videoCodec == .h264Libx264
+                ? .libx264CRF(X264ConstantRateFactor(24))
+                : .videoToolboxQuality(VideoQuality(0.65)),
             scalePolicy: scalePolicy,
             frameRatePolicy: .original,
             audioPolicy: audioPolicy ?? .aac(

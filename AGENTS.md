@@ -10,7 +10,7 @@
 
 - The first vertical slice handles one MOV or MP4: bundled `ffprobe`, one fixed H.264/AAC encode, machine-readable progress, cancellation, temporary MP4 output, validation with `ffprobe`, final commit, and before/after sizes.
 - The public MVP adds multi-file import, a sequential queue, a native Quick/Flexible selector, a secondary `compactRetry` action from the immutable original, safe output naming, progress/ETA, cancel/retry, completed and `NoBenefit` results, notifications, and FFmpeg version/license disclosure.
-- Quick deterministically uses HEVC VideoToolbox Main10 quality `0.70` for confirmed >8-bit SDR sources and H.264 VideoToolbox quality `0.75` otherwise, at most 1920x1080 and 30 FPS, with optional AAC 128 kbit/s. Flexible exposes only bounded quality `0.30...0.90`, source/1080p/720p/480p resolution, source/60/30/24 FPS, and keep/remove audio while retaining the same source-derived codec policy. `compactRetry` uses HEVC quality `0.60` or H.264 quality `0.45`, at most 1280x720 and 24 FPS, and inherits the Quick audio choice. No mode may upscale resolution or frame rate.
+- Quick deterministically uses HEVC VideoToolbox Main10 quality `0.70` for confirmed >8-bit SDR sources and software libx264 CRF `24` with preset `medium` otherwise, at most 1920x1080 and 30 FPS, with optional AAC 128 kbit/s. Flexible exposes only bounded quality `0.30...0.90`, source/1080p/720p/480p resolution, source/60/30/24 FPS, and keep/remove audio while retaining the same source-derived codec policy; its H.264 quality maps through `CRF = 36 - floor(12 * qualityPercent / 100)`. `compactRetry` uses HEVC quality `0.60` or libx264 CRF `31`, at most 1280x720 and 24 FPS, and inherits the Quick audio choice. No mode may upscale resolution or frame rate.
 - Do not expose arbitrary FFmpeg flags, manual codec/container selection, target size, video bitrate, audio bitrate, or metadata policy. Quick, Flexible, and `compactRetry` remain closed, typed product policies; `compactRetry` is available only as an explicit secondary action and always re-encodes the original, never the first result.
 - Do not add target-size encoding, arbitrary FFmpeg flags, editing tools, extra codecs or containers, persistent history, pause/resume, cloud/accounts, Finder extensions, watch folders, full HDR handling, or complex stream management without a separate product decision.
 - Do not turn the MVP into a universal FFmpeg GUI or a video editor.
@@ -49,8 +49,8 @@
 
 # Licensing and distribution
 
-- The proposed FFmpeg default is an LGPL-only reproducible build.
-- Never silently enable `--enable-gpl`, `--enable-nonfree`, `libx264`, or `libx265`. Changing the license profile requires a separate explicit decision.
+- The FFmpeg default is a reproducible GPL 2.0-or-later build with statically linked libx264, as recorded in ADR 0014.
+- Keep `--enable-gpl` and the pinned libx264 source explicit and reproducible. Never enable `--enable-version3`, `--enable-nonfree`, or `libx265` without a separate explicit decision.
 - Preserve the FFmpeg source revision/archive checksum, complete build configuration, patches, relevant source, build instructions, capabilities, and notices needed for reproducibility and compliance.
 - Do not change signing, entitlements, bundle ID, deployment target, architecture policy, or distribution channel during an ordinary feature task.
 

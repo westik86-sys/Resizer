@@ -308,7 +308,7 @@ struct HeadlessTranscodingIntegrationTests {
             )
             #expect(outputMedia.formatNames.contains("mp4"))
             switch configuration.recipe.videoCodec {
-            case .h264VideoToolbox:
+            case .h264Libx264:
                 #expect(outputMedia.videoStreams.first?.codecName == "h264")
                 #expect(outputMedia.videoStreams.first?.bitDepth == 8)
             case .hevcMain10VideoToolbox:

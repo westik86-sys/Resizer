@@ -179,6 +179,10 @@ struct LocalizationTests {
                 == "Уведомления о сторонних компонентах"
         )
         #expect(
+            localized("GNU GPL 2 license", localization: "ru")
+                == "Лицензия GNU GPL 2"
+        )
+        #expect(
             localized("GNU LGPL 2.1 license", localization: "ru")
                 == "Лицензия GNU LGPL 2.1"
         )

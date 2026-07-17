@@ -180,7 +180,7 @@ struct CompressionCoordinatorTests {
             dependencies: try dependencies { _, _ in
                 throw FFmpegPreflightError.unavailableCapability(
                     category: .encoder,
-                    name: "h264_videotoolbox"
+                    name: "libx264"
                 )
             }
         )

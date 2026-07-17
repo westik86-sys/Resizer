@@ -16,6 +16,24 @@ struct DomainValueTests {
         }
     }
 
+    @Test("x264 CRF accepts only the encoder's closed range")
+    func x264ConstantRateFactorBounds() throws {
+        #expect(try X264ConstantRateFactor(0).value == 0)
+        #expect(try X264ConstantRateFactor(51).value == 51)
+        #expect(
+            throws: CompressionRecipeValidationError
+                .invalidX264ConstantRateFactor
+        ) {
+            _ = try X264ConstantRateFactor(-1)
+        }
+        #expect(
+            throws: CompressionRecipeValidationError
+                .invalidX264ConstantRateFactor
+        ) {
+            _ = try X264ConstantRateFactor(52)
+        }
+    }
+
     @Test("Rational frame rate preserves NTSC values")
     func rationalFrameRate() throws {
         let rate = try RationalFrameRate(numerator: 30_000, denominator: 1_001)

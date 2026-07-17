@@ -1,5 +1,8 @@
 # ADR 0013: Preserve ten-bit SDR with HEVC Main10
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Implemented
 - Date: 2026-07-16
 - Source of truth: [`PLAN.md`](../../PLAN.md)

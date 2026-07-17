@@ -11,7 +11,7 @@ struct FFmpegCapabilitiesTests {
         #expect(value.decoders == ["h264", "hevc", "aac"])
         #expect(
             value.encoders
-                == ["h264_videotoolbox", "hevc_videotoolbox", "aac"]
+                == ["libx264", "hevc_videotoolbox", "aac"]
         )
         #expect(value.filters == ["scale", "aresample"])
         #expect(value.demuxers == ["mov", "mp4", "m4a"])
@@ -222,7 +222,7 @@ struct FFmpegCapabilitiesTests {
         var capabilities = try parseCapabilities()
         capabilities = FFmpegCapabilities(
             decoders: capabilities.decoders,
-            encoders: ["h264_videotoolbox"],
+            encoders: ["libx264"],
             filters: ["scale"],
             demuxers: capabilities.demuxers,
             muxers: capabilities.muxers,
@@ -606,7 +606,7 @@ struct FFmpegCapabilitiesTests {
             Encoders:
              V..... = Video
              ------
-             V....D h264_videotoolbox    VideoToolbox H.264
+             V....D libx264              libx264 H.264
              V....D hevc_videotoolbox    VideoToolbox HEVC
              A....D aac                  AAC
             """.utf8

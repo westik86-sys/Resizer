@@ -1,22 +1,25 @@
 FFmpeg release: 8.1.2 "Hoare"
 Release tag: n8.1.2
 Release commit: 38b88335f99e76ed89ff3c93f877fdefce736c13
-Build profile revision: 8
+Build profile revision: 10
 Deployment target: macOS 14.0
 Architectures: arm64 and x86_64, built separately and merged with lipo
-License target: LGPL 2.1-or-later
+License target: GPL 2.0-or-later
+x264 revision: 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+x264 source date: 2025-09-10
 
 The two slices use the same component profile. ARCH, SDKROOT, compiler paths,
 prefix, and -arch flags are supplied by Scripts/build-ffmpeg.sh.
-External package discovery is disabled with the repository's fail-closed
-pkg-config shim copied into the stable build root.
+External package discovery is disabled. A fail-closed pkg-config shim exposes
+only the x264 library built from the pinned source inside the stable build
+root.
 
 Reproducibility paths:
 
-- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile8`
-- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile8/<arch>`
+- Build/source root: `/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10`
+- Recorded virtual prefix: `/opt/resizer-toolchain/ffmpeg/8.1.2-profile10/<arch>`
 - Compiler path mapping: the build/source root is mapped to
-  `/usr/src/resizer-ffmpeg/8.1.2-profile8`
+  `/usr/src/resizer-ffmpeg/8.1.2-profile10`
 
 The fixed build root, virtual prefix, C locale, UTC timezone, deterministic
 archive timestamps, and Clang file/debug/macro prefix maps prevent a developer
@@ -41,8 +44,19 @@ for both reading and writing, and should point to an empty regular file. Because
 this profile relies on Darwin's positional-I/O semantics, enabling the patched
 `fd` protocol for a non-Darwin target fails at compile time.
 
+Pinned x264 source patch:
+
+Vendor/x264/patches/0001-reproducible-version-metadata.patch
+SHA-256: 1ed1013a8eedfc99b51d89715efa3176286efbe9200ee0b83d604490cf9f086a
+
+The deterministic x264 archive intentionally contains no Git metadata. This
+patch lets the fail-closed build script inject the pinned r3223 and short
+commit ID into x264's generated version header, matching a build from the
+pinned upstream checkout.
+
 --target-os=darwin
 --enable-cross-compile
+--pkg-config-flags=--static
 --cpu=generic
 --disable-autodetect
 --disable-everything
@@ -70,7 +84,9 @@ this profile relies on Darwin's positional-I/O semantics, enabling the patched
 --enable-parser=h264
 --enable-parser=hevc
 --enable-parser=aac
---enable-encoder=h264_videotoolbox
+--enable-gpl
+--enable-libx264
+--enable-encoder=libx264
 --enable-encoder=hevc_videotoolbox
 --enable-encoder=aac
 --enable-filter=scale
@@ -79,12 +95,13 @@ this profile relies on Darwin's positional-I/O semantics, enabling the patched
 
 Explicitly absent:
 
---enable-gpl
 --enable-version3
 --enable-nonfree
---enable-libx264
 --enable-libx265
 
-No external --enable-lib* option is used. Network support and all network
-protocols are disabled. Only the local fd, file, and pipe protocols are enabled.
-The only bundled command-line programs are ffmpeg and ffprobe.
+The sole external library is the pinned, statically linked x264 snapshot. The
+x264 profile is 8-bit 4:2:0, static-library-only, with PIC enabled and its CLI
+and OpenCL disabled. arm64 uses x264 assembly; x86_64 uses the dependency-free C path
+because Xcode does not provide NASM. Network support and all network protocols
+are disabled. Only the local fd, file, and pipe protocols are enabled. The only
+bundled command-line programs are ffmpeg and ffprobe.

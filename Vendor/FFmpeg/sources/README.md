@@ -22,3 +22,7 @@ also be verified with the official key on a host with GnuPG before release.
 The archive remains unmodified. `../patches/0001-avformat-fd-accept-descriptor-in-url.patch`
 is verified separately and applied to the extracted tree by
 `Scripts/build-ffmpeg.sh`. Its checksum is pinned in the same manifest.
+
+The GPL profile also links the separately pinned x264 source retained under
+`Vendor/x264/`; see `Vendor/x264/README.md` for its commit, archive checksum,
+license, and build details.

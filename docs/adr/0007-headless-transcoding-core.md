@@ -1,5 +1,8 @@
 # ADR 0007: Headless transcoding transaction and safe publication
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted for implementation stage 7; cancellation and publication
   sections amended by [`ADR 0008`](0008-stage-10-hardening.md), and the input
   codec profile amended by [`ADR 0009`](0009-hevc-input.md); the validated

@@ -95,12 +95,27 @@ nonisolated enum OutputContainer: Sendable, Equatable {
 }
 
 nonisolated enum VideoCodec: Sendable, Equatable {
-    case h264VideoToolbox
+    case h264Libx264
     case hevcMain10VideoToolbox
 }
 
 nonisolated enum RateControl: Sendable, Equatable {
-    case quality(VideoQuality)
+    case libx264CRF(X264ConstantRateFactor)
+    case videoToolboxQuality(VideoQuality)
+}
+
+nonisolated struct X264ConstantRateFactor: Sendable, Equatable {
+    static let minimum = 0
+    static let maximum = 51
+
+    let value: Int
+
+    init(_ value: Int) throws {
+        guard (Self.minimum ... Self.maximum).contains(value) else {
+            throw CompressionRecipeValidationError.invalidX264ConstantRateFactor
+        }
+        self.value = value
+    }
 }
 
 nonisolated struct VideoQuality: Sendable, Equatable {
@@ -175,6 +190,7 @@ nonisolated enum MetadataPolicy: Sendable, Equatable {
 
 nonisolated enum CompressionRecipeValidationError: Error, Sendable, Equatable {
     case invalidVideoQuality
+    case invalidX264ConstantRateFactor
     case invalidFlexibleVideoQuality
     case invalidResolutionLimit
     case invalidFrameRateLimit
@@ -202,9 +218,9 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 for: mediaInfo,
                 origin: .primary(settings),
                 videoCodec: videoCodec,
-                quality: try VideoQuality(
-                    videoCodec == .hevcMain10VideoToolbox ? 0.70 : 0.75
-                ),
+                rateControl: videoCodec == .hevcMain10VideoToolbox
+                    ? .videoToolboxQuality(try VideoQuality(0.70))
+                    : .libx264CRF(try X264ConstantRateFactor(24)),
                 scalePolicy: .maximum(
                     try ResolutionLimit(
                         maximumLongEdge: 1_920,
@@ -218,11 +234,15 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 audioBitsPerSecond: 128_000
             )
         case .flexible(let flexible):
+            let videoCodec = videoCodec(for: mediaInfo)
             return try makeRecipe(
                 for: mediaInfo,
                 origin: .primary(settings),
-                videoCodec: videoCodec(for: mediaInfo),
-                quality: flexible.quality,
+                videoCodec: videoCodec,
+                rateControl: try rateControl(
+                    for: videoCodec,
+                    flexibleQuality: flexible.quality
+                ),
                 scalePolicy: try scalePolicy(for: flexible.resolution),
                 frameRatePolicy: try frameRatePolicy(for: flexible.frameRate),
                 audioPreference: flexible.audioPreference,
@@ -235,7 +255,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
         for mediaInfo: MediaInfo,
         origin: RecipeOrigin,
         videoCodec: VideoCodec,
-        quality: VideoQuality,
+        rateControl: RateControl,
         scalePolicy: ScalePolicy,
         frameRatePolicy: FrameRatePolicy,
         audioPreference: AudioPreference,
@@ -254,7 +274,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
             origin: origin,
             container: .mp4,
             videoCodec: videoCodec,
-            rateControl: .quality(quality),
+            rateControl: rateControl,
             scalePolicy: scalePolicy,
             frameRatePolicy: frameRatePolicy,
             audioPolicy: audioPolicy,
@@ -276,9 +296,26 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
               video.dynamicRange == .sdr,
               let bitDepth = video.bitDepth,
               bitDepth > 8 else {
-            return .h264VideoToolbox
+            return .h264Libx264
         }
         return .hevcMain10VideoToolbox
+    }
+
+    /// Flexible quality follows CompressO's bounded CRF curve: the exposed
+    /// 30...90% range maps to CRF 33...26, while Quick uses the preset's
+    /// highest-quality CRF 24 directly.
+    private func rateControl(
+        for codec: VideoCodec,
+        flexibleQuality quality: VideoQuality
+    ) throws -> RateControl {
+        switch codec {
+        case .h264Libx264:
+            let percentage = Int((quality.value * 100).rounded())
+            let crf = 36 - ((12 * percentage) / 100)
+            return .libx264CRF(try X264ConstantRateFactor(crf))
+        case .hevcMain10VideoToolbox:
+            return .videoToolboxQuality(quality)
+        }
     }
 
     private func scalePolicy(

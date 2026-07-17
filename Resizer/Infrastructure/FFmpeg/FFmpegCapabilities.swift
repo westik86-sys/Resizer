@@ -555,8 +555,8 @@ nonisolated struct FFmpegPreflightValidator: Sendable {
         )
 
         let encoder = switch recipe.videoCodec {
-        case .h264VideoToolbox:
-            "h264_videotoolbox"
+        case .h264Libx264:
+            "libx264"
         case .hevcMain10VideoToolbox:
             "hevc_videotoolbox"
         }

@@ -1,5 +1,8 @@
 # ADR 0011: Automatic compression and no-benefit outcomes
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Implemented; superseded in part by ADR 0012
 - Date: 2026-07-16
 - Source of truth: [`PLAN.md`](../../PLAN.md)

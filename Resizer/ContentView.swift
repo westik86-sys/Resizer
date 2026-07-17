@@ -1075,7 +1075,7 @@ struct ContentView: View {
     ) -> some View {
         DisclosureGroup("Diagnostics", isExpanded: $isDiagnosticsExpanded) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Resizer · FFmpeg \(CompressionPreferences.bundledFFmpegVersion) · LGPL-only")
+                Text("Resizer · FFmpeg \(CompressionPreferences.bundledFFmpegVersion) · GPL 2.0+")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -1464,7 +1464,7 @@ struct ContentView: View {
             )
         }
         let videoCodec = switch recipe.videoCodec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             "H.264"
         case .hevcMain10VideoToolbox:
             "HEVC 10-bit"

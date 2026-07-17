@@ -48,7 +48,7 @@ final class ResizerUITests: XCTestCase {
                 .waitForExistence(timeout: 2)
         )
         XCTAssertTrue(
-            app.descendants(matching: .any)["settings-lgpl-21"].exists
+            app.descendants(matching: .any)["settings-gpl-2"].exists
         )
     }
 
@@ -80,7 +80,7 @@ final class ResizerUITests: XCTestCase {
 
         XCTAssertTrue(
             app.staticTexts[
-                "FFmpeg встроен в Resizer и собран только с компонентами LGPL. Компоненты GPL и nonfree, включая libx264 и libx265, не включены."
+                "FFmpeg встроен в Resizer на условиях GPL 2.0 или более поздней версии и включает статически скомпонованный libx264. Компоненты nonfree и libx265 не включены."
             ].waitForExistence(timeout: 5)
         )
     }

@@ -1,46 +1,42 @@
 # Bundled FFmpeg toolchain
 
-Resizer builds `ffmpeg` and `ffprobe` from the official FFmpeg 8.1.2 source.
-The release tag is `n8.1.2` at commit
+Resizer builds `ffmpeg` and `ffprobe` from the official FFmpeg 8.1.2
+"Hoare" source. The release tag is `n8.1.2` at commit
 `38b88335f99e76ed89ff3c93f877fdefce736c13`.
 
-The binaries are a deliberately small LGPL 2.1-or-later profile for the
-toolchain spike:
+The binaries use a deliberately small GPL 2.0-or-later profile:
 
 - H.264 or HEVC video and AAC audio in MOV/MP4 input;
-- H.264 and HEVC VideoToolbox plus native AAC encoders;
+- software H.264 through statically linked libx264, HEVC Main10 through
+  VideoToolbox, and the native AAC encoder;
 - MP4 output;
 - local files, inherited file descriptors, and pipes only;
-- no network, external libraries, GPL, nonfree, libx264, or libx265 code.
+- no network, nonfree components, libx265, or package-manager libraries.
 
-Run `./Scripts/build-ffmpeg.sh` from any directory to verify the source archive,
-verify and apply the pinned patch under `patches/`, build independent `arm64`
+x264 is built first from the pinned source under `Vendor/x264/`. A fail-closed
+pkg-config shim exposes only that staged static library to FFmpeg. No installed
+FFmpeg or x264 is used. The arm64 x264 slice uses assembly; x86_64 currently
+uses the dependency-free C implementation because Xcode does not include NASM.
+That affects Intel encoding speed, not CRF behavior or output compatibility.
+
+Run `./Scripts/build-ffmpeg.sh` from any directory to verify both source
+archives, verify and apply the pinned FFmpeg patch, build independent `arm64`
 and `x86_64` slices with the macOS SDK, merge them with `lipo`, and refresh the
-capability and linkage reports under `build-config/`. The build uses a stable,
-non-user-specific work root, a virtual install prefix, and compiler prefix maps
-so the binaries and reports do not disclose a developer home or checkout path.
-Every invocation verifies the fixed work path and its ownership, takes an
-exclusive private lock, removes the previous work tree, and extracts,
-configures, and compiles from scratch; source trees, configure results, and
-object files are never reused. Binaries, reports, signatures, and their
-checksums are first produced and verified under that fresh work root. The
-checked-in `bin/`, `build-config/`, and build checksum manifest are replaced
-only after the staged LGPL profile, linkage, path privacy, code signatures, and
-checksums have all passed. Publication also preserves and rechecks executable
-`0755` and report/manifest `0644` modes despite the private build umask. A
-failed pre-publication check therefore leaves the checked-in artifacts
-untouched.
-Generated binary/report hashes are recorded separately in
-`checksums/BUILD_SHA256SUMS`; immutable source and patch pins remain in
-`checksums/SHA256SUMS`.
+reports under `build-config/`. The build uses a stable, non-user-specific work
+root, a virtual FFmpeg prefix, and compiler prefix maps so artifacts do not
+disclose a developer home or checkout path.
 
-The archive and detached signature are retained under `sources/` as the exact
-corresponding source for the distributed binaries. License texts are under
-`licenses/`. The LGPL-compatible local patch extends the seekable `fd` protocol
-with strict `fd:<number>` URLs and descriptor-local positional I/O on Darwin. A
-MOV `faststart` reopen therefore keeps using the same inherited descriptor
-without sharing its mutable offset with the writer. The descriptor must be
-read-write and should reference an empty regular file; streamed descriptors
-retain FFmpeg's sequential I/O behavior. See `build-config/profile.txt` for the
-fixed component profile and the generated reports for the exact configure
-commands and compiled features.
+Every invocation validates ownership and fixed paths, takes an exclusive lock,
+removes only its known work tree, and builds from fresh sources. It checks the
+x264 ABI and architecture, the macOS 14 deployment target, the required GPL
+and codec capabilities, system-only dynamic linkage, path privacy, signatures,
+and checksums before publishing. The checked-in `bin/`, `build-config/`, and
+`checksums/BUILD_SHA256SUMS` are replaced only after all staged checks pass.
+
+The unmodified FFmpeg archive and detached signature are retained under
+`sources/`. FFmpeg license texts are under `licenses/`; the x264 source,
+license, and checksum are retained under `Vendor/x264/`. The local FFmpeg patch
+extends the seekable `fd` protocol with strict `fd:<number>` URLs and
+Darwin descriptor-local positional I/O, allowing MOV `+faststart` to keep using
+the reserved inherited descriptor safely. See `build-config/profile.txt` for
+the fixed profile and the generated reports for exact configuration evidence.

@@ -267,9 +267,30 @@ release_verify_checksum_entry() {
     fi
 }
 
+release_require_no_xcode_user_data() {
+    SOURCE_ROOT=$1
+    SOURCE_PRIVATE_XCODE_DATA=$(find "$SOURCE_ROOT" -type d -name xcuserdata -print)
+    if [ -n "$SOURCE_PRIVATE_XCODE_DATA" ]; then
+        release_fail "Corresponding source must not contain Xcode xcuserdata"
+    fi
+}
+
 release_require_corresponding_source_files() {
     SOURCE_ROOT=$1
     for SOURCE_RELATIVE_PATH in \
+        LICENSE \
+        COPYRIGHT \
+        README.md \
+        PLAN.md \
+        AGENTS.md \
+        THIRD_PARTY_NOTICES.md \
+        docs/architecture.md \
+        docs/RELEASING.md \
+        docs/adr/0014-libx264-gpl-toolchain.md \
+        Resizer.xcodeproj/project.pbxproj \
+        Resizer.xcodeproj/project.xcworkspace/contents.xcworkspacedata \
+        Resizer/ResizerApp.swift \
+        ResizerTests/Integration/HeadlessTranscodingIntegrationTests.swift \
         Vendor/FFmpeg/sources/ffmpeg-8.1.2.tar.xz \
         Vendor/FFmpeg/sources/ffmpeg-8.1.2.tar.xz.asc \
         Vendor/FFmpeg/patches/0001-avformat-fd-accept-descriptor-in-url.patch \
@@ -279,15 +300,35 @@ release_require_corresponding_source_files() {
         Vendor/FFmpeg/build-config/ffmpeg-buildconf.txt \
         Vendor/FFmpeg/build-config/runtime-license.txt \
         Vendor/FFmpeg/build-config/profile.txt \
+        Vendor/FFmpeg/licenses/COPYING.GPLv2 \
         Vendor/FFmpeg/licenses/COPYING.LGPLv2.1 \
         Vendor/FFmpeg/licenses/COPYING.LGPLv3 \
         Vendor/FFmpeg/licenses/LICENSE.md \
         Scripts/build-ffmpeg.sh \
-        Scripts/support/pkg-config-disabled \
+        Vendor/x264/sources/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz \
+        Vendor/x264/checksums/SHA256SUMS \
+        Vendor/x264/licenses/COPYING \
+        Vendor/x264/patches/0001-reproducible-version-metadata.patch \
+        Vendor/x264/README.md \
+        Scripts/support/pkg-config-x264 \
         Configuration/FFmpegHelper.entitlements \
-        Resizer/Resources/ThirdParty/THIRD_PARTY_NOTICES.md; do
+        Resizer/Resources/ThirdParty/THIRD_PARTY_NOTICES.md \
+        Resizer/Resources/ThirdParty/COPYING.GPLv2.txt; do
         release_require_regular_file "$SOURCE_ROOT/$SOURCE_RELATIVE_PATH"
     done
+}
+
+release_verify_x264_source_pins() {
+    SOURCE_ROOT=$1
+    X264_CHECKSUMS="$SOURCE_ROOT/Vendor/x264/checksums/SHA256SUMS"
+    release_verify_checksum_entry \
+        "$X264_CHECKSUMS" \
+        sources/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz \
+        "$SOURCE_ROOT/Vendor/x264/sources/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz"
+    release_verify_checksum_entry \
+        "$X264_CHECKSUMS" \
+        patches/0001-reproducible-version-metadata.patch \
+        "$SOURCE_ROOT/Vendor/x264/patches/0001-reproducible-version-metadata.patch"
 }
 
 release_verify_ffmpeg_source_pins() {
@@ -310,6 +351,7 @@ release_verify_ffmpeg_source_pins() {
 release_verify_repository_ffmpeg_materials() {
     release_require_corresponding_source_files "$RELEASE_ROOT_DIR"
     release_verify_ffmpeg_source_pins "$RELEASE_ROOT_DIR"
+    release_verify_x264_source_pins "$RELEASE_ROOT_DIR"
     BUILD_CHECKSUMS="$RELEASE_ROOT_DIR/Vendor/FFmpeg/checksums/BUILD_SHA256SUMS"
     release_require_regular_file "$BUILD_CHECKSUMS"
     (

@@ -153,7 +153,7 @@ nonisolated struct TranscodeOutputValidator:
                 .unexpectedVideoStreamCount(actual: videos.count)
         }
         let expectedCodec = switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             "h264"
         case .hevcMain10VideoToolbox:
             "hevc"
@@ -167,7 +167,7 @@ nonisolated struct TranscodeOutputValidator:
 
         let pixelFormat = normalizedName(video.pixelFormat)
         let hasExpectedPixelFormat = switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             pixelFormat == "yuv420p"
         case .hevcMain10VideoToolbox:
             pixelFormat == "yuv420p10le" || pixelFormat == "p010le"
@@ -180,7 +180,7 @@ nonisolated struct TranscodeOutputValidator:
         }
 
         let hasExpectedRangeAndDepth = switch codec {
-        case .h264VideoToolbox:
+        case .h264Libx264:
             video.dynamicRange != .hdr
                 && (video.bitDepth.map { $0 <= 8 } ?? true)
         case .hevcMain10VideoToolbox:

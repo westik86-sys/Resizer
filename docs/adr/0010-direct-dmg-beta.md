@@ -1,5 +1,8 @@
 # ADR 0010: Direct notarized DMG beta
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted for Stage 11 preparation
 - Date: 2026-07-14
 - Source of truth: [`PLAN.md`](../../PLAN.md)

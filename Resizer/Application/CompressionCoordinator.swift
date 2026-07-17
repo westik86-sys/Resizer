@@ -1289,6 +1289,8 @@ actor JobQueueCoordinator: CompressionCoordinating, JobQueueCoordinating {
                 reason = .outputUnavailable
             case .inputOutputAlias:
                 reason = .outputConflict
+            case .incompatibleRateControl:
+                reason = .serviceUnavailable
             }
         } else if let serviceError =
             error as? FFmpegTranscodingServiceError {

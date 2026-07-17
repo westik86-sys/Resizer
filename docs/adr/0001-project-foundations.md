@@ -1,5 +1,8 @@
 # ADR 0001: Project foundations
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted for bootstrap; first-run UX amended by ADR 0011; codec defaults remain proposed
 - Date: 2026-07-13
 - Source of truth: [`PLAN.md`](../../PLAN.md)

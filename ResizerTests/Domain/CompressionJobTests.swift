@@ -65,7 +65,9 @@ struct CompressionJobTests {
             origin: .primary(.quick(audio: .keep)),
             container: primary.container,
             videoCodec: primary.videoCodec,
-            rateControl: .quality(try VideoQuality(0.35)),
+            rateControl: .libx264CRF(
+                try X264ConstantRateFactor(35)
+            ),
             scalePolicy: primary.scalePolicy,
             frameRatePolicy: primary.frameRatePolicy,
             audioPolicy: primary.audioPolicy,

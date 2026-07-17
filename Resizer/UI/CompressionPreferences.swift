@@ -9,7 +9,7 @@ nonisolated enum CompressionPreferences {
     static let maximumOutputFilenameSuffixLength = 40
 
     static let bundledFFmpegVersion = "8.1.2"
-    static let bundledFFmpegLicenseProfile = "LGPL 2.1-or-later"
+    static let bundledFFmpegLicenseProfile = "GPL 2.0-or-later"
 
     static func validateOutputFilenameSuffix(
         _ candidate: String

@@ -1,5 +1,8 @@
 # ADR 0008: Stage 10 safety and product hardening
 
+> Ordinary H.264 encoding, rate control, and licensing/source-distribution
+> details are superseded by [ADR 0014](0014-libx264-gpl-toolchain.md).
+
 - Status: Accepted
 - Date: 2026-07-14
 - Source of truth: [`PLAN.md`](../../PLAN.md)

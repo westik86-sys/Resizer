@@ -9,7 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 release_initialize
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-    release_fail "Usage: $0 <Resizer.dmg> [ffmpeg-source.tar.xz]"
+    release_fail "Usage: $0 <Resizer.dmg> [source.tar.xz]"
 fi
 
 absolute_release_artifact() {
@@ -30,12 +30,12 @@ release_require_regular_file "$DMG_PATH"
 if [ "$#" -eq 2 ]; then
     SOURCE_ARCHIVE_PATH=$(absolute_release_artifact "$2")
 else
-    SOURCE_ARCHIVE_PATH="${DMG_PATH%.dmg}-ffmpeg-source.tar.xz"
+    SOURCE_ARCHIVE_PATH="${DMG_PATH%.dmg}-source.tar.xz"
 fi
 release_require_direct_child_path "$SOURCE_ARCHIVE_PATH" "$RESIZER_RELEASE_ROOT"
 case "$(basename "$SOURCE_ARCHIVE_PATH")" in
-    *-ffmpeg-source.tar.xz) ;;
-    *) release_fail "The FFmpeg source bundle has an unexpected filename" ;;
+    *-source.tar.xz) ;;
+    *) release_fail "The corresponding source bundle has an unexpected filename" ;;
 esac
 release_require_regular_file "$SOURCE_ARCHIVE_PATH"
 
@@ -120,6 +120,19 @@ device_from_hdiutil_info() (
     exit 1
 )
 
+detach_image() {
+    DETACH_DEVICE=$1
+    DETACH_ATTEMPT=1
+    while [ "$DETACH_ATTEMPT" -le 3 ]; do
+        if hdiutil detach "$DETACH_DEVICE" >/dev/null 2>&1; then
+            return 0
+        fi
+        DETACH_ATTEMPT=$((DETACH_ATTEMPT + 1))
+        sleep 1
+    done
+    return 1
+}
+
 cleanup() {
     STATUS=$?
     trap - 0 1 2 15
@@ -134,7 +147,7 @@ cleanup() {
         fi
     fi
     if [ -n "$DEVICE_NODE" ]; then
-        if ! hdiutil detach "$DEVICE_NODE" >/dev/null 2>&1; then
+        if ! detach_image "$DEVICE_NODE"; then
             MOUNT_REMAINS=1
             echo "warning: could not detach release verification DMG at $DEVICE_NODE" >&2
         fi
@@ -184,7 +197,7 @@ if [ ! -L "$MOUNT_POINT/Applications" ] || \
     release_fail "DMG does not contain the expected Applications symlink"
 fi
 if ! cmp -s "$SOURCE_ARCHIVE_PATH" "$MOUNTED_SOURCE"; then
-    release_fail "DMG contains a different FFmpeg source bundle"
+    release_fail "DMG contains a different corresponding source bundle"
 fi
 
 if [ "$(plutil -extract CFBundleIdentifier raw "$INFO_PLIST")" != "com.example.Resizer" ]; then
@@ -294,13 +307,18 @@ fi
 
 for RESOURCE in \
     THIRD_PARTY_NOTICES.md \
+    COPYING.GPLv2.txt \
     COPYING.LGPLv2.1.txt \
     COPYING.LGPLv3.txt; do
     release_require_regular_file "$APP_PATH/Contents/Resources/$RESOURCE"
 done
-if ! grep -F 'GNU Lesser General' \
+if ! grep -F 'GPL version 2 or later' \
     "$APP_PATH/Contents/Resources/THIRD_PARTY_NOTICES.md" >/dev/null; then
-    release_fail "Bundled third-party notice does not disclose the LGPL"
+    release_fail "Bundled third-party notice does not disclose the GPL profile"
+fi
+if ! grep -F 'libx264' \
+    "$APP_PATH/Contents/Resources/THIRD_PARTY_NOTICES.md" >/dev/null; then
+    release_fail "Bundled third-party notice does not disclose libx264"
 fi
 
 if [ "$ALLOW_UNNOTARIZED" = "0" ]; then
@@ -310,11 +328,13 @@ fi
 # Helpers have the sandbox-inherit entitlement and intentionally are not
 # launched from Terminal. Their functional smoke test must run through Resizer.
 
-hdiutil detach "$DEVICE_NODE" >/dev/null
+if ! detach_image "$DEVICE_NODE"; then
+    release_fail "Could not detach the release verification DMG"
+fi
 ATTACH_ATTEMPTED=0
 DEVICE_NODE=
 
-release_note "Verifying self-contained FFmpeg source bundle"
+release_note "Verifying version-matched corresponding source bundle"
 if tar -tJf "$SOURCE_ARCHIVE_PATH" | awk -F/ '
     /^\// { unsafe = 1 }
     { for (field = 1; field <= NF; field++) if ($field == "..") unsafe = 1 }
@@ -322,26 +342,31 @@ if tar -tJf "$SOURCE_ARCHIVE_PATH" | awk -F/ '
 '; then
     :
 else
-    release_fail "FFmpeg source archive contains an unsafe path"
+    release_fail "Corresponding source archive contains an unsafe path"
 fi
 if ! tar -tvJf "$SOURCE_ARCHIVE_PATH" | awk '
     substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" { unsafe = 1 }
     END { exit unsafe }
 '; then
-    release_fail "FFmpeg source archive contains a link or special file"
+    release_fail "Corresponding source archive contains a link or special file"
 fi
 tar -xJf "$SOURCE_ARCHIVE_PATH" -C "$SOURCE_EXTRACT_ROOT"
 SOURCE_MANIFESTS=$(find "$SOURCE_EXTRACT_ROOT" -name SOURCE_SHA256SUMS -type f -print)
 if [ "$(printf '%s\n' "$SOURCE_MANIFESTS" | sed '/^$/d' | wc -l | tr -d ' ')" != "1" ]; then
-    release_fail "FFmpeg source archive must contain exactly one checksum manifest"
+    release_fail "Corresponding source archive must contain exactly one checksum manifest"
 fi
 SOURCE_PACKAGE_ROOT=$(dirname "$SOURCE_MANIFESTS")
+if [ "$(basename "$SOURCE_PACKAGE_ROOT")" != "Resizer-$APP_VERSION-$APP_BUILD-source" ]; then
+    release_fail "Corresponding source does not match the app version and build"
+fi
 (
     cd "$SOURCE_PACKAGE_ROOT"
     shasum -a 256 -c SOURCE_SHA256SUMS
 )
+release_require_no_xcode_user_data "$SOURCE_PACKAGE_ROOT"
 release_require_corresponding_source_files "$SOURCE_PACKAGE_ROOT"
 release_verify_ffmpeg_source_pins "$SOURCE_PACKAGE_ROOT"
+release_verify_x264_source_pins "$SOURCE_PACKAGE_ROOT"
 
 if [ "$ALLOW_UNNOTARIZED" = "0" ]; then
     CHECKSUM_MANIFEST=$(release_write_checksums "$DMG_PATH" "$SOURCE_ARCHIVE_PATH")

@@ -12,7 +12,10 @@ struct AutomaticCompressionPolicyTests {
         )
 
         expectCommonContract(recipe, origin: .primary(settings))
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.75)))
+        #expect(
+            recipe.rateControl
+                == .libx264CRF(try X264ConstantRateFactor(24))
+        )
         #expect(
             recipe.scalePolicy == .maximum(
                 try ResolutionLimit(
@@ -53,7 +56,10 @@ struct AutomaticCompressionPolicyTests {
             origin: .primary(settings),
             videoCodec: .hevcMain10VideoToolbox
         )
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.70)))
+        #expect(
+            recipe.rateControl
+                == .videoToolboxQuality(try VideoQuality(0.70))
+        )
     }
 
     @Test("Unknown-range ten-bit input does not enter the Main10 SDR path")
@@ -66,7 +72,7 @@ struct AutomaticCompressionPolicyTests {
 
         let recipe = try AutomaticCompressionPolicy().recipe(for: mediaInfo)
 
-        #expect(recipe.videoCodec == .h264VideoToolbox)
+        #expect(recipe.videoCodec == .h264Libx264)
     }
 
     @Test("Quick can remove audio from an input that contains it")
@@ -152,7 +158,10 @@ struct AutomaticCompressionPolicyTests {
                 )
 
                 expectCommonContract(recipe, origin: .primary(settings))
-                #expect(recipe.rateControl == .quality(try VideoQuality(0.75)))
+                #expect(
+                    recipe.rateControl
+                        == .libx264CRF(try X264ConstantRateFactor(27))
+                )
                 #expect(recipe.scalePolicy == resolution.1)
                 #expect(recipe.frameRatePolicy == frameRate.1)
                 #expect(
@@ -191,6 +200,31 @@ struct AutomaticCompressionPolicyTests {
         }
     }
 
+    @Test("Flexible H.264 quality follows the bounded CompressO CRF curve")
+    func flexibleX264QualityMapping() throws {
+        for (quality, expectedCRF) in [(0.30, 33), (0.75, 27), (0.90, 26)] {
+            let settings = PrimaryCompressionSettings.flexible(
+                try FlexibleCompressionSettings(
+                    quality: VideoQuality(quality),
+                    resolution: .source,
+                    frameRate: .source,
+                    audioPreference: .remove
+                )
+            )
+            let recipe = try AutomaticCompressionPolicy().recipe(
+                for: TestFixtures.mediaInfo(),
+                settings: settings
+            )
+
+            #expect(
+                recipe.rateControl
+                    == .libx264CRF(
+                        try X264ConstantRateFactor(expectedCRF)
+                    )
+            )
+        }
+    }
+
     @Test("Flexible keeps its selected quality on the Main10 path")
     func flexibleMain10Mode() throws {
         let mediaInfo = try TestFixtures.mediaInfo(
@@ -214,7 +248,10 @@ struct AutomaticCompressionPolicyTests {
         )
 
         #expect(recipe.videoCodec == .hevcMain10VideoToolbox)
-        #expect(recipe.rateControl == .quality(try VideoQuality(0.85)))
+        #expect(
+            recipe.rateControl
+                == .videoToolboxQuality(try VideoQuality(0.85))
+        )
         #expect(recipe.audioPolicy == .remove)
     }
 
@@ -235,7 +272,7 @@ struct AutomaticCompressionPolicyTests {
     private func expectCommonContract(
         _ recipe: CompressionRecipe,
         origin: RecipeOrigin,
-        videoCodec: VideoCodec = .h264VideoToolbox
+        videoCodec: VideoCodec = .h264Libx264
     ) {
         #expect(recipe.origin == origin)
         #expect(recipe.container == .mp4)

@@ -1,0 +1,11 @@
+prefix=/private/tmp/com.example.Resizer.ffmpeg-build/8.1.2-profile10/x264-prefix-arm64
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: x264
+Description: H.264 (MPEG4 AVC) encoder library
+Version: 0.165.3223
+Libs: -L${exec_prefix}/lib -lx264 -lpthread -lm
+Libs.private: 
+Cflags: -I${prefix}/include 
