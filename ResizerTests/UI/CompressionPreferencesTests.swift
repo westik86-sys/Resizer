@@ -1,8 +1,34 @@
+import Foundation
 import Testing
 @testable import Resizer
 
 @Suite("Compression preferences")
 struct CompressionPreferencesTests {
+    @Test("Automatic Finder reveal defaults on and honors an explicit opt-out")
+    @MainActor
+    func automaticRevealPreference() throws {
+        let suiteName = "ResizerTests.AutomaticReveal.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(
+            CompressionPreferences.automaticallyRevealCompletedOutputs(
+                in: defaults
+            )
+        )
+
+        defaults.set(
+            false,
+            forKey: CompressionPreferences
+                .automaticallyRevealCompletedOutputsKey
+        )
+        #expect(
+            !CompressionPreferences.automaticallyRevealCompletedOutputs(
+                in: defaults
+            )
+        )
+    }
+
     @Test("The default suffix is safe and normalized")
     func defaultSuffix() {
         #expect(

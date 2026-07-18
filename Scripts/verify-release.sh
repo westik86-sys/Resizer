@@ -278,9 +278,10 @@ extract_entitlements "$FFPROBE_EXECUTABLE" "$FFPROBE_ENTITLEMENTS"
 
 require_true_entitlement "$APP_ENTITLEMENTS" com.apple.security.app-sandbox
 require_true_entitlement "$APP_ENTITLEMENTS" com.apple.security.files.user-selected.read-write
+require_true_entitlement "$APP_ENTITLEMENTS" com.apple.security.files.downloads.read-write
 require_exact_entitlement_keys \
     "$APP_ENTITLEMENTS" \
-    "com.apple.security.app-sandbox com.apple.security.files.user-selected.read-write"
+    "com.apple.security.app-sandbox com.apple.security.files.user-selected.read-write com.apple.security.files.downloads.read-write"
 
 for HELPER_ENTITLEMENTS in "$FFMPEG_ENTITLEMENTS" "$FFPROBE_ENTITLEMENTS"; do
     require_true_entitlement "$HELPER_ENTITLEMENTS" com.apple.security.app-sandbox

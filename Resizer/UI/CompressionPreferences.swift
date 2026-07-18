@@ -3,13 +3,30 @@ import Foundation
 nonisolated enum CompressionPreferences {
     static let outputFilenameSuffixKey = "output.filenameSuffix"
     static let outputConflictPolicyKey = "output.conflictPolicy"
+    static let automaticallyRevealCompletedOutputsKey =
+        "output.automaticallyRevealCompletedOutputs"
 
     static let defaultOutputFilenameSuffix = "-compressed"
     static let defaultOutputConflictPolicy = OutputConflictPreference.appendNumericSuffix
+    static let defaultAutomaticallyRevealCompletedOutputs = true
     static let maximumOutputFilenameSuffixLength = 40
 
     static let bundledFFmpegVersion = "8.1.2"
     static let bundledFFmpegLicenseProfile = "GPL 2.0-or-later"
+
+    @MainActor
+    static func automaticallyRevealCompletedOutputs(
+        in userDefaults: UserDefaults = .standard
+    ) -> Bool {
+        guard userDefaults.object(
+            forKey: automaticallyRevealCompletedOutputsKey
+        ) != nil else {
+            return defaultAutomaticallyRevealCompletedOutputs
+        }
+        return userDefaults.bool(
+            forKey: automaticallyRevealCompletedOutputsKey
+        )
+    }
 
     static func validateOutputFilenameSuffix(
         _ candidate: String

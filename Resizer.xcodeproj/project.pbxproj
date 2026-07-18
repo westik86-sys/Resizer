@@ -7,8 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000000000000000000001 /* ffmpeg in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* ffmpeg */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		A10000000000000000000002 /* ffprobe in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* ffprobe */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A10000000000000000000001 /* Vendor/FFmpeg/bin/ffmpeg in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* Vendor/FFmpeg/bin/ffmpeg */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A10000000000000000000002 /* Vendor/FFmpeg/bin/ffprobe in Embed FFmpeg Tools */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* Vendor/FFmpeg/bin/ffprobe */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A20000000000000000000001 /* ProcessHarness in Embed Process Harness */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* ProcessHarness */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -43,8 +43,8 @@
 			dstPath = "";
 			dstSubfolderSpec = 6;
 			files = (
-				A10000000000000000000001 /* ffmpeg in Embed FFmpeg Tools */,
-				A10000000000000000000002 /* ffprobe in Embed FFmpeg Tools */,
+				A10000000000000000000001 /* Vendor/FFmpeg/bin/ffmpeg in Embed FFmpeg Tools */,
+				A10000000000000000000002 /* Vendor/FFmpeg/bin/ffprobe in Embed FFmpeg Tools */,
 			);
 			name = "Embed FFmpeg Tools";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -63,12 +63,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		A10000000000000000000003 /* ffmpeg */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffmpeg; sourceTree = SOURCE_ROOT; };
-		A10000000000000000000004 /* ffprobe */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffprobe; sourceTree = SOURCE_ROOT; };
-		A20000000000000000000004 /* ProcessHarness */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ProcessHarness; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037A730051DD200559267 /* Resizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Resizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037B430051DD400559267 /* ResizerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ResizerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DB037BE30051DD400559267 /* ResizerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ResizerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000003 /* Vendor/FFmpeg/bin/ffmpeg */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffmpeg; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000004 /* Vendor/FFmpeg/bin/ffprobe */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Vendor/FFmpeg/bin/ffprobe; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000004 /* ProcessHarness */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ProcessHarness; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -87,7 +87,7 @@
 			path = ResizerUITests;
 			sourceTree = "<group>";
 		};
-		A20000000000000000000005 /* ProcessHarness */ = {
+		A20000000000000000000005 /* Tests/ProcessHarness */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Tests/ProcessHarness;
 			sourceTree = "<group>";
@@ -132,19 +132,10 @@
 				2DB037A930051DD200559267 /* Resizer */,
 				2DB037B730051DD400559267 /* ResizerTests */,
 				2DB037C130051DD400559267 /* ResizerUITests */,
-				A20000000000000000000005 /* ProcessHarness */,
+				A20000000000000000000005 /* Tests/ProcessHarness */,
 				A10000000000000000000006 /* Bundled Tools */,
 				2DB037A830051DD200559267 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		A10000000000000000000006 /* Bundled Tools */ = {
-			isa = PBXGroup;
-			children = (
-				A10000000000000000000003 /* ffmpeg */,
-				A10000000000000000000004 /* ffprobe */,
-			);
-			name = "Bundled Tools";
 			sourceTree = "<group>";
 		};
 		2DB037A830051DD200559267 /* Products */ = {
@@ -156,6 +147,15 @@
 				A20000000000000000000004 /* ProcessHarness */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000006 /* Bundled Tools */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000003 /* Vendor/FFmpeg/bin/ffmpeg */,
+				A10000000000000000000004 /* Vendor/FFmpeg/bin/ffprobe */,
+			);
+			name = "Bundled Tools";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -244,7 +244,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				A20000000000000000000005 /* ProcessHarness */,
+				A20000000000000000000005 /* Tests/ProcessHarness */,
 			);
 			name = ProcessHarness;
 			packageProductDependencies = (
@@ -506,10 +506,12 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Resizer saves compressed video copies in your Downloads folder.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Resizer contributors. GPL-2.0-or-later.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -523,8 +525,8 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -539,10 +541,12 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Resizer saves compressed video copies in your Downloads folder.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Resizer contributors. GPL-2.0-or-later.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -556,8 +560,8 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
@@ -576,8 +580,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Resizer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Resizer";
 			};
@@ -597,8 +601,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Resizer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Resizer";
 			};
@@ -616,8 +620,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_TARGET_NAME = Resizer;
 			};
@@ -635,8 +639,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_TARGET_NAME = Resizer;
 			};

@@ -4,13 +4,22 @@ import Foundation
 struct AppComposition {
     let compressionFeatureModel: CompressionFeatureModel
 
-    init(dependencies: CompressionCoordinatorDependencies) {
+    init(
+        dependencies: CompressionCoordinatorDependencies,
+        initialOutputDirectoryURL: URL? = nil,
+        automaticallyRevealsCompletedOutputs: @escaping () -> Bool = {
+            false
+        }
+    ) {
         let coordinator = JobQueueCoordinator(dependencies: dependencies)
         compressionFeatureModel = CompressionFeatureModel(
             coordinator: coordinator,
             outputRevealer: WorkspaceOutputRevealer(
                 fileAccess: dependencies.fileAccess
-            )
+            ),
+            initialOutputDirectoryURL: initialOutputDirectoryURL,
+            automaticallyRevealsCompletedOutputs:
+                automaticallyRevealsCompletedOutputs
         )
     }
 
@@ -29,14 +38,37 @@ struct AppComposition {
             fileAccess: fileAccess
         )
 
+        let downloadsDirectoryURL = resolvedSystemDownloadsDirectoryURL(
+            from: FileManager.default.urls(
+                for: .downloadsDirectory,
+                in: .userDomainMask
+            )
+        )
+
         return AppComposition(
             dependencies: CompressionCoordinatorDependencies(
                 mediaProber: mediaProber,
                 transcoder: transcoder,
                 outputPlanner: OutputPlanner(),
                 fileAccess: fileAccess
-            )
+            ),
+            initialOutputDirectoryURL: downloadsDirectoryURL,
+            automaticallyRevealsCompletedOutputs: {
+                CompressionPreferences.automaticallyRevealCompletedOutputs()
+            }
         )
+    }
+
+    /// App Sandbox can surface common user folders through container-owned
+    /// symbolic links. Resolve only this trusted, system-provided candidate
+    /// before it reaches the file-access layer, which intentionally rejects
+    /// symbolic links supplied through ordinary workflow URLs.
+    static func resolvedSystemDownloadsDirectoryURL(
+        from candidates: [URL]
+    ) -> URL? {
+        candidates.first?
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
     }
 
     #if DEBUG

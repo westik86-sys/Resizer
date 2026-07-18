@@ -3,7 +3,7 @@
 - This repository is for a native macOS utility that creates smaller, compatible video copies through bundled FFmpeg tools.
 - Processing is local-first: application media is not uploaded and the product does not require network access.
 - Treat every input file as immutable. The original must never be modified or overwritten.
-- The happy path is: select or drop video, probe it, choose Quick or bounded Flexible settings, choose an output folder, transcode with visible progress, validate the temporary result, then either publish a smaller final copy or return a neutral no-benefit result.
+- The happy path is: select or drop video, probe it, choose Quick or bounded Flexible settings, use Downloads by default or choose another output folder for the session, transcode with visible progress, validate the temporary result, then either publish a smaller final copy or return a neutral no-benefit result. After the current queue drains, reveal successfully published results together in Finder when the default-on preference is enabled.
 - [`PLAN.md`](PLAN.md) is the complete source of product and technical requirements. Keep this file concise and consult the plan before every stage. If `PLAN.md` is unavailable, stop and request it rather than guessing.
 
 # MVP boundaries
@@ -45,6 +45,9 @@
 - Reject any plan that could overwrite or alias the input path.
 - Keep security-scoped access alive through encode, validation, and final commit or no-benefit cleanup.
 - Do not add unnecessary sandbox or network entitlements.
+- Downloads read/write access is an accepted narrow entitlement for the
+  zero-prompt default output; bundled helpers keep only App Sandbox plus
+  `com.apple.security.inherit`.
 - Treat paths and filenames as private in logs; keep diagnostics bounded and do not enable FFmpeg reports by default.
 
 # Licensing and distribution

@@ -9,7 +9,7 @@ Resizer is a native macOS utility for creating smaller, compatible video copies 
 - Deployment target: macOS 14+
 - Language and UI: Swift 6 with strict concurrency, SwiftUI
 - Architectures: standard macOS architectures (`arm64` and `x86_64`) for public Release builds
-- App Sandbox: enabled with user-selected read/write access; network access disabled
+- App Sandbox: enabled with Downloads and user-selected read/write access; network access disabled
 - Hardened Runtime: enabled for the planned Developer ID channel
 - Planned first distribution channel: Developer ID with notarization
 - Bundled toolchain: FFmpeg 8.1.2 with static x264, minimal GPL 2.0-or-later profile

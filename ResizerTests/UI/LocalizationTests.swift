@@ -14,6 +14,22 @@ struct LocalizationTests {
         #expect(localizations.contains("ru"))
     }
 
+    @Test("The Downloads privacy prompt is localized")
+    func downloadsPrivacyPrompt() {
+        #expect(
+            localizedInfo(
+                "NSDownloadsFolderUsageDescription",
+                localization: "en"
+            ) == "Resizer saves compressed video copies in your Downloads folder."
+        )
+        #expect(
+            localizedInfo(
+                "NSDownloadsFolderUsageDescription",
+                localization: "ru"
+            ) == "Resizer сохраняет сжатые копии видео в папке «Загрузки»."
+        )
+    }
+
     @Test("Representative static and computed strings are translated")
     func representativeTranslations() {
         #expect(localized("Queue", localization: "en") == "Queue")
@@ -68,6 +84,18 @@ struct LocalizationTests {
                 "The compressed copy could not be shown in Finder.",
                 localization: "ru"
             ) == "Не удалось показать сжатую копию в Finder."
+        )
+        #expect(
+            localized(
+                "Show results in Finder after completion",
+                localization: "ru"
+            ) == "Показывать результаты в Finder после завершения"
+        )
+        #expect(
+            localized(
+                "The compressed copies could not be shown in Finder.",
+                localization: "ru"
+            ) == "Не удалось показать сжатые копии в Finder."
         )
         #expect(
             localized(
@@ -199,6 +227,23 @@ struct LocalizationTests {
             forKey: key,
             value: nil,
             table: "Localizable"
+        )
+    }
+
+    private func localizedInfo(
+        _ key: String,
+        localization: String
+    ) -> String {
+        guard let path = Bundle.main.path(
+            forResource: localization,
+            ofType: "lproj"
+        ), let bundle = Bundle(path: path) else {
+            return "Missing localization: \(localization)"
+        }
+        return bundle.localizedString(
+            forKey: key,
+            value: nil,
+            table: "InfoPlist"
         )
     }
 

@@ -9,15 +9,27 @@ protocol OutputRevealing {
         in outputDirectoryURL: URL
     ) async throws
     func reveal(
+        _ outputURLs: [URL],
+        in outputDirectoryURLs: [URL]
+    ) async throws
+}
+
+extension OutputRevealing {
+    func reveal(
         _ outputURL: URL,
         in outputDirectoryURL: URL
-    ) async throws
+    ) async throws {
+        try await reveal(
+            [outputURL],
+            in: [outputDirectoryURL]
+        )
+    }
 }
 
 @MainActor
 protocol OutputLaunching: Sendable {
     func open(_ outputURL: URL) -> Bool
-    func reveal(_ outputURL: URL) -> Bool
+    func reveal(_ outputURLs: [URL]) -> Bool
 }
 
 @MainActor
@@ -26,8 +38,8 @@ struct WorkspaceOutputLauncher: OutputLaunching {
         NSWorkspace.shared.open(outputURL)
     }
 
-    func reveal(_ outputURL: URL) -> Bool {
-        NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+    func reveal(_ outputURLs: [URL]) -> Bool {
+        NSWorkspace.shared.activateFileViewerSelecting(outputURLs)
         return true
     }
 }
@@ -66,19 +78,37 @@ struct WorkspaceOutputRevealer: OutputRevealing {
     }
 
     func reveal(
-        _ outputURL: URL,
-        in outputDirectoryURL: URL
+        _ outputURLs: [URL],
+        in outputDirectoryURLs: [URL]
     ) async throws {
+        guard !outputURLs.isEmpty else { return }
         let launcher = launcher
         let revealed = try await fileAccess.withSecurityScopedAccess(
-            to: [outputDirectoryURL]
+            to: outputDirectoryURLs
         ) {
             await MainActor.run {
-                launcher.reveal(outputURL)
+                guard !currentTaskIsCancelled() else { return false }
+                return launcher.reveal(outputURLs)
             }
         }
         guard revealed else { throw OutputRevealError.revealFailed }
     }
+}
+
+private nonisolated func currentTaskIsCancelled() -> Bool {
+    withUnsafeCurrentTask { task in
+        task?.isCancelled ?? false
+    }
+}
+
+private nonisolated struct PendingFinderReveal: Sendable, Equatable {
+    let outputURL: URL
+    let outputDirectoryURL: URL
+}
+
+private nonisolated struct FinderRevealCompletionKey: Sendable, Hashable {
+    let jobID: CompressionJob.ID
+    let standardizedOutputPath: String
 }
 
 @MainActor
@@ -137,9 +167,17 @@ final class CompressionFeatureModel: ObservableObject {
     private let coordinator: any JobQueueCoordinating
     private let outputRevealer: any OutputRevealing
     private let diagnosticCopier: any DiagnosticCopying
+    private let automaticallyRevealsCompletedOutputs: () -> Bool
     private var observationTask: Task<Void, Never>?
+    private var automaticRevealTask: Task<Void, Never>?
+    private var automaticRevealBatches: [[PendingFinderReveal]] = []
     private var pendingImportedSelectionID: CompressionJob.ID?
     private var lastConsumedSnapshotRevision: UInt64?
+    private var seenFinderRevealCompletions: Set<
+        FinderRevealCompletionKey
+    > = []
+    private var pendingFinderReveals: [PendingFinderReveal] = []
+    private var isShuttingDown = false
 
     private var etaJobID: CompressionJob.ID?
     private var etaSpeedSamples: [Double] = []
@@ -150,11 +188,18 @@ final class CompressionFeatureModel: ObservableObject {
         outputRevealer: any OutputRevealing = WorkspaceOutputRevealer(
             fileAccess: SecurityScopedFileAccess()
         ),
-        diagnosticCopier: any DiagnosticCopying = PasteboardDiagnosticCopier()
+        diagnosticCopier: any DiagnosticCopying = PasteboardDiagnosticCopier(),
+        initialOutputDirectoryURL: URL? = nil,
+        automaticallyRevealsCompletedOutputs: @escaping () -> Bool = {
+            false
+        }
     ) {
         self.coordinator = coordinator
         self.outputRevealer = outputRevealer
         self.diagnosticCopier = diagnosticCopier
+        self.outputDirectoryURL = initialOutputDirectoryURL
+        self.automaticallyRevealsCompletedOutputs =
+            automaticallyRevealsCompletedOutputs
 
         observationTask = Task { [weak self, coordinator] in
             let updates = await coordinator.snapshots()
@@ -167,6 +212,7 @@ final class CompressionFeatureModel: ObservableObject {
 
     deinit {
         observationTask?.cancel()
+        automaticRevealTask?.cancel()
     }
 
     var jobs: [CompressionJob] {
@@ -649,7 +695,8 @@ final class CompressionFeatureModel: ObservableObject {
         do {
             if retriesProbe {
                 // Probe failures return to `ready`; the user can then inspect
-                // metadata and choose an output folder before queueing.
+                // metadata and optionally change the output folder before
+                // queueing.
                 _ = try await coordinator.prepare(jobID: jobID)
             } else if let configuration {
                 _ = try await coordinator.retryQueued(
@@ -813,6 +860,11 @@ final class CompressionFeatureModel: ObservableObject {
     /// every active workflow, then captures the terminal state before normal
     /// application termination is allowed to continue.
     func shutdown() async {
+        isShuttingDown = true
+        pendingFinderReveals.removeAll()
+        automaticRevealBatches.removeAll()
+        automaticRevealTask?.cancel()
+        automaticRevealTask = nil
         observationTask?.cancel()
         observationTask = nil
         await coordinator.shutdown()
@@ -945,6 +997,90 @@ final class CompressionFeatureModel: ObservableObject {
 
         updateETA(from: activeJob)
         recomputeScreenState()
+        collectAutomaticFinderReveals(from: snapshot)
+    }
+
+    private func collectAutomaticFinderReveals(
+        from snapshot: CompressionSnapshot
+    ) {
+        for job in snapshot.jobs {
+            guard case .completed(let result) = job.state,
+                  let outputDirectoryURL = job.configuration?
+                    .outputPolicy.directoryURL else {
+                continue
+            }
+            let completionKey = FinderRevealCompletionKey(
+                jobID: job.id,
+                standardizedOutputPath: result.outputURL
+                    .standardizedFileURL.path
+            )
+            guard seenFinderRevealCompletions.insert(
+                completionKey
+            ).inserted else {
+                continue
+            }
+            let candidate = PendingFinderReveal(
+                outputURL: result.outputURL,
+                outputDirectoryURL: outputDirectoryURL
+            )
+            pendingFinderReveals.append(candidate)
+        }
+
+        guard !snapshot.isDraining,
+              !pendingFinderReveals.isEmpty else {
+            return
+        }
+
+        let reveals = pendingFinderReveals
+        pendingFinderReveals.removeAll()
+        guard !isShuttingDown,
+              automaticallyRevealsCompletedOutputs() else {
+            return
+        }
+
+        automaticRevealBatches.append(reveals)
+        startAutomaticFinderRevealWorkerIfNeeded()
+    }
+
+    private func startAutomaticFinderRevealWorkerIfNeeded() {
+        guard automaticRevealTask == nil else { return }
+        automaticRevealTask = Task { [weak self] in
+            await self?.drainAutomaticFinderRevealBatches()
+        }
+    }
+
+    private func drainAutomaticFinderRevealBatches() async {
+        defer { automaticRevealTask = nil }
+        while !Task.isCancelled,
+              !isShuttingDown,
+              !automaticRevealBatches.isEmpty {
+            let reveals = automaticRevealBatches.removeFirst()
+            await performAutomaticFinderReveal(reveals)
+        }
+    }
+
+    private func performAutomaticFinderReveal(
+        _ reveals: [PendingFinderReveal]
+    ) async {
+        guard !Task.isCancelled, !isShuttingDown else { return }
+        do {
+            try await outputRevealer.reveal(
+                reveals.map(\.outputURL),
+                in: reveals.map(\.outputDirectoryURL)
+            )
+        } catch {
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            let message = reveals.count == 1
+                ? String(
+                    localized: "The compressed copy could not be shown in Finder."
+                )
+                : String(
+                    localized: "The compressed copies could not be shown in Finder."
+                )
+            presentValidationError(
+                message
+            )
+        }
     }
 
     private func recomputeScreenState() {

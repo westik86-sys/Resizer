@@ -1637,6 +1637,22 @@
         }
       }
     },
+    "Finder opens once after the current queue finishes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finder opens once after the current queue finishes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finder откроется один раз после завершения текущей очереди."
+          }
+        }
+      }
+    },
     "FFmpeg is bundled with Resizer under GPL 2.0-or-later and includes statically linked libx264. Nonfree components and libx265 are not included." : {
       "localizations" : {
         "en" : {
@@ -2901,6 +2917,22 @@
         }
       }
     },
+    "Show results in Finder after completion" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show results in Finder after completion"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показывать результаты в Finder после завершения"
+          }
+        }
+      }
+    },
     "Some items were skipped. Resizer accepts local MOV and MP4 videos." : {
       "localizations" : {
         "en" : {
@@ -3240,6 +3272,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не удалось показать сжатую копию в Finder."
+          }
+        }
+      }
+    },
+    "The compressed copies could not be shown in Finder." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The compressed copies could not be shown in Finder."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось показать сжатые копии в Finder."
           }
         }
       }

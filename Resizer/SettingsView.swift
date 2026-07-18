@@ -7,6 +7,10 @@ struct SettingsView: View {
     @AppStorage(CompressionPreferences.outputConflictPolicyKey)
     private var storedConflictPolicy = CompressionPreferences.defaultOutputConflictPolicy.rawValue
 
+    @AppStorage(CompressionPreferences.automaticallyRevealCompletedOutputsKey)
+    private var automaticallyRevealCompletedOutputs = CompressionPreferences
+        .defaultAutomaticallyRevealCompletedOutputs
+
     @State private var filenameSuffixDraft = CompressionPreferences.defaultOutputFilenameSuffix
 
     var body: some View {
@@ -31,6 +35,18 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings-output-conflict-policy")
 
                 Text(conflictPolicy.helpText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle(
+                    "Show results in Finder after completion",
+                    isOn: $automaticallyRevealCompletedOutputs
+                )
+                .accessibilityIdentifier(
+                    "settings-automatically-reveal-completed-outputs"
+                )
+
+                Text("Finder opens once after the current queue finishes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

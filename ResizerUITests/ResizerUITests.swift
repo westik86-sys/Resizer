@@ -44,6 +44,11 @@ final class ResizerUITests: XCTestCase {
                 || app.otherElements["settings-output-conflict-policy"].exists
         )
         XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "settings-automatically-reveal-completed-outputs"
+            ].exists
+        )
+        XCTAssertTrue(
             app.descendants(matching: .any)["settings-third-party-notices"]
                 .waitForExistence(timeout: 2)
         )

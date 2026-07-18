@@ -178,8 +178,10 @@ download channel testers will use. Do not remove quarantine attributes.
 2. Confirm the first-launch Gatekeeper dialog identifies the developer and does
    not require a privacy/security bypass.
 3. Import one H.264 and one supported SDR HEVC video together.
-4. Complete both queue jobs and play both resulting MP4 files.
-5. Confirm progress, results, Finder reveal, retry, and normal quit.
+4. Without choosing an output folder, complete both queue jobs and play both
+   MP4 files published in Downloads.
+5. Confirm Finder opens once after the queue drains and selects both results;
+   also confirm explicit reveal, retry, and normal quit.
 6. Compare source hashes before and after; originals must be unchanged.
 7. Confirm no `.partial.mp4` remains after success, cancel, or failure.
 8. Repeat the smoke encode on Intel hardware or under Rosetta.

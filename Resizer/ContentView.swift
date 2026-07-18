@@ -737,7 +737,11 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     if let outputURL = model.outputDirectoryURL {
-                        Text(outputURL.lastPathComponent)
+                        Text(
+                            FileManager.default.displayName(
+                                atPath: outputURL.path
+                            )
+                        )
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Text("Output: source name\(validatedFilenameSuffix).mp4")

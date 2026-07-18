@@ -112,6 +112,32 @@ struct CompressionFeatureModelTests {
         #expect(model.snapshot.queuedJobIDs == [model.jobs[1].id])
     }
 
+    @Test("The injected Downloads default starts without a folder prompt")
+    func defaultOutputDirectoryStartsImmediately() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let downloadsURL = URL(
+            fileURLWithPath: "/tmp/ResizerTests/Downloads",
+            isDirectory: true
+        )
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            initialOutputDirectoryURL: downloadsURL
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/source.mp4"))
+
+        #expect(model.outputDirectoryURL == downloadsURL)
+        #expect(model.canStart)
+
+        await model.start()
+
+        let jobID = try #require(model.jobs.first?.id)
+        let configuration = try #require(
+            (await coordinator.recordedCalls()).configurations[jobID]
+        )
+        #expect(configuration.outputPolicy.directoryURL == downloadsURL)
+    }
+
     @Test("Compression drafts default to Quick and stay isolated per video")
     func compressionDraftsArePerJob() async throws {
         let coordinator = QueueFeatureCoordinatorFake()
@@ -830,6 +856,292 @@ struct CompressionFeatureModelTests {
         #expect(model.selectedJobID == otherID)
     }
 
+    @Test("Automatic reveal waits for queue drain and sends one batch")
+    func automaticRevealWaitsForQueueDrain() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/first.mp4"),
+            URL(fileURLWithPath: "/tmp/second.mp4"),
+        ])
+        let firstID = model.jobs[0].id
+        let secondID = model.jobs[1].id
+        let firstOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/first-compressed.mp4"
+        )
+        let secondOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/second-compressed.mp4"
+        )
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: firstID,
+            outputURL: firstOutput,
+            keepQueueDraining: true
+        )
+        #expect(await eventually {
+            guard let job = model.job(id: firstID),
+                  case .completed = job.state else {
+                return false
+            }
+            return true
+        })
+        #expect(revealer.revealBatches.isEmpty)
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: secondID,
+            outputURL: secondOutput,
+            keepQueueDraining: true
+        )
+        #expect(await eventually {
+            guard let job = model.job(id: secondID),
+                  case .completed = job.state else {
+                return false
+            }
+            return true
+        })
+        #expect(revealer.revealBatches.isEmpty)
+
+        await coordinator.finishQueueDrain()
+
+        #expect(await eventually { revealer.revealBatches.count == 1 })
+        #expect(revealer.revealBatches == [[firstOutput, secondOutput]])
+        #expect(
+            revealer.revealedDirectoryBatches
+                == [[
+                    URL(
+                        fileURLWithPath: "/tmp/ResizerTests",
+                        isDirectory: true
+                    ),
+                    URL(
+                        fileURLWithPath: "/tmp/ResizerTests",
+                        isDirectory: true
+                    ),
+                ]]
+        )
+
+        await model.refresh()
+        await model.refresh()
+        #expect(revealer.revealBatches.count == 1)
+    }
+
+    @Test("A completed first snapshot is still revealed")
+    func completedInitialSnapshotIsRevealed() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let jobID = UUID()
+        let outputURL = URL(
+            fileURLWithPath: "/tmp/ResizerTests/initial-completed.mp4"
+        )
+        _ = try await coordinator.createJob(
+            inputURL: URL(fileURLWithPath: "/tmp/initial.mp4"),
+            id: jobID,
+            createdAt: .now
+        )
+        _ = try await coordinator.prepare(jobID: jobID)
+        try await coordinator.replaceWithCompletedJob(
+            jobID: jobID,
+            outputURL: outputURL
+        )
+
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+
+        #expect(await eventually { revealer.revealBatches == [[outputURL]] })
+        #expect(model.job(id: jobID)?.state.phase == .completed)
+    }
+
+    @Test("Automatic reveals from separate drains run serially")
+    func automaticRevealBatchesAreSerialized() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = GatedOutputRevealerSpy()
+        defer { revealer.releaseFirstReveal() }
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/first.mp4"),
+            URL(fileURLWithPath: "/tmp/second.mp4"),
+        ])
+        let firstOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/first.mp4"
+        )
+        let secondOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/second.mp4"
+        )
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: model.jobs[0].id,
+            outputURL: firstOutput
+        )
+        #expect(await eventually { revealer.revealBatches.count == 1 })
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: model.jobs[1].id,
+            outputURL: secondOutput
+        )
+        #expect(await eventually {
+            model.job(id: model.jobs[1].id)?.state.phase == .completed
+        })
+        await Task.yield()
+        #expect(revealer.revealBatches == [[firstOutput]])
+
+        revealer.releaseFirstReveal()
+        #expect(await eventually { revealer.revealBatches.count == 2 })
+        #expect(revealer.revealBatches == [[firstOutput], [secondOutput]])
+    }
+
+    @Test("A later queue drain reveals only newly completed outputs")
+    func laterDrainRevealsOnlyNewOutputs() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/first.mp4"),
+            URL(fileURLWithPath: "/tmp/second.mp4"),
+        ])
+        let firstOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/first.mp4"
+        )
+        let secondOutput = URL(
+            fileURLWithPath: "/tmp/ResizerTests/second.mp4"
+        )
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: model.jobs[0].id,
+            outputURL: firstOutput
+        )
+        #expect(await eventually { revealer.revealBatches.count == 1 })
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: model.jobs[1].id,
+            outputURL: secondOutput
+        )
+        #expect(await eventually { revealer.revealBatches.count == 2 })
+
+        #expect(revealer.revealBatches == [[firstOutput], [secondOutput]])
+    }
+
+    @Test("Automatic Finder reveal can be disabled")
+    func automaticRevealCanBeDisabled() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { false }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/done.mp4"))
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: try #require(model.jobs.first?.id),
+            outputURL: URL(
+                fileURLWithPath: "/tmp/ResizerTests/done.mp4"
+            )
+        )
+        #expect(await eventually {
+            guard let job = model.jobs.first,
+                  case .completed = job.state else {
+                return false
+            }
+            return true
+        })
+        await Task.yield()
+
+        #expect(revealer.revealBatches.isEmpty)
+    }
+
+    @Test("A failed automatic reveal is not retried by snapshot replay")
+    func automaticRevealFailureIsAttemptedOnce() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        revealer.revealError = OutputRevealError.revealFailed
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideo(URL(fileURLWithPath: "/tmp/done.mp4"))
+
+        try await coordinator.replaceWithCompletedJob(
+            jobID: try #require(model.jobs.first?.id),
+            outputURL: URL(
+                fileURLWithPath: "/tmp/ResizerTests/done.mp4"
+            )
+        )
+        #expect(await eventually {
+            revealer.revealBatches.count == 1
+                && model.validationMessage != nil
+        })
+        #expect(
+            model.validationMessage
+                == "The compressed copy could not be shown in Finder."
+        )
+
+        await model.refresh()
+        await model.refresh()
+        await Task.yield()
+
+        #expect(revealer.revealBatches.count == 1)
+    }
+
+    @Test("Terminal outcomes without an output never reveal Finder")
+    func nonOutputTerminalStatesDoNotReveal() async throws {
+        let coordinator = QueueFeatureCoordinatorFake()
+        let revealer = OutputRevealerSpy()
+        let model = CompressionFeatureModel(
+            coordinator: coordinator,
+            outputRevealer: revealer,
+            automaticallyRevealsCompletedOutputs: { true }
+        )
+        await coordinator.waitUntilSubscribed()
+        await model.importVideos([
+            URL(fileURLWithPath: "/tmp/no-benefit.mp4"),
+            URL(fileURLWithPath: "/tmp/failure.mp4"),
+            URL(fileURLWithPath: "/tmp/cancelled.mp4"),
+        ])
+
+        try await coordinator.replaceWithNoBenefitJob(
+            jobID: model.jobs[0].id
+        )
+        try await coordinator.replaceWithEncodeFailure(
+            jobID: model.jobs[1].id,
+            diagnostic: try BoundedDiagnostic(
+                text: "failure",
+                utf8ByteLimit: 64,
+                wasTruncated: false
+            )
+        )
+        try await coordinator.replaceWithUnconfiguredCancelledJob(
+            jobID: model.jobs[2].id
+        )
+        #expect(await eventually {
+            model.finishedJobs.count == 3
+        })
+        await Task.yield()
+
+        #expect(revealer.revealBatches.isEmpty)
+    }
+
     @Test("Application shutdown is forwarded to the queue coordinator")
     func shutdownForwarding() async {
         let coordinator = QueueFeatureCoordinatorFake()
@@ -904,6 +1216,40 @@ struct WorkspaceOutputRevealerTests {
         )
         #expect(scopeRecorder.activePaths.isEmpty)
     }
+
+    @Test("A cancelled reveal never launches Finder")
+    @MainActor
+    func cancelledRevealDoesNotLaunchFinder() async {
+        let outputDirectoryURL = URL(
+            fileURLWithPath: "/tmp/ResizerTests/output",
+            isDirectory: true
+        )
+        let outputURL = outputDirectoryURL.appendingPathComponent("result.mp4")
+        let scopeRecorder = OutputScopeRecorder()
+        let launcher = OutputWorkspaceLauncherSpy(
+            scopeRecorder: scopeRecorder,
+            expectedScopedPath: outputDirectoryURL.path
+        )
+        let revealer = WorkspaceOutputRevealer(
+            fileAccess: SecurityScopedFileAccess(
+                startAccessing: scopeRecorder.start,
+                stopAccessing: scopeRecorder.stop
+            ),
+            launcher: launcher
+        )
+
+        let task = Task {
+            try await revealer.reveal(
+                [outputURL],
+                in: [outputDirectoryURL]
+            )
+        }
+        task.cancel()
+        _ = await task.result
+
+        #expect(launcher.revealBatches.isEmpty)
+        #expect(scopeRecorder.activePaths.isEmpty)
+    }
 }
 
 @MainActor
@@ -912,6 +1258,9 @@ private final class OutputRevealerSpy: OutputRevealing {
     private(set) var revealedURLs: [URL] = []
     private(set) var openedDirectoryURLs: [URL] = []
     private(set) var revealedDirectoryURLs: [URL] = []
+    private(set) var revealBatches: [[URL]] = []
+    private(set) var revealedDirectoryBatches: [[URL]] = []
+    var revealError: (any Error)?
 
     func open(
         _ outputURL: URL,
@@ -922,11 +1271,42 @@ private final class OutputRevealerSpy: OutputRevealing {
     }
 
     func reveal(
+        _ outputURLs: [URL],
+        in outputDirectoryURLs: [URL]
+    ) async throws {
+        revealBatches.append(outputURLs)
+        revealedDirectoryBatches.append(outputDirectoryURLs)
+        revealedURLs.append(contentsOf: outputURLs)
+        revealedDirectoryURLs.append(contentsOf: outputDirectoryURLs)
+        if let revealError { throw revealError }
+    }
+}
+
+@MainActor
+private final class GatedOutputRevealerSpy: OutputRevealing {
+    private(set) var revealBatches: [[URL]] = []
+    private var firstRevealContinuation: CheckedContinuation<Void, Never>?
+
+    func open(
         _ outputURL: URL,
         in outputDirectoryURL: URL
+    ) async throws {}
+
+    func reveal(
+        _ outputURLs: [URL],
+        in outputDirectoryURLs: [URL]
     ) async throws {
-        revealedURLs.append(outputURL)
-        revealedDirectoryURLs.append(outputDirectoryURL)
+        revealBatches.append(outputURLs)
+        guard revealBatches.count == 1 else { return }
+        await withCheckedContinuation { continuation in
+            firstRevealContinuation = continuation
+        }
+    }
+
+    func releaseFirstReveal() {
+        let continuation = firstRevealContinuation
+        firstRevealContinuation = nil
+        continuation?.resume()
     }
 }
 
@@ -937,6 +1317,7 @@ private final class OutputWorkspaceLauncherSpy: OutputLaunching {
 
     private(set) var openedURLs: [URL] = []
     private(set) var revealedURLs: [URL] = []
+    private(set) var revealBatches: [[URL]] = []
     private(set) var openWasScoped = false
     private(set) var revealWasScoped = false
 
@@ -954,8 +1335,9 @@ private final class OutputWorkspaceLauncherSpy: OutputLaunching {
         return true
     }
 
-    func reveal(_ outputURL: URL) -> Bool {
-        revealedURLs.append(outputURL)
+    func reveal(_ outputURLs: [URL]) -> Bool {
+        revealBatches.append(outputURLs)
+        revealedURLs.append(contentsOf: outputURLs)
         revealWasScoped = scopeRecorder.activePaths.contains(expectedScopedPath)
         return true
     }
@@ -1099,6 +1481,7 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
     private var jobsByID: [CompressionJob.ID: CompressionJob] = [:]
     private var jobOrder: [CompressionJob.ID] = []
     private var activeJobID: CompressionJob.ID?
+    private var keepsQueueDraining = false
     private var snapshotRevision: UInt64 = 0
     private var replayedSnapshotForNextDirectRead: CompressionSnapshot?
     private var continuations: [
@@ -1335,7 +1718,7 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         CompressionSnapshot(
             jobs: jobOrder.compactMap { jobsByID[$0] },
             activeJobID: activeJobID,
-            isDraining: activeJobID != nil,
+            isDraining: activeJobID != nil || keepsQueueDraining,
             revision: snapshotRevision
         )
     }
@@ -1463,7 +1846,8 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
 
     func replaceWithCompletedJob(
         jobID: CompressionJob.ID,
-        outputURL: URL
+        outputURL: URL,
+        keepQueueDraining: Bool = false
     ) throws {
         var job = try makeReadyJob(jobID: jobID)
         try job.configure(
@@ -1485,6 +1869,12 @@ private actor QueueFeatureCoordinatorFake: JobQueueCoordinating {
         )
         jobsByID[jobID] = job
         if activeJobID == jobID { activeJobID = nil }
+        keepsQueueDraining = keepQueueDraining
+        publish()
+    }
+
+    func finishQueueDrain() {
+        keepsQueueDraining = false
         publish()
     }
 

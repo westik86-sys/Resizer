@@ -99,6 +99,10 @@ Observed output:
 - selected input SHA-256 after the run:
   `2b583df8793d843106cf1ce1dc09104f3bb36e0bb7698d8cc09fae2a0b37f7a3`.
 
+> The later Downloads entitlement and default-output policy are defined by
+> [ADR 0017](0017-downloads-default-and-finder-reveal.md). The entitlement list
+> below records the original toolchain checkpoint rather than current policy.
+
 `Resizer`, `ffmpeg`, and `ffprobe` each contain `arm64` and `x86_64`, target
 macOS 14.0, have executable mode 755, and pass strict all-architecture code-sign
 verification. The app has only App Sandbox plus user-selected read/write access;

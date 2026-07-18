@@ -10,7 +10,9 @@ localization. Quick/Flexible selection is defined by
 `noBenefit` contracts remain defined by
 [ADR 0011](adr/0011-automatic-compression.md). The current all-libx264 output,
 high-bit-depth/chroma, and CRF policy is defined by
-[ADR 0016](adr/0016-libx264-high-bit-depth-chroma.md).
+[ADR 0016](adr/0016-libx264-high-bit-depth-chroma.md). The Downloads default
+and automatic Finder presentation policy are defined by
+[ADR 0017](adr/0017-downloads-default-and-finder-reveal.md).
 
 ## Dependency direction
 
@@ -37,7 +39,7 @@ FFmpegTranscodingService
             -> exact inherited output descriptor as child fd 3
 
 SecurityScopedFileAccess
-    -> retained user-selected URL scopes
+    -> retained user-selected URL scopes or static Downloads access
     -> anonymous O_RDWR staging file plus retained directory descriptor
     -> exact descriptor metadata and file-type checks
     -> no-replace fclonefileat publication
@@ -451,6 +453,13 @@ replacing newer UI state.
 snapshots. It owns only transient presentation state: selection, per-ready-job
 Quick/Flexible drafts, import and button activity, output selection, validation
 messages, and smoothed ETA.
+The production composition root supplies the system user-domain Downloads URL
+as the initial output directory. A selected override affects future queue
+admissions for the current session. The feature model records newly completed
+outputs while consuming snapshots and reveals them together only after the FIFO
+driver stops draining; duplicate and coalesced snapshots cannot repeat this
+presentation side effect. The preference is enabled by default, while explicit
+Open and Reveal actions remain available.
 SwiftUI views never launch or retain a process. Every queue job owns an
 immutable mode, and every queued attempt captures the validated policy recipe
 and output policy derived for that job's probed media. Output-location edits
