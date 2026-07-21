@@ -381,12 +381,7 @@ nonisolated struct AutomaticCompressionPolicy: Sendable {
                 rateControl: .libx264CRF(
                     try X264ConstantRateFactor(22)
                 ),
-                scalePolicy: .maximum(
-                    try ResolutionLimit(
-                        maximumLongEdge: 1_920,
-                        maximumShortEdge: 1_080
-                    )
-                ),
+                scalePolicy: .original,
                 frameRatePolicy: .capped(
                     try FrameRateLimit(framesPerSecond: 30)
                 ),

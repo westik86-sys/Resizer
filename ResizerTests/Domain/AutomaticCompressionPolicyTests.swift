@@ -17,14 +17,7 @@ struct AutomaticCompressionPolicyTests {
                 == .libx264CRF(try X264ConstantRateFactor(22))
         )
         #expect(recipe.outputPixelFormat == .yuv420p)
-        #expect(
-            recipe.scalePolicy == .maximum(
-                try ResolutionLimit(
-                    maximumLongEdge: 1_920,
-                    maximumShortEdge: 1_080
-                )
-            )
-        )
+        #expect(recipe.scalePolicy == .original)
         #expect(
             recipe.frameRatePolicy == .capped(
                 try FrameRateLimit(framesPerSecond: 30)

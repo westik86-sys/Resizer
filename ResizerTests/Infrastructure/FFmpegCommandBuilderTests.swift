@@ -46,11 +46,9 @@ struct FFmpegCommandBuilderTests {
                 "-x264-params:v:0",
                 "fullrange=off:videoformat=component",
                 "-filter:v:0",
-                "scale=w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
-                    + "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
-                    + "force_original_aspect_ratio=decrease:"
-                    + "force_divisible_by=2:reset_sar=1:flags=lanczos:"
-                    + "out_range=tv",
+                "scale=w='max(2,trunc(iw/2)*2)':"
+                    + "h='max(2,trunc(ih/2)*2)':"
+                    + "flags=lanczos:out_range=tv",
                 "-fpsmax:v:0", "30",
                 "-c:a:0", "aac",
                 "-b:a:0", "128000",
